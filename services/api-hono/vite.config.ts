@@ -109,7 +109,20 @@ export default defineConfig({
         // Tests touch /tmp/libris-test-* paths configured in test.env above;
         // those are absolute so they're outside auto-tracking, but exclude
         // generated/ for cleanliness.
-        input: [{ auto: true }, "!src/generated/**"],
+        //
+        // .vite-temp is the important one: loading a TypeScript vite.config
+        // makes Vite write a transient `.mjs` into node_modules/.vite-temp/,
+        // import it, then delete it. { auto: true } tracks the package dir, so
+        // that write lands inside the input set and vp marks the task
+        // uncacheable every single run ("read and wrote ...
+        // vite.config.ts.timestamp-*.mjs"). This suite is ~5 minutes on a CI
+        // runner, so that was the single largest avoidable cost in the
+        // pipeline.
+        input: [
+          { auto: true },
+          "!src/generated/**",
+          "!node_modules/.vite-temp/**",
+        ],
       },
       "reset:bullmq": {
         command: "tsx scripts/reset-bullmq.ts",

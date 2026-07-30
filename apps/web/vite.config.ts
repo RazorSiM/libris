@@ -155,6 +155,13 @@ export default defineConfig({
       },
       test: {
         command: "vp test run",
+        // Loading a TypeScript vite.config makes Vite write a transient
+        // `.mjs` into node_modules/.vite-temp/, import it, then delete it.
+        // { auto: true } tracks the package dir, so that write lands inside
+        // the input set and vp declares the task uncacheable on every run
+        // ("read and wrote ... vite.config.ts.timestamp-*.mjs"). Excluding
+        // the temp dir lets the test task cache normally.
+        input: [{ auto: true }, "!node_modules/.vite-temp/**"],
       },
     },
   },
