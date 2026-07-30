@@ -28,16 +28,27 @@ jobs:
           node-version-file: .node-version
           cache: true
 
-      # Cache vp's task cache so unchanged check inputs replay instantly
-      # across CI runs (the rough equivalent of turbo's remote cache).
+      # Reuse Vite Task results across runs so unchanged inputs replay
+      # instantly. Key scheme follows viteplus.dev/guide/github-actions-cache:
+      #   - os + arch, because outputs and native tools are platform-specific
+      #   - run_id + run_attempt, because Actions cache entries are IMMUTABLE;
+      #     a per-commit key means re-running the same SHA can never save a
+      #     new entry
+      #   - task inputs (sources, lockfile) are deliberately NOT in the key —
+      #     Vite Task fingerprints those itself, and putting them here makes
+      #     GitHub skip useful restores before Vite Task gets to decide
+      # The per-job prefix is our own addition: all jobs in one run share a
+      # run_id, so a single shared key would have them collide on save.
+      #
+      # Note this cross-run reuse is flagged experimental upstream. It must be
+      # restored AFTER setup-vp, since installing deps rewrites node_modules.
       - name: Cache Vite+ task cache
         uses: actions/cache@v4
         with:
           path: node_modules/.vite/task-cache
-          key: vp-task-check-${{ runner.os }}-${{ github.sha }}
+          key: vp-task-check-${{ runner.os }}-${{ runner.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
-            vp-task-check-${{ runner.os }}-${{ github.base_ref || 'main' }}-
-            vp-task-check-${{ runner.os }}-
+            vp-task-check-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Format, lint, and typecheck
         run: vp run --cache -r -v check
@@ -58,10 +69,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: node_modules/.vite/task-cache
-          key: vp-task-test-${{ runner.os }}-${{ github.sha }}
+          key: vp-task-test-${{ runner.os }}-${{ runner.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
-            vp-task-test-${{ runner.os }}-${{ github.base_ref || 'main' }}-
-            vp-task-test-${{ runner.os }}-
+            vp-task-test-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Run unit tests
         run: vp run --cache -r test
@@ -86,10 +96,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: node_modules/.vite/task-cache
-          key: vp-task-build-${{ runner.os }}-${{ github.sha }}
+          key: vp-task-build-${{ runner.os }}-${{ runner.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
-            vp-task-build-${{ runner.os }}-${{ github.base_ref || 'main' }}-
-            vp-task-build-${{ runner.os }}-
+            vp-task-build-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Build workspace projects
         run: vp run --cache -r build
@@ -250,10 +259,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: node_modules/.vite/task-cache
-          key: vp-task-docs-${{ runner.os }}-${{ github.sha }}
+          key: vp-task-docs-${{ runner.os }}-${{ runner.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
-            vp-task-docs-${{ runner.os }}-main-
-            vp-task-docs-${{ runner.os }}-
+            vp-task-docs-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Build docs
         if: steps.docs-changed.outputs.changed == 'true'
