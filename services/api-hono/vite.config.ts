@@ -118,11 +118,7 @@ export default defineConfig({
         // vite.config.ts.timestamp-*.mjs"). This suite is ~5 minutes on a CI
         // runner, so that was the single largest avoidable cost in the
         // pipeline.
-        input: [
-          { auto: true },
-          "!src/generated/**",
-          "!node_modules/.vite-temp/**",
-        ],
+        input: [{ auto: true }, "!src/generated/**", "!node_modules/.vite-temp/**"],
       },
       "reset:bullmq": {
         command: "tsx scripts/reset-bullmq.ts",
