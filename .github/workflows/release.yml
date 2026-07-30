@@ -29,6 +29,9 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+    env:
+      # Git hooks would otherwise fire on changesets' internal checkout/commit.
+      LEFTHOOK: "0"
     steps:
       - uses: actions/checkout@v4
         with:
@@ -39,10 +42,11 @@ jobs:
           node-version-file: .node-version
           cache: true
 
+      # `vp exec`, not `pnpm run` — setup-vp puts `vp` on PATH but not pnpm.
       - name: Create or update the Version Packages PR
         uses: changesets/action@v1
         with:
-          version: pnpm run version-packages
+          version: vp exec changeset version
           title: "chore: version packages"
           commit: "chore: version packages"
         env:
@@ -69,7 +73,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Read package versions
+      - name: Resolve image name and versions
         id: versions
         run: |
           API=$(node -p "require('./services/api-hono/package.json').version")
@@ -78,7 +82,11 @@ jobs:
           echo "web=$WEB" >> $GITHUB_OUTPUT
           # Composite tag: either version changing produces a new tag.
           echo "tag=v${API}-web${WEB}" >> $GITHUB_OUTPUT
-          echo "Resolved image tag: v${API}-web${WEB}"
+          # Container registries reject uppercase repository names, and
+          # github.repository preserves the owner's casing (RazorSiM).
+          IMAGE="ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')"
+          echo "image=$IMAGE" >> $GITHUB_OUTPUT
+          echo "Resolved image: $IMAGE:v${API}-web${WEB}"
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -90,7 +98,7 @@ jobs:
       - name: Detect if the image needs building
         id: detect
         env:
-          IMAGE: ghcr.io/${{ github.repository }}
+          IMAGE: ${{ steps.versions.outputs.image }}
           TAG: ${{ steps.versions.outputs.tag }}
           FORCE: ${{ inputs.force_publish }}
         run: |
@@ -116,8 +124,8 @@ jobs:
           context: .
           push: true
           tags: |
-            ghcr.io/${{ github.repository }}:${{ steps.versions.outputs.tag }}
-            ghcr.io/${{ github.repository }}:latest
+            ${{ steps.versions.outputs.image }}:${{ steps.versions.outputs.tag }}
+            ${{ steps.versions.outputs.image }}:latest
           labels: |
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.version=${{ steps.versions.outputs.tag }}
@@ -171,7 +179,7 @@ jobs:
             echo "### Release summary"
             echo ""
             if [ "${{ steps.detect.outputs.changed }}" = "true" ]; then
-              echo "Published \`ghcr.io/${{ github.repository }}:${{ steps.versions.outputs.tag }}\`"
+              echo "Published \`${{ steps.versions.outputs.image }}:${{ steps.versions.outputs.tag }}\`"
               echo ""
               echo "- API (Hono): \`${{ steps.versions.outputs.api }}\`"
               echo "- Web: \`${{ steps.versions.outputs.web }}\`"
