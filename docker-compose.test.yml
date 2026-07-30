@@ -1,0 +1,116 @@
+# Test-only services — isolated from development databases
+# Usage: ./scripts/test-e2e.sh (recommended)
+# Manual:
+#   Start backing services:   docker compose -f docker-compose.test.yml up -d --wait postgres redis
+#   Run E2E in container:     docker compose -f docker-compose.test.yml --profile e2e run --rm playwright
+
+services:
+  postgres:
+    image: postgres:17
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_DB: libris_test
+      POSTGRES_USER: libris_test
+      POSTGRES_PASSWORD: libris_test
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U libris_test -d libris_test"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+    tmpfs:
+      - /var/lib/postgresql/data
+
+  redis:
+    image: redis:7
+    ports:
+      - "6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+
+  # Playwright runs in the official image so the bundled chromium matches the
+  # @playwright/test version pinned in pnpm-workspace.yaml. Native modules
+  # (better-sqlite3, etc.) compiled on a NixOS host don't load in this Ubuntu
+  # image, so each workspace's node_modules is a named volume populated by an
+  # in-container `pnpm install` (cached across runs).
+  #
+  # The image ships Node 24, below this workspace's `engines.node` floor of
+  # >=26, so the entrypoint provisions the pinned Node from .node-version via
+  # `n` before installing. CI gets the same result a different way — its
+  # playwright container runs setup-vp with node-version-file.
+  playwright:
+    image: mcr.microsoft.com/playwright:v1.60.0-noble
+    profiles: ["e2e"]
+    working_dir: /repo
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: libris_test
+      POSTGRES_PASSWORD: libris_test
+      POSTGRES_DB: libris_test
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      LIBRIS_INBOX_PATH: /repo/tmp/test-inbox
+      LIBRIS_LIBRARY_PATH: /repo/tmp/test-library
+      API_SECRET_KEY: e2e-test-secret-key-minimum-32-chars!
+      COOKIE_DOMAIN: ""
+      MIGRATIONS_PATH: /repo/services/api-hono/migrations
+      E2E_DOCKER: "1"
+      # Image bundles browsers at /ms-playwright; don't inherit a host override.
+      PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
+      # Install `n`-managed Node and global npm bins into a cached volume rather
+      # than over the image's /usr/local, so the toolchain survives between runs.
+      N_PREFIX: /node-toolchain
+    volumes:
+      - ./:/repo
+      - playwright-root-nm:/repo/node_modules
+      - playwright-web-nm:/repo/apps/web/node_modules
+      - playwright-api-nm:/repo/services/api-hono/node_modules
+      - playwright-e2e-nm:/repo/tests/e2e/node_modules
+      - playwright-docs-nm:/repo/docs/node_modules
+      - playwright-pnpm-store:/root/.local/share/pnpm/store
+      - playwright-node-toolchain:/node-toolchain
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    # Use entrypoint so any args passed to `docker compose run --rm playwright`
+    # are forwarded to `playwright test` (e.g. a single spec file).
+    #
+    # Every `$` below is written `$$` so Compose's own variable interpolation
+    # leaves it for the container's shell. A bare `$PATH` gets substituted at
+    # parse time (to empty, since Compose doesn't inherit it), which nukes PATH
+    # and the script dies with `node: command not found`.
+    entrypoint:
+      - bash
+      - -lc
+      - |
+        set -euo pipefail
+        # Shadow the image's /usr/bin/node with the N_PREFIX toolchain.
+        export PATH="/node-toolchain/bin:$$PATH"
+        # The image ships Node 24; install the version pinned in .node-version.
+        # Lives in the cached volume, so this is a no-op after the first run.
+        if [ "$$(node --version)" != "v$$(cat /repo/.node-version)" ]; then
+          npm install -g n
+          n install "$$(cat /repo/.node-version)"
+          hash -r
+        fi
+        # Node 25+ dropped corepack, so pnpm is installed explicitly rather than
+        # via `corepack enable` (the image's corepack belongs to its old Node).
+        command -v pnpm >/dev/null || npm install -g pnpm@11.5.0
+        pnpm install --frozen-lockfile
+        cd tests/e2e
+        exec pnpm exec playwright test "$$@"
+      - --
+    command: []
+
+volumes:
+  playwright-root-nm:
+  playwright-web-nm:
+  playwright-api-nm:
+  playwright-e2e-nm:
+  playwright-docs-nm:
+  playwright-pnpm-store:
+  playwright-node-toolchain:

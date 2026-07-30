@@ -1,0 +1,226 @@
+/* Gruvbox — https://github.com/morhetz/gruvbox
+   Light = bg0_h cream, Dark = bg0 charcoal-brown. Accent tonal scales
+   derived per-mode from gruvbox's neutral/medium contrast palettes via
+   oklch color-mix; the 500 shade is the published color. */
+
+[data-theme="gruvbox"]:not(.dark) {
+  /* Gruvbox light neutrals */
+  --ui-color-neutral-50: #fbf1c7;
+  --ui-color-neutral-100: #f2e5bc;
+  --ui-color-neutral-200: #ebdbb2;
+  --ui-color-neutral-300: #d5c4a1;
+  --ui-color-neutral-400: #bdae93;
+  --ui-color-neutral-500: #a89984;
+  --ui-color-neutral-600: #7c6f64;
+  --ui-color-neutral-700: #665c54;
+  --ui-color-neutral-800: #504945;
+  --ui-color-neutral-900: #3c3836;
+  --ui-color-neutral-950: #282828;
+
+  /* primary: gruvbox-light orange #d65d0e */
+  --ui-color-primary-50: color-mix(in oklch, #d65d0e, white 95%);
+  --ui-color-primary-100: color-mix(in oklch, #d65d0e, white 88%);
+  --ui-color-primary-200: color-mix(in oklch, #d65d0e, white 70%);
+  --ui-color-primary-300: color-mix(in oklch, #d65d0e, white 50%);
+  --ui-color-primary-400: color-mix(in oklch, #d65d0e, white 25%);
+  --ui-color-primary-500: #d65d0e;
+  --ui-color-primary-600: color-mix(in oklch, #d65d0e, black 15%);
+  --ui-color-primary-700: color-mix(in oklch, #d65d0e, black 35%);
+  --ui-color-primary-800: color-mix(in oklch, #d65d0e, black 55%);
+  --ui-color-primary-900: color-mix(in oklch, #d65d0e, black 70%);
+  --ui-color-primary-950: color-mix(in oklch, #d65d0e, black 85%);
+
+  /* secondary: gruvbox-light purple #b16286 */
+  --ui-color-secondary-50: color-mix(in oklch, #b16286, white 95%);
+  --ui-color-secondary-100: color-mix(in oklch, #b16286, white 88%);
+  --ui-color-secondary-200: color-mix(in oklch, #b16286, white 70%);
+  --ui-color-secondary-300: color-mix(in oklch, #b16286, white 50%);
+  --ui-color-secondary-400: color-mix(in oklch, #b16286, white 25%);
+  --ui-color-secondary-500: #b16286;
+  --ui-color-secondary-600: color-mix(in oklch, #b16286, black 15%);
+  --ui-color-secondary-700: color-mix(in oklch, #b16286, black 35%);
+  --ui-color-secondary-800: color-mix(in oklch, #b16286, black 55%);
+  --ui-color-secondary-900: color-mix(in oklch, #b16286, black 70%);
+  --ui-color-secondary-950: color-mix(in oklch, #b16286, black 85%);
+
+  /* success: gruvbox-light green #79740e */
+  --ui-color-success-50: color-mix(in oklch, #79740e, white 95%);
+  --ui-color-success-100: color-mix(in oklch, #79740e, white 88%);
+  --ui-color-success-200: color-mix(in oklch, #79740e, white 70%);
+  --ui-color-success-300: color-mix(in oklch, #79740e, white 50%);
+  --ui-color-success-400: color-mix(in oklch, #79740e, white 25%);
+  --ui-color-success-500: #79740e;
+  --ui-color-success-600: color-mix(in oklch, #79740e, black 15%);
+  --ui-color-success-700: color-mix(in oklch, #79740e, black 35%);
+  --ui-color-success-800: color-mix(in oklch, #79740e, black 55%);
+  --ui-color-success-900: color-mix(in oklch, #79740e, black 70%);
+  --ui-color-success-950: color-mix(in oklch, #79740e, black 85%);
+
+  /* warning: gruvbox-light yellow #b57614 */
+  --ui-color-warning-50: color-mix(in oklch, #b57614, white 95%);
+  --ui-color-warning-100: color-mix(in oklch, #b57614, white 88%);
+  --ui-color-warning-200: color-mix(in oklch, #b57614, white 70%);
+  --ui-color-warning-300: color-mix(in oklch, #b57614, white 50%);
+  --ui-color-warning-400: color-mix(in oklch, #b57614, white 25%);
+  --ui-color-warning-500: #b57614;
+  --ui-color-warning-600: color-mix(in oklch, #b57614, black 15%);
+  --ui-color-warning-700: color-mix(in oklch, #b57614, black 35%);
+  --ui-color-warning-800: color-mix(in oklch, #b57614, black 55%);
+  --ui-color-warning-900: color-mix(in oklch, #b57614, black 70%);
+  --ui-color-warning-950: color-mix(in oklch, #b57614, black 85%);
+
+  /* error: gruvbox-light red #9d0006 */
+  --ui-color-error-50: color-mix(in oklch, #9d0006, white 95%);
+  --ui-color-error-100: color-mix(in oklch, #9d0006, white 88%);
+  --ui-color-error-200: color-mix(in oklch, #9d0006, white 70%);
+  --ui-color-error-300: color-mix(in oklch, #9d0006, white 50%);
+  --ui-color-error-400: color-mix(in oklch, #9d0006, white 25%);
+  --ui-color-error-500: #9d0006;
+  --ui-color-error-600: color-mix(in oklch, #9d0006, black 15%);
+  --ui-color-error-700: color-mix(in oklch, #9d0006, black 35%);
+  --ui-color-error-800: color-mix(in oklch, #9d0006, black 55%);
+  --ui-color-error-900: color-mix(in oklch, #9d0006, black 70%);
+  --ui-color-error-950: color-mix(in oklch, #9d0006, black 85%);
+
+  /* info: gruvbox-light blue #076678 */
+  --ui-color-info-50: color-mix(in oklch, #076678, white 95%);
+  --ui-color-info-100: color-mix(in oklch, #076678, white 88%);
+  --ui-color-info-200: color-mix(in oklch, #076678, white 70%);
+  --ui-color-info-300: color-mix(in oklch, #076678, white 50%);
+  --ui-color-info-400: color-mix(in oklch, #076678, white 25%);
+  --ui-color-info-500: #076678;
+  --ui-color-info-600: color-mix(in oklch, #076678, black 15%);
+  --ui-color-info-700: color-mix(in oklch, #076678, black 35%);
+  --ui-color-info-800: color-mix(in oklch, #076678, black 55%);
+  --ui-color-info-900: color-mix(in oklch, #076678, black 70%);
+  --ui-color-info-950: color-mix(in oklch, #076678, black 85%);
+
+  --ui-bg: #fbf1c7;
+  --ui-bg-muted: #f2e5bc;
+  --ui-bg-elevated: #ebdbb2;
+  --ui-bg-accented: #d5c4a1;
+  --ui-bg-inverted: #282828;
+
+  --ui-text-dimmed: #a89984;
+  --ui-text-muted: #928374;
+  --ui-text-toned: #7c6f64;
+  --ui-text: #504945;
+  --ui-text-highlighted: #3c3836;
+  --ui-text-inverted: #fbf1c7;
+
+  --ui-border: #d5c4a1;
+  --ui-border-muted: #ebdbb2;
+  --ui-border-accented: #bdae93;
+  --ui-border-inverted: #3c3836;
+}
+
+[data-theme="gruvbox"].dark {
+  /* Gruvbox dark neutrals */
+  --ui-color-neutral-50: #fbf1c7;
+  --ui-color-neutral-100: #ebdbb2;
+  --ui-color-neutral-200: #d5c4a1;
+  --ui-color-neutral-300: #bdae93;
+  --ui-color-neutral-400: #a89984;
+  --ui-color-neutral-500: #928374;
+  --ui-color-neutral-600: #7c6f64;
+  --ui-color-neutral-700: #665c54;
+  --ui-color-neutral-800: #504945;
+  --ui-color-neutral-900: #3c3836;
+  --ui-color-neutral-950: #282828;
+
+  /* primary: gruvbox-dark orange #fe8019 */
+  --ui-color-primary-50: color-mix(in oklch, #fe8019, white 95%);
+  --ui-color-primary-100: color-mix(in oklch, #fe8019, white 88%);
+  --ui-color-primary-200: color-mix(in oklch, #fe8019, white 70%);
+  --ui-color-primary-300: color-mix(in oklch, #fe8019, white 50%);
+  --ui-color-primary-400: color-mix(in oklch, #fe8019, white 25%);
+  --ui-color-primary-500: #fe8019;
+  --ui-color-primary-600: color-mix(in oklch, #fe8019, black 15%);
+  --ui-color-primary-700: color-mix(in oklch, #fe8019, black 35%);
+  --ui-color-primary-800: color-mix(in oklch, #fe8019, black 55%);
+  --ui-color-primary-900: color-mix(in oklch, #fe8019, black 70%);
+  --ui-color-primary-950: color-mix(in oklch, #fe8019, black 85%);
+
+  /* secondary: gruvbox-dark purple #d3869b */
+  --ui-color-secondary-50: color-mix(in oklch, #d3869b, white 95%);
+  --ui-color-secondary-100: color-mix(in oklch, #d3869b, white 88%);
+  --ui-color-secondary-200: color-mix(in oklch, #d3869b, white 70%);
+  --ui-color-secondary-300: color-mix(in oklch, #d3869b, white 50%);
+  --ui-color-secondary-400: color-mix(in oklch, #d3869b, white 25%);
+  --ui-color-secondary-500: #d3869b;
+  --ui-color-secondary-600: color-mix(in oklch, #d3869b, black 15%);
+  --ui-color-secondary-700: color-mix(in oklch, #d3869b, black 35%);
+  --ui-color-secondary-800: color-mix(in oklch, #d3869b, black 55%);
+  --ui-color-secondary-900: color-mix(in oklch, #d3869b, black 70%);
+  --ui-color-secondary-950: color-mix(in oklch, #d3869b, black 85%);
+
+  /* success: gruvbox-dark green #b8bb26 */
+  --ui-color-success-50: color-mix(in oklch, #b8bb26, white 95%);
+  --ui-color-success-100: color-mix(in oklch, #b8bb26, white 88%);
+  --ui-color-success-200: color-mix(in oklch, #b8bb26, white 70%);
+  --ui-color-success-300: color-mix(in oklch, #b8bb26, white 50%);
+  --ui-color-success-400: color-mix(in oklch, #b8bb26, white 25%);
+  --ui-color-success-500: #b8bb26;
+  --ui-color-success-600: color-mix(in oklch, #b8bb26, black 15%);
+  --ui-color-success-700: color-mix(in oklch, #b8bb26, black 35%);
+  --ui-color-success-800: color-mix(in oklch, #b8bb26, black 55%);
+  --ui-color-success-900: color-mix(in oklch, #b8bb26, black 70%);
+  --ui-color-success-950: color-mix(in oklch, #b8bb26, black 85%);
+
+  /* warning: gruvbox-dark yellow #fabd2f */
+  --ui-color-warning-50: color-mix(in oklch, #fabd2f, white 95%);
+  --ui-color-warning-100: color-mix(in oklch, #fabd2f, white 88%);
+  --ui-color-warning-200: color-mix(in oklch, #fabd2f, white 70%);
+  --ui-color-warning-300: color-mix(in oklch, #fabd2f, white 50%);
+  --ui-color-warning-400: color-mix(in oklch, #fabd2f, white 25%);
+  --ui-color-warning-500: #fabd2f;
+  --ui-color-warning-600: color-mix(in oklch, #fabd2f, black 15%);
+  --ui-color-warning-700: color-mix(in oklch, #fabd2f, black 35%);
+  --ui-color-warning-800: color-mix(in oklch, #fabd2f, black 55%);
+  --ui-color-warning-900: color-mix(in oklch, #fabd2f, black 70%);
+  --ui-color-warning-950: color-mix(in oklch, #fabd2f, black 85%);
+
+  /* error: gruvbox-dark red #fb4934 */
+  --ui-color-error-50: color-mix(in oklch, #fb4934, white 95%);
+  --ui-color-error-100: color-mix(in oklch, #fb4934, white 88%);
+  --ui-color-error-200: color-mix(in oklch, #fb4934, white 70%);
+  --ui-color-error-300: color-mix(in oklch, #fb4934, white 50%);
+  --ui-color-error-400: color-mix(in oklch, #fb4934, white 25%);
+  --ui-color-error-500: #fb4934;
+  --ui-color-error-600: color-mix(in oklch, #fb4934, black 15%);
+  --ui-color-error-700: color-mix(in oklch, #fb4934, black 35%);
+  --ui-color-error-800: color-mix(in oklch, #fb4934, black 55%);
+  --ui-color-error-900: color-mix(in oklch, #fb4934, black 70%);
+  --ui-color-error-950: color-mix(in oklch, #fb4934, black 85%);
+
+  /* info: gruvbox-dark blue #83a598 */
+  --ui-color-info-50: color-mix(in oklch, #83a598, white 95%);
+  --ui-color-info-100: color-mix(in oklch, #83a598, white 88%);
+  --ui-color-info-200: color-mix(in oklch, #83a598, white 70%);
+  --ui-color-info-300: color-mix(in oklch, #83a598, white 50%);
+  --ui-color-info-400: color-mix(in oklch, #83a598, white 25%);
+  --ui-color-info-500: #83a598;
+  --ui-color-info-600: color-mix(in oklch, #83a598, black 15%);
+  --ui-color-info-700: color-mix(in oklch, #83a598, black 35%);
+  --ui-color-info-800: color-mix(in oklch, #83a598, black 55%);
+  --ui-color-info-900: color-mix(in oklch, #83a598, black 70%);
+  --ui-color-info-950: color-mix(in oklch, #83a598, black 85%);
+
+  --ui-bg: #282828;
+  --ui-bg-muted: #1d2021;
+  --ui-bg-elevated: #3c3836;
+  --ui-bg-accented: #504945;
+  --ui-bg-inverted: #fbf1c7;
+
+  --ui-text-dimmed: #928374;
+  --ui-text-muted: #a89984;
+  --ui-text-toned: #bdae93;
+  --ui-text: #d5c4a1;
+  --ui-text-highlighted: #ebdbb2;
+  --ui-text-inverted: #282828;
+
+  --ui-border: #504945;
+  --ui-border-muted: #3c3836;
+  --ui-border-accented: #665c54;
+  --ui-border-inverted: #ebdbb2;
+}

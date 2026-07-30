@@ -1,0 +1,387 @@
+import { and, eq, isNotNull } from "drizzle-orm";
+import { hardcoverSyncLog, serviceCredentials } from "#db";
+import type { Job } from "bullmq";
+import {
+  computeReadingStatus,
+  HARDCOVER_STATUS_MAP,
+  type ReadingStatus,
+} from "../lib/reading-status";
+import { matchBooksToHardcover, backfillEditionPageCounts } from "../lib/hardcover/matching";
+import { pullHardcoverStatusesForUser } from "../lib/hardcover/pull-status";
+import { findBooksToSyncToHardcover } from "../lib/hardcover/sync-candidates";
+import {
+  verifyToken,
+  upsertUserBook,
+  upsertUserBookRead,
+  updateUserBookRead,
+  getEditionPages,
+} from "../lib/hardcover/client";
+import { unsealToken } from "../shared/auth.js";
+import { getDb } from "../services/db.js";
+import { getEnv } from "../env.js";
+import { isHardcoverMetadataEnabled, isHardcoverSyncEnabled } from "../services/settings.js";
+import { getLogger } from "../lib/logger.js";
+
+const log = getLogger("worker:hardcover-sync");
+const MAX_RATE_LIMIT_RETRIES = 5;
+/** Delay between per-user syncs to respect Hardcover's 60 req/min rate limit */
+const INTER_USER_DELAY_MS = 5_000;
+
+interface ValidatedUser {
+  apiKeyId: string;
+  token: string;
+  username: string;
+}
+
+export async function processHardcoverSync(job: Job): Promise<void> {
+  const db = getDb();
+  const env = getEnv();
+  const targetApiKeyId: string | undefined = job.data?.apiKeyId;
+
+  // 1. Load all hardcover credentials (or just one if manually triggered for a specific user)
+  const credQuery = db
+    .select({
+      apiKeyId: serviceCredentials.apiKeyId,
+      passwordHash: serviceCredentials.passwordHash,
+    })
+    .from(serviceCredentials)
+    .where(
+      targetApiKeyId
+        ? and(
+            eq(serviceCredentials.service, "hardcover"),
+            eq(serviceCredentials.apiKeyId, targetApiKeyId),
+          )
+        : and(eq(serviceCredentials.service, "hardcover"), isNotNull(serviceCredentials.apiKeyId)),
+    );
+
+  const creds = await credQuery;
+
+  if (creds.length === 0) {
+    log.info("No hardcover credentials configured, skipping sync");
+    return;
+  }
+
+  // 2. Validate all tokens upfront, collect valid users
+  const validUsers: ValidatedUser[] = [];
+  for (const cred of creds) {
+    if (!cred.apiKeyId) continue;
+
+    const token = await unsealToken(cred.passwordHash, env.API_SECRET_KEY);
+    if (!token) {
+      log.warn(`Failed to decrypt Hardcover token for apiKeyId=${cred.apiKeyId}, skipping`);
+      continue;
+    }
+
+    const verify = await verifyToken(token);
+    if (!verify.ok) {
+      log.warn(
+        `Hardcover token invalid for apiKeyId=${cred.apiKeyId}: ${verify.error.type}, skipping`,
+      );
+      continue;
+    }
+
+    log.info(`Authenticated apiKeyId=${cred.apiKeyId} as ${verify.data.username}`);
+    validUsers.push({ apiKeyId: cred.apiKeyId, token: token, username: verify.data.username });
+  }
+
+  if (validUsers.length === 0) {
+    log.warn("No valid Hardcover tokens found, skipping sync");
+    return;
+  }
+
+  // Check feature toggles
+  const [metadataEnabled, syncEnabled] = await Promise.all([
+    isHardcoverMetadataEnabled(db),
+    isHardcoverSyncEnabled(db),
+  ]);
+
+  if (!metadataEnabled && !syncEnabled) {
+    log.info("Both Hardcover metadata and sync are disabled, skipping");
+    return;
+  }
+
+  // 3. Phase 1: ISBN matching + backfill — runs once globally using the first valid token
+  const globalToken = validUsers[0].token;
+
+  if (!metadataEnabled) {
+    log.info("Hardcover metadata disabled, skipping ISBN matching phase");
+  }
+  const matchResult = metadataEnabled
+    ? await matchBooksToHardcover(db, globalToken, {
+        onProgress: (matched, total) => {
+          void job.updateProgress({ phase: "matching", matched, total });
+        },
+      })
+    : null;
+  if (matchResult) {
+    log.info(
+      `ISBN matching: ${matchResult.matched} matched, ${matchResult.skipped} skipped, ${matchResult.failed} failed`,
+    );
+  }
+
+  // 3b. Backfill page counts from Hardcover editions for already-matched books
+  if (metadataEnabled) {
+    const backfillResult = await backfillEditionPageCounts(db, globalToken);
+    if (backfillResult.updated > 0) {
+      log.info(
+        `Page count backfill: ${backfillResult.updated} updated, ${backfillResult.skipped} skipped, ${backfillResult.failed} failed`,
+      );
+    }
+  }
+
+  // 4. Phase 2: Sync reading progress per user (skip if disabled)
+  if (!syncEnabled) {
+    log.info("Hardcover sync disabled, skipping progress sync phase");
+    return;
+  }
+
+  let totalSynced = 0;
+  let totalSkipped = 0;
+
+  for (let userIdx = 0; userIdx < validUsers.length; userIdx++) {
+    const user = validUsers[userIdx];
+    log.info(`Syncing progress for user ${user.username} (apiKeyId=${user.apiKeyId})`);
+
+    // Phase 2a: pull statuses from Hardcover into reading_aggregate.external_status.
+    // Done before push so the local effective status is up-to-date when computing
+    // what to push out — though pulled statuses never feed the push path themselves.
+    const pullResult = await pullHardcoverStatusesForUser(db, user.token, user.apiKeyId);
+    if (pullResult.fetched > 0) {
+      log.info(
+        `[${user.username}] Pulled ${pullResult.fetched} Hardcover user_books, ` +
+          `upserted ${pullResult.upserted} external_status (${pullResult.unknown} unknown status_id)`,
+      );
+    }
+
+    const { synced, skipped } = await syncUserProgress(db, job, user);
+    totalSynced += synced;
+    totalSkipped += skipped;
+
+    // Add delay between users to respect rate limits (60 req/min total)
+    if (userIdx < validUsers.length - 1) {
+      log.info(`Waiting ${INTER_USER_DELAY_MS}ms before next user...`);
+      await new Promise((r) => setTimeout(r, INTER_USER_DELAY_MS));
+    }
+  }
+
+  log.info(
+    `Sync complete for ${validUsers.length} user(s): ${totalSynced} synced, ${totalSkipped} skipped`,
+  );
+}
+
+/** Sync reading progress for a single user, scoped by their apiKeyId */
+async function syncUserProgress(
+  db: ReturnType<typeof getDb>,
+  job: Job,
+  user: ValidatedUser,
+): Promise<{ synced: number; skipped: number }> {
+  const { apiKeyId, token } = user;
+
+  const booksToSync = await findBooksToSyncToHardcover(db, apiKeyId);
+
+  log.info(`[${user.username}] Found ${booksToSync.length} books to sync`);
+
+  let synced = 0;
+  let skipped = 0;
+  let rateLimitRetries = 0;
+
+  for (let i = 0; i < booksToSync.length; i++) {
+    const row = booksToSync[i];
+    const percentage = row.max_percentage !== null ? Number(row.max_percentage) : null;
+    const lastActivity = row.last_activity !== null ? new Date(row.last_activity) : null;
+    const computed = computeReadingStatus(percentage, lastActivity);
+    const status: ReadingStatus = (row.manual_status as ReadingStatus | null) ?? computed;
+    const hardcoverStatusId = HARDCOVER_STATUS_MAP[status];
+
+    // Never push "unread" to Hardcover — we either have no local reading data
+    // and no manual override, or the user explicitly cleared their override.
+    // Don't clobber whatever status they already have on Hardcover.
+    if (status === "unread") {
+      log.debug(`[${user.username}] Skipping "${row.title}" — effective status is unread`);
+      skipped++;
+      continue;
+    }
+
+    try {
+      // Upsert user book (status)
+      const ubResult = await upsertUserBook(token, {
+        bookId: row.hardcover_book_id,
+        statusId: hardcoverStatusId,
+      });
+
+      if (!ubResult.ok) {
+        if (ubResult.error.type === "rate_limited") {
+          rateLimitRetries++;
+          if (rateLimitRetries > MAX_RATE_LIMIT_RETRIES) {
+            log.error(
+              `[${user.username}] Rate limit retries exhausted (${MAX_RATE_LIMIT_RETRIES}) while syncing "${row.title}", aborting user sync`,
+            );
+            break;
+          }
+          log.warn(
+            `[${user.username}] Rate limited (attempt ${rateLimitRetries}/${MAX_RATE_LIMIT_RETRIES}), pausing 60s...`,
+          );
+          await new Promise((r) => setTimeout(r, 60_000));
+          i--;
+          continue;
+        }
+        log.warn(
+          `[${user.username}] Failed to sync "${row.title}": ${ubResult.error.type} - ${ubResult.error.type === "api_error" ? ubResult.error.message : ""}`,
+        );
+        skipped++;
+        continue;
+      }
+
+      const userBookId = ubResult.data.userBookId;
+
+      // Push reading progress. Hardcover tracks progress as a page number, so we
+      // convert our percentage using the edition's page count (preferred over
+      // local page_count, which may come from EPUB metadata for a different
+      // edition). When the matched edition has no page count we can't express
+      // page-level progress — but we still record the read (with start/finish
+      // dates) so the book stops being a perpetual sync candidate and its dates
+      // reach Hardcover. This is the fix for editions with a null `pages` field.
+      let progressSynced = false;
+      const progressNeeded =
+        percentage !== null && percentage > 0 && row.hardcover_edition_id !== null;
+
+      if (progressNeeded) {
+        const editionPagesResult = await getEditionPages(token, row.hardcover_edition_id!);
+
+        if (!editionPagesResult.ok) {
+          // A transient fetch error (rate limit / network) must NOT be treated
+          // as "no pages" — otherwise we'd mark the book synced and never push
+          // its real progress.
+          if (editionPagesResult.error.type === "rate_limited") {
+            rateLimitRetries++;
+            if (rateLimitRetries > MAX_RATE_LIMIT_RETRIES) {
+              log.error(
+                `[${user.username}] Rate limit retries exhausted while fetching edition pages for "${row.title}", aborting user sync`,
+              );
+              break;
+            }
+            log.warn(
+              `[${user.username}] Rate limited fetching edition pages (attempt ${rateLimitRetries}/${MAX_RATE_LIMIT_RETRIES}), pausing 60s...`,
+            );
+            await new Promise((r) => setTimeout(r, 60_000));
+            i--;
+            continue;
+          }
+          // Non-retryable error: skip progress this run, leave the book a
+          // candidate (last_progress stays unsynced) so it retries next sync.
+          log.warn(
+            `[${user.username}] "${row.title}": failed to fetch edition pages (${editionPagesResult.error.type}); will retry progress next sync`,
+          );
+        } else {
+          const editionPages = editionPagesResult.data;
+          if (editionPages === null) {
+            log.warn(
+              `[${user.username}] "${row.title}": Hardcover edition ${row.hardcover_edition_id} has no page count; syncing read dates without page progress`,
+            );
+          }
+
+          const startedAt = row.first_activity
+            ? new Date(row.first_activity).toISOString().slice(0, 10)
+            : undefined;
+          const finishedAt =
+            status === "finished" && row.last_activity
+              ? new Date(row.last_activity).toISOString().slice(0, 10)
+              : undefined;
+          const progressPages =
+            editionPages !== null ? Math.round(percentage! * editionPages) : undefined;
+
+          try {
+            if (row.hardcover_read_id) {
+              const upd = await updateUserBookRead(token, {
+                readId: row.hardcover_read_id,
+                progressPages,
+                editionId: row.hardcover_edition_id ?? undefined,
+                startedAt,
+                finishedAt,
+              });
+              progressSynced = upd.ok;
+            } else {
+              const readResult = await upsertUserBookRead(token, {
+                userBookId,
+                progressPages,
+                editionId: row.hardcover_edition_id ?? undefined,
+                startedAt,
+                finishedAt,
+              });
+              if (readResult.ok) {
+                row.hardcover_read_id = readResult.data.readId;
+                progressSynced = true;
+              }
+            }
+          } catch (err) {
+            log
+              .withMetadata({ error: String(err) })
+              .warn(`[${user.username}] Failed to push reading progress for "${row.title}"`);
+          }
+        }
+      }
+
+      // Record last_progress only when there was nothing to push or the push
+      // succeeded. If a push was needed but failed, leave it null so the book
+      // stays a candidate and retries next run rather than being marked done.
+      const lastProgress =
+        !progressNeeded || progressSynced ? (percentage?.toFixed(4) ?? null) : null;
+
+      // Upsert sync log — scoped to this user via composite unique (apiKeyId, bookId).
+      // Always written after a successful status push (even when page progress
+      // couldn't be synced) so a book is never stuck as a perpetual candidate.
+      const now = new Date();
+      await db
+        .insert(hardcoverSyncLog)
+        .values({
+          bookId: row.book_id,
+          apiKeyId,
+          hardcoverUserBookId: userBookId,
+          hardcoverReadId: row.hardcover_read_id,
+          lastStatus: status,
+          lastProgress,
+          lastSyncedAt: now,
+        })
+        .onConflictDoUpdate({
+          target: [hardcoverSyncLog.apiKeyId, hardcoverSyncLog.bookId],
+          set: {
+            hardcoverUserBookId: userBookId,
+            hardcoverReadId: row.hardcover_read_id,
+            lastStatus: status,
+            lastProgress,
+            lastSyncedAt: now,
+          },
+        });
+
+      synced++;
+      log.info(
+        `[${user.username}] Synced "${row.title}" → status=${status}, progress=${percentage}`,
+      );
+    } catch (err) {
+      log
+        .withMetadata({ error: String(err) })
+        .error(`[${user.username}] Error syncing "${row.title}"`);
+      skipped++;
+    }
+
+    // Reset per-book rate limit budget when moving to the next book.
+    // The rate-limit retry path uses i--/continue and skips this reset,
+    // so retries accumulate only within the same book.
+    rateLimitRetries = 0;
+
+    void job.updateProgress({
+      phase: "syncing",
+      user: user.username,
+      synced,
+      total: booksToSync.length,
+    });
+
+    // Throttle: ~1.2s between requests to stay safely under 60/min
+    if (i < booksToSync.length - 1) {
+      await new Promise((r) => setTimeout(r, 1200));
+    }
+  }
+
+  log.info(`[${user.username}] Sync complete: ${synced} synced, ${skipped} skipped`);
+  return { synced, skipped };
+}

@@ -1,0 +1,16 @@
+# Use upstream nixos-unstable directly instead of devenv's default
+# cachix/devenv-nixpkgs/rolling fork. Rationale: rolling currently lags on
+# pnpm (caps at 10.x) and node (no nodejs_26), whereas nixos-unstable ships
+# pnpm 11 and nodejs_26. Trade-off: we forgo devenv's curated patches on the
+# rolling channel.
+#
+# NOTE: nixpkgs playwright-driver currently lags our @playwright/test pin —
+# nixos-unstable is still on 1.59.1 while the catalog moved to 1.60.0 (nixpkgs
+# hasn't packaged 1.60.0 yet). Running Playwright directly on the host via
+# devenv may warn about a browser-version skew until nixpkgs catches up. Local
+# and CI e2e run in the pinned mcr.microsoft.com/playwright:v1.60.0 container
+# (see docker-compose.test.yml and .github/workflows/ci.yml), which is
+# unaffected. Re-run `devenv update` to realign once nixpkgs ships 1.60.0.
+inputs:
+  nixpkgs:
+    url: github:NixOS/nixpkgs/nixos-unstable

@@ -1,0 +1,32 @@
+@import "tailwindcss" theme(static);
+@import "@nuxt/ui";
+@import "./themes/ayu.css";
+@import "./themes/catppuccin.css";
+@import "./themes/dracula.css";
+@import "./themes/gruvbox.css";
+@import "./themes/material.css";
+@import "./themes/nord.css";
+@import "./themes/one.css";
+@import "./themes/rose-pine.css";
+@import "./themes/sepia.css";
+@import "./themes/solarized.css";
+@import "./themes/tokyo-night.css";
+
+@keyframes shimmer {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.7;
+  }
+}
+
+@utility animate-shimmer {
+  animation: shimmer 3s ease-in-out infinite;
+}
+
+@theme static {
+  --font-serif: "Merriweather Variable", Georgia, "Times New Roman", serif;
+  --default-font-family: var(--font-serif);
+}

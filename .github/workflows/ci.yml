@@ -1,0 +1,267 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel superseded runs on the same ref — a force-push or rapid follow-up
+# commit shouldn't leave the previous e2e matrix burning runners.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: .node-version
+          cache: true
+
+      # Cache vp's task cache so unchanged check inputs replay instantly
+      # across CI runs (the rough equivalent of turbo's remote cache).
+      - name: Cache Vite+ task cache
+        uses: actions/cache@v4
+        with:
+          path: node_modules/.vite/task-cache
+          key: vp-task-check-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            vp-task-check-${{ runner.os }}-${{ github.base_ref || 'main' }}-
+            vp-task-check-${{ runner.os }}-
+
+      - name: Format, lint, and typecheck
+        run: vp run --cache -r -v check
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: .node-version
+          cache: true
+
+      - name: Cache Vite+ task cache
+        uses: actions/cache@v4
+        with:
+          path: node_modules/.vite/task-cache
+          key: vp-task-test-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            vp-task-test-${{ runner.os }}-${{ github.base_ref || 'main' }}-
+            vp-task-test-${{ runner.os }}-
+
+      - name: Run unit tests
+        run: vp run --cache -r test
+
+  # Shared build: runs once, publishes node_modules + api/web build outputs
+  # as a single artifact that e2e shards consume. Avoids re-installing and
+  # re-building inside every shard.
+  build:
+    runs-on: ubuntu-latest
+    needs: [check]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: .node-version
+          cache: true
+
+      - name: Cache Vite+ task cache
+        uses: actions/cache@v4
+        with:
+          path: node_modules/.vite/task-cache
+          key: vp-task-build-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            vp-task-build-${{ runner.os }}-${{ github.base_ref || 'main' }}-
+            vp-task-build-${{ runner.os }}-
+
+      - name: Build workspace projects
+        run: vp run --cache -r build
+
+      - name: Package node_modules + build outputs
+        run: |
+          tar -czf build-output.tar.gz \
+            --exclude='**/node_modules/.cache' \
+            node_modules \
+            apps/web/node_modules \
+            apps/web/dist \
+            services/api-hono/node_modules \
+            services/api-hono/dist \
+            tests/e2e/node_modules \
+            docs/node_modules 2>/dev/null || \
+          tar -czf build-output.tar.gz \
+            node_modules \
+            apps/web/node_modules apps/web/dist \
+            services/api-hono/node_modules services/api-hono/dist \
+            tests/e2e/node_modules
+          ls -lh build-output.tar.gz
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-output-${{ github.sha }}
+          path: build-output.tar.gz
+          retention-days: 1
+
+  # E2E suite — matrix-sharded across runners. On PRs this runs the @smoke
+  # subset; on pushes to main it runs the full suite. Both share one job
+  # definition so the service/container/env setup can't drift between them.
+  e2e:
+    runs-on: ubuntu-latest
+    container: mcr.microsoft.com/playwright:v1.60.0-jammy
+    needs: [build]
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["1/3", "2/3", "3/3"]
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: libris_test
+          POSTGRES_USER: libris_test
+          POSTGRES_PASSWORD: libris_test
+        options: >-
+          --health-cmd "pg_isready -U libris_test -d libris_test"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 15
+      redis:
+        image: redis:7
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      CI: "true"
+      E2E_TEST: "1"
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: libris_test
+      POSTGRES_PASSWORD: libris_test
+      POSTGRES_DB: libris_test
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      LIBRIS_INBOX_PATH: /tmp/e2e-inbox
+      LIBRIS_LIBRARY_PATH: /tmp/e2e-library
+      API_SECRET_KEY: ci-e2e-test-secret-key-minimum-32-chars!
+      COOKIE_DOMAIN: ""
+      MIGRATIONS_PATH: ./services/api-hono/migrations
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: build-output-${{ github.sha }}
+
+      - name: Extract build artifact
+        run: |
+          tar -xzf build-output.tar.gz
+          rm build-output.tar.gz
+
+      # The Playwright container ships its own Node — we only need vp on PATH
+      # to invoke the workspace scripts. `run-install: false` skips reinstall
+      # since deps are already extracted from the build artifact.
+      - uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: .node-version
+          run-install: false
+
+      - name: Prepare test environment
+        run: |
+          mkdir -p $LIBRIS_INBOX_PATH $LIBRIS_LIBRARY_PATH
+          cp -r apps/web/dist public
+
+      # PRs run the smoke subset for fast feedback; main runs everything.
+      - name: Run E2E tests (shard ${{ matrix.shard }})
+        run: |
+          cd tests/e2e
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            vp exec playwright test --grep @smoke --shard=${{ matrix.shard }}
+          else
+            vp exec playwright test --shard=${{ matrix.shard }}
+          fi
+
+      - name: Upload test results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-test-results-${{ strategy.job-index }}
+          path: tests/e2e/test-results/
+          retention-days: 7
+
+      - name: Upload HTML report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-report-${{ strategy.job-index }}
+          path: tests/e2e/playwright-report/
+          retention-days: 7
+
+  deploy-docs:
+    runs-on: ubuntu-latest
+    needs: [check]
+    if: github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check if docs need redeploy
+        id: docs-changed
+        run: |
+          # Deploy only when the push touched docs/ or any workspace the docs
+          # build depends on (root config, lockfile, docs package itself).
+          if git diff --name-only HEAD^ HEAD 2>/dev/null | grep -qE '^(docs/|pnpm-lock\.yaml|vite\.config\.ts|package\.json)'; then
+            echo "changed=true" >> $GITHUB_OUTPUT
+          else
+            echo "changed=false" >> $GITHUB_OUTPUT
+            echo "No docs-relevant changes in HEAD; skipping deploy."
+          fi
+
+      - uses: voidzero-dev/setup-vp@v1
+        if: steps.docs-changed.outputs.changed == 'true'
+        with:
+          node-version-file: .node-version
+          cache: true
+
+      - name: Cache Vite+ task cache
+        if: steps.docs-changed.outputs.changed == 'true'
+        uses: actions/cache@v4
+        with:
+          path: node_modules/.vite/task-cache
+          key: vp-task-docs-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            vp-task-docs-${{ runner.os }}-main-
+            vp-task-docs-${{ runner.os }}-
+
+      - name: Build docs
+        if: steps.docs-changed.outputs.changed == 'true'
+        run: vp run --cache -F @libris/docs build
+
+      - name: Deploy to Cloudflare Pages
+        if: steps.docs-changed.outputs.changed == 'true'
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: vp exec wrangler pages deploy docs/.vitepress/dist --project-name=libris --branch=main

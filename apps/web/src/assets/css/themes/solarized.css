@@ -1,0 +1,228 @@
+/* Solarized — https://ethanschoonover.com/solarized
+   Schoonover's symmetric base03→base3 monotone palette. Light = base3 cream
+   paper; Dark = base03 deep teal-blue. Both modes share the same 8-color
+   accent set (yellow, orange, red, magenta, violet, blue, cyan, green) since
+   Solarized is designed to keep accent identity across modes. Tonal scales
+   derived via oklch color-mix from the canonical hex values. */
+
+[data-theme="solarized"]:not(.dark) {
+  /* Solarized monotone (light orientation) */
+  --ui-color-neutral-50: #fdf6e3;
+  --ui-color-neutral-100: #eee8d5;
+  --ui-color-neutral-200: #ddd6c1;
+  --ui-color-neutral-300: #c4bba1;
+  --ui-color-neutral-400: #93a1a1;
+  --ui-color-neutral-500: #839496;
+  --ui-color-neutral-600: #657b83;
+  --ui-color-neutral-700: #586e75;
+  --ui-color-neutral-800: #2a4751;
+  --ui-color-neutral-900: #073642;
+  --ui-color-neutral-950: #002b36;
+
+  /* primary: solarized blue #268bd2 */
+  --ui-color-primary-50: color-mix(in oklch, #268bd2, white 95%);
+  --ui-color-primary-100: color-mix(in oklch, #268bd2, white 88%);
+  --ui-color-primary-200: color-mix(in oklch, #268bd2, white 70%);
+  --ui-color-primary-300: color-mix(in oklch, #268bd2, white 50%);
+  --ui-color-primary-400: color-mix(in oklch, #268bd2, white 25%);
+  --ui-color-primary-500: #268bd2;
+  --ui-color-primary-600: color-mix(in oklch, #268bd2, black 15%);
+  --ui-color-primary-700: color-mix(in oklch, #268bd2, black 35%);
+  --ui-color-primary-800: color-mix(in oklch, #268bd2, black 55%);
+  --ui-color-primary-900: color-mix(in oklch, #268bd2, black 70%);
+  --ui-color-primary-950: color-mix(in oklch, #268bd2, black 85%);
+
+  /* secondary: solarized magenta #d33682 */
+  --ui-color-secondary-50: color-mix(in oklch, #d33682, white 95%);
+  --ui-color-secondary-100: color-mix(in oklch, #d33682, white 88%);
+  --ui-color-secondary-200: color-mix(in oklch, #d33682, white 70%);
+  --ui-color-secondary-300: color-mix(in oklch, #d33682, white 50%);
+  --ui-color-secondary-400: color-mix(in oklch, #d33682, white 25%);
+  --ui-color-secondary-500: #d33682;
+  --ui-color-secondary-600: color-mix(in oklch, #d33682, black 15%);
+  --ui-color-secondary-700: color-mix(in oklch, #d33682, black 35%);
+  --ui-color-secondary-800: color-mix(in oklch, #d33682, black 55%);
+  --ui-color-secondary-900: color-mix(in oklch, #d33682, black 70%);
+  --ui-color-secondary-950: color-mix(in oklch, #d33682, black 85%);
+
+  /* success: solarized green #859900 */
+  --ui-color-success-50: color-mix(in oklch, #859900, white 95%);
+  --ui-color-success-100: color-mix(in oklch, #859900, white 88%);
+  --ui-color-success-200: color-mix(in oklch, #859900, white 70%);
+  --ui-color-success-300: color-mix(in oklch, #859900, white 50%);
+  --ui-color-success-400: color-mix(in oklch, #859900, white 25%);
+  --ui-color-success-500: #859900;
+  --ui-color-success-600: color-mix(in oklch, #859900, black 15%);
+  --ui-color-success-700: color-mix(in oklch, #859900, black 35%);
+  --ui-color-success-800: color-mix(in oklch, #859900, black 55%);
+  --ui-color-success-900: color-mix(in oklch, #859900, black 70%);
+  --ui-color-success-950: color-mix(in oklch, #859900, black 85%);
+
+  /* warning: solarized yellow #b58900 */
+  --ui-color-warning-50: color-mix(in oklch, #b58900, white 95%);
+  --ui-color-warning-100: color-mix(in oklch, #b58900, white 88%);
+  --ui-color-warning-200: color-mix(in oklch, #b58900, white 70%);
+  --ui-color-warning-300: color-mix(in oklch, #b58900, white 50%);
+  --ui-color-warning-400: color-mix(in oklch, #b58900, white 25%);
+  --ui-color-warning-500: #b58900;
+  --ui-color-warning-600: color-mix(in oklch, #b58900, black 15%);
+  --ui-color-warning-700: color-mix(in oklch, #b58900, black 35%);
+  --ui-color-warning-800: color-mix(in oklch, #b58900, black 55%);
+  --ui-color-warning-900: color-mix(in oklch, #b58900, black 70%);
+  --ui-color-warning-950: color-mix(in oklch, #b58900, black 85%);
+
+  /* error: solarized red #dc322f */
+  --ui-color-error-50: color-mix(in oklch, #dc322f, white 95%);
+  --ui-color-error-100: color-mix(in oklch, #dc322f, white 88%);
+  --ui-color-error-200: color-mix(in oklch, #dc322f, white 70%);
+  --ui-color-error-300: color-mix(in oklch, #dc322f, white 50%);
+  --ui-color-error-400: color-mix(in oklch, #dc322f, white 25%);
+  --ui-color-error-500: #dc322f;
+  --ui-color-error-600: color-mix(in oklch, #dc322f, black 15%);
+  --ui-color-error-700: color-mix(in oklch, #dc322f, black 35%);
+  --ui-color-error-800: color-mix(in oklch, #dc322f, black 55%);
+  --ui-color-error-900: color-mix(in oklch, #dc322f, black 70%);
+  --ui-color-error-950: color-mix(in oklch, #dc322f, black 85%);
+
+  /* info: solarized cyan #2aa198 */
+  --ui-color-info-50: color-mix(in oklch, #2aa198, white 95%);
+  --ui-color-info-100: color-mix(in oklch, #2aa198, white 88%);
+  --ui-color-info-200: color-mix(in oklch, #2aa198, white 70%);
+  --ui-color-info-300: color-mix(in oklch, #2aa198, white 50%);
+  --ui-color-info-400: color-mix(in oklch, #2aa198, white 25%);
+  --ui-color-info-500: #2aa198;
+  --ui-color-info-600: color-mix(in oklch, #2aa198, black 15%);
+  --ui-color-info-700: color-mix(in oklch, #2aa198, black 35%);
+  --ui-color-info-800: color-mix(in oklch, #2aa198, black 55%);
+  --ui-color-info-900: color-mix(in oklch, #2aa198, black 70%);
+  --ui-color-info-950: color-mix(in oklch, #2aa198, black 85%);
+
+  --ui-bg: #fdf6e3;
+  --ui-bg-muted: #f5efd9;
+  --ui-bg-elevated: #eee8d5;
+  --ui-bg-accented: #ddd6c1;
+  --ui-bg-inverted: #002b36;
+
+  --ui-text-dimmed: #93a1a1;
+  --ui-text-muted: #839496;
+  --ui-text-toned: #657b83;
+  --ui-text: #586e75;
+  --ui-text-highlighted: #073642;
+  --ui-text-inverted: #fdf6e3;
+
+  --ui-border: #ddd6c1;
+  --ui-border-muted: #eee8d5;
+  --ui-border-accented: #c4bba1;
+  --ui-border-inverted: #073642;
+}
+
+[data-theme="solarized"].dark {
+  /* Solarized monotone (dark orientation) */
+  --ui-color-neutral-50: #fdf6e3;
+  --ui-color-neutral-100: #eee8d5;
+  --ui-color-neutral-200: #93a1a1;
+  --ui-color-neutral-300: #839496;
+  --ui-color-neutral-400: #657b83;
+  --ui-color-neutral-500: #586e75;
+  --ui-color-neutral-600: #4a5d63;
+  --ui-color-neutral-700: #2a4751;
+  --ui-color-neutral-800: #073642;
+  --ui-color-neutral-900: #002b36;
+  --ui-color-neutral-950: #001e26;
+
+  /* primary: solarized blue #268bd2 (same in dark) */
+  --ui-color-primary-50: color-mix(in oklch, #268bd2, white 95%);
+  --ui-color-primary-100: color-mix(in oklch, #268bd2, white 88%);
+  --ui-color-primary-200: color-mix(in oklch, #268bd2, white 70%);
+  --ui-color-primary-300: color-mix(in oklch, #268bd2, white 50%);
+  --ui-color-primary-400: color-mix(in oklch, #268bd2, white 25%);
+  --ui-color-primary-500: #268bd2;
+  --ui-color-primary-600: color-mix(in oklch, #268bd2, black 15%);
+  --ui-color-primary-700: color-mix(in oklch, #268bd2, black 35%);
+  --ui-color-primary-800: color-mix(in oklch, #268bd2, black 55%);
+  --ui-color-primary-900: color-mix(in oklch, #268bd2, black 70%);
+  --ui-color-primary-950: color-mix(in oklch, #268bd2, black 85%);
+
+  /* secondary: solarized magenta #d33682 */
+  --ui-color-secondary-50: color-mix(in oklch, #d33682, white 95%);
+  --ui-color-secondary-100: color-mix(in oklch, #d33682, white 88%);
+  --ui-color-secondary-200: color-mix(in oklch, #d33682, white 70%);
+  --ui-color-secondary-300: color-mix(in oklch, #d33682, white 50%);
+  --ui-color-secondary-400: color-mix(in oklch, #d33682, white 25%);
+  --ui-color-secondary-500: #d33682;
+  --ui-color-secondary-600: color-mix(in oklch, #d33682, black 15%);
+  --ui-color-secondary-700: color-mix(in oklch, #d33682, black 35%);
+  --ui-color-secondary-800: color-mix(in oklch, #d33682, black 55%);
+  --ui-color-secondary-900: color-mix(in oklch, #d33682, black 70%);
+  --ui-color-secondary-950: color-mix(in oklch, #d33682, black 85%);
+
+  /* success: solarized green #859900 */
+  --ui-color-success-50: color-mix(in oklch, #859900, white 95%);
+  --ui-color-success-100: color-mix(in oklch, #859900, white 88%);
+  --ui-color-success-200: color-mix(in oklch, #859900, white 70%);
+  --ui-color-success-300: color-mix(in oklch, #859900, white 50%);
+  --ui-color-success-400: color-mix(in oklch, #859900, white 25%);
+  --ui-color-success-500: #859900;
+  --ui-color-success-600: color-mix(in oklch, #859900, black 15%);
+  --ui-color-success-700: color-mix(in oklch, #859900, black 35%);
+  --ui-color-success-800: color-mix(in oklch, #859900, black 55%);
+  --ui-color-success-900: color-mix(in oklch, #859900, black 70%);
+  --ui-color-success-950: color-mix(in oklch, #859900, black 85%);
+
+  /* warning: solarized yellow #b58900 */
+  --ui-color-warning-50: color-mix(in oklch, #b58900, white 95%);
+  --ui-color-warning-100: color-mix(in oklch, #b58900, white 88%);
+  --ui-color-warning-200: color-mix(in oklch, #b58900, white 70%);
+  --ui-color-warning-300: color-mix(in oklch, #b58900, white 50%);
+  --ui-color-warning-400: color-mix(in oklch, #b58900, white 25%);
+  --ui-color-warning-500: #b58900;
+  --ui-color-warning-600: color-mix(in oklch, #b58900, black 15%);
+  --ui-color-warning-700: color-mix(in oklch, #b58900, black 35%);
+  --ui-color-warning-800: color-mix(in oklch, #b58900, black 55%);
+  --ui-color-warning-900: color-mix(in oklch, #b58900, black 70%);
+  --ui-color-warning-950: color-mix(in oklch, #b58900, black 85%);
+
+  /* error: solarized red #dc322f */
+  --ui-color-error-50: color-mix(in oklch, #dc322f, white 95%);
+  --ui-color-error-100: color-mix(in oklch, #dc322f, white 88%);
+  --ui-color-error-200: color-mix(in oklch, #dc322f, white 70%);
+  --ui-color-error-300: color-mix(in oklch, #dc322f, white 50%);
+  --ui-color-error-400: color-mix(in oklch, #dc322f, white 25%);
+  --ui-color-error-500: #dc322f;
+  --ui-color-error-600: color-mix(in oklch, #dc322f, black 15%);
+  --ui-color-error-700: color-mix(in oklch, #dc322f, black 35%);
+  --ui-color-error-800: color-mix(in oklch, #dc322f, black 55%);
+  --ui-color-error-900: color-mix(in oklch, #dc322f, black 70%);
+  --ui-color-error-950: color-mix(in oklch, #dc322f, black 85%);
+
+  /* info: solarized cyan #2aa198 */
+  --ui-color-info-50: color-mix(in oklch, #2aa198, white 95%);
+  --ui-color-info-100: color-mix(in oklch, #2aa198, white 88%);
+  --ui-color-info-200: color-mix(in oklch, #2aa198, white 70%);
+  --ui-color-info-300: color-mix(in oklch, #2aa198, white 50%);
+  --ui-color-info-400: color-mix(in oklch, #2aa198, white 25%);
+  --ui-color-info-500: #2aa198;
+  --ui-color-info-600: color-mix(in oklch, #2aa198, black 15%);
+  --ui-color-info-700: color-mix(in oklch, #2aa198, black 35%);
+  --ui-color-info-800: color-mix(in oklch, #2aa198, black 55%);
+  --ui-color-info-900: color-mix(in oklch, #2aa198, black 70%);
+  --ui-color-info-950: color-mix(in oklch, #2aa198, black 85%);
+
+  --ui-bg: #002b36;
+  --ui-bg-muted: #001e26;
+  --ui-bg-elevated: #073642;
+  --ui-bg-accented: #2a4751;
+  --ui-bg-inverted: #fdf6e3;
+
+  --ui-text-dimmed: #586e75;
+  --ui-text-muted: #657b83;
+  --ui-text-toned: #839496;
+  --ui-text: #93a1a1;
+  --ui-text-highlighted: #eee8d5;
+  --ui-text-inverted: #002b36;
+
+  --ui-border: #073642;
+  --ui-border-muted: #001e26;
+  --ui-border-accented: #2a4751;
+  --ui-border-inverted: #eee8d5;
+}

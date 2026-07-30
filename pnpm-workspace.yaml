@@ -1,0 +1,126 @@
+packages:
+  - apps/*
+  - services/*
+  - tests/*
+  - docs
+
+allowBuilds:
+  "@parcel/watcher": true
+  better-sqlite3: true
+  esbuild: true
+  lefthook: true
+  msgpackr-extract: true
+  msw: true
+  protobufjs: true
+  sharp: true
+  vue-demi: true
+  workerd: true
+
+catalog:
+  "@changesets/cli": ^2.31.0
+  "@electric-sql/pglite": ^0.4.4
+  "@fontsource-variable/merriweather": ^5.2.6
+  "@hono/cli": ^0.1.10
+  "@hono/node-server": ^2.0.0
+  "@hono/node-ws": ^1.3.0
+  "@hono/zod-openapi": ^1.3.0
+  "@loglayer/hono": ^2.1.0
+  "@loglayer/plugin-opentelemetry": ^3.0.2
+  "@loglayer/transport-opentelemetry": ^4.0.2
+  "@loglayer/transport-pino": ^3.0.2
+  "@loglayer/transport-pretty-terminal": ^6.0.0
+  "@nuxt/ui": ^4.6.1
+  "@opentelemetry/api": ^1.9.1
+  "@opentelemetry/sdk-logs": ^0.218.0
+  "@opentelemetry/sdk-node": ^0.218.0
+  "@opentelemetry/sdk-trace-node": ^2.7.0
+  "@pinia/colada": ^1.2.0
+  "@playwright/test": 1.60.0
+  "@scalar/hono-api-reference": ^0.10.10
+  "@types/better-sqlite3": ^7.6.13
+  # Track the runtime major (.node-version / engines.node) so the ambient types
+  # match the APIs actually available at runtime.
+  "@types/node": ^26
+  "@unhead/vue": ^3.0.5
+  "@vitejs/plugin-vue": ^6.0.6
+  "@vue/test-utils": ^2.4.6
+  "@vueuse/core": ^14.2.1
+  # Auth
+  bcryptjs: ^3.0.3
+  # >=12.10 required to compile against Node 26's V8 headers (12.6 fails to build)
+  better-sqlite3: ^12.10.0
+  # Queue
+  bullmq: ^5.77.7
+  # File watching
+  chokidar: ^5.0.0
+  dotenv: ^17.4.2
+  dotenv-cli: ^11.0.0
+  # Database
+  drizzle-kit: 1.0.0-beta.21
+  drizzle-orm: 1.0.0-beta.21
+  echarts: ^6.0.0
+  happy-dom: ^20.9.0
+  hono: ^4.12.14
+  ioredis: ^5.10.1
+  iron-webcrypto: ^2.0.0
+  lefthook: ^2.1.9
+  loglayer: ^9.1.0
+  mermaid: ^11.13.0
+  # Mock Service Worker
+  msw: ^2.13.5
+  # HTTP
+  ofetch: ^1.5.1
+  # Required peer of vitepress@2 when running on rolldown-vite (vite-plus).
+  oxc-minify: ^0.133.0
+  pinia: ^3.0.4
+  pino: ^10.3.1
+  postgres: ^3.4.9
+  serialize-error: ^13.0.1
+  tailwindcss: ^4.2.4
+  # Lightweight, dependency-free language detection (ISO 639-1 codes)
+  tinyld: ^1.3.4
+  tsx: ^4.22.4
+  typescript: ^6.0.3
+  # Aliased so transitive peer-dep resolutions (e.g. @vitejs/plugin-vue)
+  # deduplicate to vite-plus-core instead of pulling a separate Vite from npm.
+  # Pinned exactly to the core version vite-plus itself depends on — a floating
+  # range can drift to a core release the installed vite-plus doesn't expect.
+  vite: npm:@voidzero-dev/vite-plus-core@0.2.6
+  # Pinned exact: Vite+ 0.x minors are breaking (0.2.0 replaced the bundled
+  # Vitest wrapper with upstream Vitest), so upgrades should be deliberate.
+  vite-plus: 0.2.6
+  vitepress: 2.0.0-alpha.17
+  vitepress-mermaid-renderer: ^1.1.26
+  vitepress-openapi: ^0.2.0
+  vitepress-sidebar: ^1.31.0
+  # No `vitest` entry: as of Vite+ 0.2.0 the @voidzero-dev/vite-plus-test
+  # wrapper is gone and upstream vitest arrives transitively via vite-plus.
+  vue: ^3.5.33
+  vue-echarts: ^8.0.1
+  vue-router: 5.1.0
+  vue-tsc: ^3.2.7
+  wrangler: ^4.95.0
+  zod: ^4.3.6
+
+catalogMode: prefer
+overrides:
+  "@opentelemetry/api-logs": 0.218.0
+  # Force every transitive `vite` onto vite-plus-core. There is deliberately no
+  # `vitest` override — vite-plus 0.2.x depends on upstream vitest directly, so
+  # letting pnpm resolve it normally keeps it deduped with the @vitest/* packages
+  # vite-plus pins alongside it.
+  vite: "catalog:"
+peerDependencyRules:
+  # Packages declaring a `vite` peer (@vitejs/plugin-vue, vitepress, …) see
+  # vite-plus-core's version string, which doesn't satisfy their `^7`/`^8` ranges.
+  allowAny:
+    - vite
+  allowedVersions:
+    vite: "*"
+packageExtensions:
+  "@nuxt/icon":
+    dependencies:
+      h3: ^1.15.5
+  "@voidzero-dev/vite-plus-core":
+    dependencies:
+      picomatch: ^4.0.4

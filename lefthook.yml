@@ -1,0 +1,56 @@
+# https://github.com/evilmartians/lefthook
+#
+# We use lefthook (not Vite+'s native `vp config` hooks) because we need more
+# than just the pre-commit/staged-file lane: prepare-commit-msg, pre-push,
+# post-merge, and post-checkout all run beads (`bd`) integration commands.
+# Lefthook delegates to `vp staged` for the staged-file lane, so we still get
+# the official Vite+ behaviour there. Do NOT run `vp config` — it would
+# install duplicate hooks under `.vite-hooks/` and conflict with this file.
+
+pre-commit:
+  commands:
+    staged:
+      # Delegate to `vp staged`, which reads the per-extension command map
+      # from the `staged` block in vite.config.ts and re-stages any fixes.
+      run: vp staged
+
+prepare-commit-msg:
+  commands:
+    beads:
+      # NO_COLOR=1: bd 1.0.2 sends OSC 11 / DA terminal queries and exits
+      # without reading the responses, leaking them into the shell prompt.
+      env:
+        NO_COLOR: "1"
+      run: |
+        command -v bd >/dev/null 2>&1 || exit 0
+        bd hooks run prepare-commit-msg
+
+pre-push:
+  parallel: true
+  commands:
+    beads:
+      env:
+        NO_COLOR: "1"
+      run: |
+        command -v bd >/dev/null 2>&1 || exit 0
+        bd hooks run pre-push
+    check:
+      run: vp run -r check
+
+post-merge:
+  commands:
+    beads:
+      env:
+        NO_COLOR: "1"
+      run: |
+        command -v bd >/dev/null 2>&1 || exit 0
+        bd hooks run post-merge
+
+post-checkout:
+  commands:
+    beads:
+      env:
+        NO_COLOR: "1"
+      run: |
+        command -v bd >/dev/null 2>&1 || exit 0
+        bd hooks run post-checkout

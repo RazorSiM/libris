@@ -1,0 +1,22 @@
+{
+  "name": "libris-monorepo",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "changeset": "changeset",
+    "version-packages": "changeset version",
+    "prepare": "lefthook install --force"
+  },
+  "devDependencies": {
+    "@changesets/cli": "catalog:",
+    "lefthook": "catalog:",
+    "vite-plus": "catalog:",
+    "wrangler": "catalog:"
+  },
+  "engines": {
+    "node": ">=26.0.0",
+    "pnpm": ">=11.0.0"
+  },
+  "packageManager": "pnpm@11.5.0"
+}

@@ -1,0 +1,60 @@
+{
+  "name": "@libris/api-hono",
+  "version": "1.1.1",
+  "private": true,
+  "type": "module",
+  "imports": {
+    "#db": "./src/db/index.ts",
+    "#db/*": "./src/db/*"
+  },
+  "exports": {
+    "./types": "./src/types/index.ts",
+    "./client": "./src/client.ts",
+    "./languages": "./src/lib/languages.ts",
+    "./openapi.json": "./openapi.json"
+  },
+  "scripts": {
+    "format": "vp fmt ."
+  },
+  "dependencies": {
+    "@hono/node-server": "catalog:",
+    "@hono/node-ws": "catalog:",
+    "@hono/zod-openapi": "catalog:",
+    "@loglayer/hono": "catalog:",
+    "@loglayer/plugin-opentelemetry": "catalog:",
+    "@loglayer/transport-opentelemetry": "catalog:",
+    "@loglayer/transport-pino": "catalog:",
+    "@loglayer/transport-pretty-terminal": "catalog:",
+    "@opentelemetry/api": "catalog:",
+    "@opentelemetry/sdk-logs": "catalog:",
+    "@opentelemetry/sdk-node": "catalog:",
+    "@opentelemetry/sdk-trace-node": "catalog:",
+    "@scalar/hono-api-reference": "catalog:",
+    "bcryptjs": "catalog:",
+    "bullmq": "catalog:",
+    "chokidar": "catalog:",
+    "drizzle-orm": "catalog:",
+    "hono": "catalog:",
+    "ioredis": "catalog:",
+    "iron-webcrypto": "catalog:",
+    "loglayer": "catalog:",
+    "ofetch": "catalog:",
+    "pino": "catalog:",
+    "serialize-error": "catalog:",
+    "tinyld": "catalog:",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "catalog:",
+    "@hono/cli": "catalog:",
+    "@types/better-sqlite3": "catalog:",
+    "@types/node": "catalog:",
+    "better-sqlite3": "catalog:",
+    "dotenv-cli": "catalog:",
+    "drizzle-kit": "catalog:",
+    "msw": "catalog:",
+    "tsx": "catalog:",
+    "typescript": "catalog:",
+    "vite-plus": "catalog:"
+  }
+}

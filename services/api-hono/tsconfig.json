@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "noUnusedLocals": true,
+    "verbatimModuleSyntax": true,
+    "skipLibCheck": true,
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "esModuleInterop": true,
+    "target": "ESNext",
+    "paths": {
+      "#db": ["./src/db/index.ts"],
+      "#db/*": ["./src/db/*"]
+    }
+  },
+  "include": ["src", "tests"]
+}

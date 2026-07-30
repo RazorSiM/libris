@@ -1,0 +1,33 @@
+node_modules
+.output
+.nuxt
+.nitro
+dist
+*.tsbuildinfo
+
+# Test artifacts
+tests/e2e/test-results
+tests/e2e/playwright-report
+tests/e2e/.auth
+
+# Environment
+.env
+.env.*
+!.env.example
+!.env.test.example
+
+# IDE / tools
+.vscode
+.claude
+.beads
+.ralph-tui
+.agents
+.devenv
+
+# Git
+.git
+.gitignore
+
+# Misc
+tmp
+*.log

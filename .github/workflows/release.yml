@@ -1,0 +1,181 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+  # Manual escape hatch: force an image build/publish for the versions
+  # currently on main, even if the tag already exists.
+  workflow_dispatch:
+    inputs:
+      force_publish:
+        description: "Rebuild and push even if the image tag already exists"
+        type: boolean
+        default: false
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # Maintains the "Version Packages" PR. Nothing here publishes to npm — every
+  # workspace is private (.changeset/config.json sets access: restricted) — so
+  # changesets/action is used WITHOUT a `publish` input. It only consumes
+  # .changeset/*.md, bumps versions, rewrites CHANGELOGs, and opens/updates
+  # the PR. Merging that PR is what actually triggers a release, via the
+  # publish job below reacting to the new versions on main.
+  version:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: .node-version
+          cache: true
+
+      - name: Create or update the Version Packages PR
+        uses: changesets/action@v1
+        with:
+          version: pnpm run version-packages
+          title: "chore: version packages"
+          commit: "chore: version packages"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Builds and pushes the unified image to GHCR, then tags and creates the
+  # GitHub Releases. Runs on every push to main but is a no-op unless the
+  # version actually changed: the composite tag is derived from the two
+  # package versions, and an existing tag in the registry short-circuits the
+  # build. That is the same idempotency the Forgejo pipeline relied on, so no
+  # commit-message sniffing is needed to detect "the version PR just merged".
+  #
+  # On a GitHub runner one machine has both Node and Docker, so this is a
+  # single job. The Forgejo pipeline needed two (a Node runner and a Docker
+  # runner) plus a staging branch to shuttle state between them; all of that
+  # machinery is gone.
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Read package versions
+        id: versions
+        run: |
+          API=$(node -p "require('./services/api-hono/package.json').version")
+          WEB=$(node -p "require('./apps/web/package.json').version")
+          echo "api=$API" >> $GITHUB_OUTPUT
+          echo "web=$WEB" >> $GITHUB_OUTPUT
+          # Composite tag: either version changing produces a new tag.
+          echo "tag=v${API}-web${WEB}" >> $GITHUB_OUTPUT
+          echo "Resolved image tag: v${API}-web${WEB}"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Detect if the image needs building
+        id: detect
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}
+          TAG: ${{ steps.versions.outputs.tag }}
+          FORCE: ${{ inputs.force_publish }}
+        run: |
+          if [ "$FORCE" = "true" ]; then
+            echo "changed=true" >> $GITHUB_OUTPUT
+            echo "force_publish requested — building regardless of registry state."
+          elif docker manifest inspect "$IMAGE:$TAG" > /dev/null 2>&1; then
+            echo "changed=false" >> $GITHUB_OUTPUT
+            echo "$IMAGE:$TAG already in the registry — nothing to do."
+          else
+            echo "changed=true" >> $GITHUB_OUTPUT
+            echo "$IMAGE:$TAG not found — will build."
+          fi
+
+      - name: Set up Buildx
+        if: steps.detect.outputs.changed == 'true'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push the unified image
+        if: steps.detect.outputs.changed == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}:${{ steps.versions.outputs.tag }}
+            ghcr.io/${{ github.repository }}:latest
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.versions.outputs.tag }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Only tag and cut releases when an image was actually published, so an
+      # ordinary push to main does not create empty releases.
+      - name: Create tags and GitHub Releases
+        if: steps.detect.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          API_VERSION: ${{ steps.versions.outputs.api }}
+          WEB_VERSION: ${{ steps.versions.outputs.web }}
+        run: |
+          git fetch --tags --quiet
+
+          for WORKSPACE in api-hono web; do
+            if [ "$WORKSPACE" = "api-hono" ]; then
+              VERSION=$API_VERSION; PKG_DIR="services/api-hono"; LABEL="API (Hono)"
+            else
+              VERSION=$WEB_VERSION; PKG_DIR="apps/web"; LABEL="Web"
+            fi
+
+            TAG="$WORKSPACE/v$VERSION"
+
+            if gh release view "$TAG" > /dev/null 2>&1; then
+              echo "Release $TAG already exists — skipping."
+              continue
+            fi
+
+            # Prefer the CHANGELOG section for this version as the release body.
+            BODY="Release $TAG"
+            if [ -f "$PKG_DIR/CHANGELOG.md" ]; then
+              EXTRACTED=$(sed -n "/## $VERSION\$/,/## [0-9]/p" "$PKG_DIR/CHANGELOG.md" | sed '1d;$d')
+              if [ -n "$EXTRACTED" ]; then BODY="$EXTRACTED"; fi
+            fi
+
+            printf '%s\n' "$BODY" > /tmp/release-body.md
+            gh release create "$TAG" \
+              --title "$LABEL v$VERSION" \
+              --notes-file /tmp/release-body.md \
+              --target "${{ github.sha }}"
+            echo "Created release $TAG"
+          done
+
+      - name: Summary
+        run: |
+          {
+            echo "### Release summary"
+            echo ""
+            if [ "${{ steps.detect.outputs.changed }}" = "true" ]; then
+              echo "Published \`ghcr.io/${{ github.repository }}:${{ steps.versions.outputs.tag }}\`"
+              echo ""
+              echo "- API (Hono): \`${{ steps.versions.outputs.api }}\`"
+              echo "- Web: \`${{ steps.versions.outputs.web }}\`"
+            else
+              echo "No release: \`${{ steps.versions.outputs.tag }}\` is already in the registry."
+            fi
+          } >> $GITHUB_STEP_SUMMARY

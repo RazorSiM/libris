@@ -1,0 +1,20 @@
+{
+  "name": "@libris/docs",
+  "version": "1.1.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "generate:db": "node --experimental-strip-types scripts/generate-docs.ts",
+    "preview": "vitepress preview"
+  },
+  "dependencies": {
+    "@libris/api-hono": "workspace:*",
+    "vitepress-openapi": "catalog:"
+  },
+  "devDependencies": {
+    "oxc-minify": "catalog:",
+    "vitepress": "catalog:",
+    "vitepress-mermaid-renderer": "catalog:",
+    "vitepress-sidebar": "catalog:"
+  }
+}

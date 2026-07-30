@@ -1,0 +1,42 @@
+# Dev infrastructure — Postgres + Redis for local development
+# Usage: docker compose -f docker-compose.dev.yml up -d
+#
+# Credentials come from .env via ${VAR:-default} interpolation — the defaults
+# below are the same values .env.example ships with, so `docker compose up`
+# works out of the box without any .env file.
+#
+# The API reads the same POSTGRES_* vars and assembles DATABASE_URL itself
+# (see services/api-hono/src/lib/resolve-database-url.ts), so compose and
+# the app share a single source of truth. Override DATABASE_URL directly
+# for prod / CI / tests.
+#
+# Data is persisted to ./tmp/ (gitignored).
+
+services:
+  postgres:
+    image: postgres:17
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-libris}
+      POSTGRES_USER: ${POSTGRES_USER:-libris}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+    volumes:
+      - ./tmp/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-libris} -d ${POSTGRES_DB:-libris}"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+    volumes:
+      - ./tmp/redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 5s
+      retries: 10

@@ -1,0 +1,227 @@
+/* Dracula — https://draculatheme.com
+   Dark uses the canonical Dracula palette (#bd93f9 purple, #ff79c6 pink,
+   #50fa7b green, etc.). Light uses a community-derived "Dracula Light"
+   variant with same hues at higher saturation for AA contrast against the
+   pale background. Tonal scales derived per-mode via oklch color-mix. */
+
+[data-theme="dracula"]:not(.dark) {
+  /* Dracula light neutrals (community variant) */
+  --ui-color-neutral-50: #f8f8f2;
+  --ui-color-neutral-100: #efefe6;
+  --ui-color-neutral-200: #e1e1d4;
+  --ui-color-neutral-300: #c4c4b3;
+  --ui-color-neutral-400: #9d9da0;
+  --ui-color-neutral-500: #6272a4;
+  --ui-color-neutral-600: #4a5273;
+  --ui-color-neutral-700: #3b4366;
+  --ui-color-neutral-800: #2d3554;
+  --ui-color-neutral-900: #282a36;
+  --ui-color-neutral-950: #1a1c25;
+
+  /* primary: dracula-light purple #6f42c1 */
+  --ui-color-primary-50: color-mix(in oklch, #6f42c1, white 95%);
+  --ui-color-primary-100: color-mix(in oklch, #6f42c1, white 88%);
+  --ui-color-primary-200: color-mix(in oklch, #6f42c1, white 70%);
+  --ui-color-primary-300: color-mix(in oklch, #6f42c1, white 50%);
+  --ui-color-primary-400: color-mix(in oklch, #6f42c1, white 25%);
+  --ui-color-primary-500: #6f42c1;
+  --ui-color-primary-600: color-mix(in oklch, #6f42c1, black 15%);
+  --ui-color-primary-700: color-mix(in oklch, #6f42c1, black 35%);
+  --ui-color-primary-800: color-mix(in oklch, #6f42c1, black 55%);
+  --ui-color-primary-900: color-mix(in oklch, #6f42c1, black 70%);
+  --ui-color-primary-950: color-mix(in oklch, #6f42c1, black 85%);
+
+  /* secondary: dracula-light pink #d6336c */
+  --ui-color-secondary-50: color-mix(in oklch, #d6336c, white 95%);
+  --ui-color-secondary-100: color-mix(in oklch, #d6336c, white 88%);
+  --ui-color-secondary-200: color-mix(in oklch, #d6336c, white 70%);
+  --ui-color-secondary-300: color-mix(in oklch, #d6336c, white 50%);
+  --ui-color-secondary-400: color-mix(in oklch, #d6336c, white 25%);
+  --ui-color-secondary-500: #d6336c;
+  --ui-color-secondary-600: color-mix(in oklch, #d6336c, black 15%);
+  --ui-color-secondary-700: color-mix(in oklch, #d6336c, black 35%);
+  --ui-color-secondary-800: color-mix(in oklch, #d6336c, black 55%);
+  --ui-color-secondary-900: color-mix(in oklch, #d6336c, black 70%);
+  --ui-color-secondary-950: color-mix(in oklch, #d6336c, black 85%);
+
+  /* success: dracula-light green #2c8a3a */
+  --ui-color-success-50: color-mix(in oklch, #2c8a3a, white 95%);
+  --ui-color-success-100: color-mix(in oklch, #2c8a3a, white 88%);
+  --ui-color-success-200: color-mix(in oklch, #2c8a3a, white 70%);
+  --ui-color-success-300: color-mix(in oklch, #2c8a3a, white 50%);
+  --ui-color-success-400: color-mix(in oklch, #2c8a3a, white 25%);
+  --ui-color-success-500: #2c8a3a;
+  --ui-color-success-600: color-mix(in oklch, #2c8a3a, black 15%);
+  --ui-color-success-700: color-mix(in oklch, #2c8a3a, black 35%);
+  --ui-color-success-800: color-mix(in oklch, #2c8a3a, black 55%);
+  --ui-color-success-900: color-mix(in oklch, #2c8a3a, black 70%);
+  --ui-color-success-950: color-mix(in oklch, #2c8a3a, black 85%);
+
+  /* warning: dracula-light yellow #cf8b00 */
+  --ui-color-warning-50: color-mix(in oklch, #cf8b00, white 95%);
+  --ui-color-warning-100: color-mix(in oklch, #cf8b00, white 88%);
+  --ui-color-warning-200: color-mix(in oklch, #cf8b00, white 70%);
+  --ui-color-warning-300: color-mix(in oklch, #cf8b00, white 50%);
+  --ui-color-warning-400: color-mix(in oklch, #cf8b00, white 25%);
+  --ui-color-warning-500: #cf8b00;
+  --ui-color-warning-600: color-mix(in oklch, #cf8b00, black 15%);
+  --ui-color-warning-700: color-mix(in oklch, #cf8b00, black 35%);
+  --ui-color-warning-800: color-mix(in oklch, #cf8b00, black 55%);
+  --ui-color-warning-900: color-mix(in oklch, #cf8b00, black 70%);
+  --ui-color-warning-950: color-mix(in oklch, #cf8b00, black 85%);
+
+  /* error: dracula-light red #d12d2d */
+  --ui-color-error-50: color-mix(in oklch, #d12d2d, white 95%);
+  --ui-color-error-100: color-mix(in oklch, #d12d2d, white 88%);
+  --ui-color-error-200: color-mix(in oklch, #d12d2d, white 70%);
+  --ui-color-error-300: color-mix(in oklch, #d12d2d, white 50%);
+  --ui-color-error-400: color-mix(in oklch, #d12d2d, white 25%);
+  --ui-color-error-500: #d12d2d;
+  --ui-color-error-600: color-mix(in oklch, #d12d2d, black 15%);
+  --ui-color-error-700: color-mix(in oklch, #d12d2d, black 35%);
+  --ui-color-error-800: color-mix(in oklch, #d12d2d, black 55%);
+  --ui-color-error-900: color-mix(in oklch, #d12d2d, black 70%);
+  --ui-color-error-950: color-mix(in oklch, #d12d2d, black 85%);
+
+  /* info: dracula-light cyan #0995a8 */
+  --ui-color-info-50: color-mix(in oklch, #0995a8, white 95%);
+  --ui-color-info-100: color-mix(in oklch, #0995a8, white 88%);
+  --ui-color-info-200: color-mix(in oklch, #0995a8, white 70%);
+  --ui-color-info-300: color-mix(in oklch, #0995a8, white 50%);
+  --ui-color-info-400: color-mix(in oklch, #0995a8, white 25%);
+  --ui-color-info-500: #0995a8;
+  --ui-color-info-600: color-mix(in oklch, #0995a8, black 15%);
+  --ui-color-info-700: color-mix(in oklch, #0995a8, black 35%);
+  --ui-color-info-800: color-mix(in oklch, #0995a8, black 55%);
+  --ui-color-info-900: color-mix(in oklch, #0995a8, black 70%);
+  --ui-color-info-950: color-mix(in oklch, #0995a8, black 85%);
+
+  --ui-bg: #f8f8f2;
+  --ui-bg-muted: #efefe6;
+  --ui-bg-elevated: #e1e1d4;
+  --ui-bg-accented: #c4c4b3;
+  --ui-bg-inverted: #282a36;
+
+  --ui-text-dimmed: #9d9da0;
+  --ui-text-muted: #6272a4;
+  --ui-text-toned: #4a5273;
+  --ui-text: #3b4366;
+  --ui-text-highlighted: #282a36;
+  --ui-text-inverted: #f8f8f2;
+
+  --ui-border: #e1e1d4;
+  --ui-border-muted: #efefe6;
+  --ui-border-accented: #c4c4b3;
+  --ui-border-inverted: #282a36;
+}
+
+[data-theme="dracula"].dark {
+  /* Dracula dark neutrals (canonical) */
+  --ui-color-neutral-50: #f8f8f2;
+  --ui-color-neutral-100: #e8e8de;
+  --ui-color-neutral-200: #d2d2c0;
+  --ui-color-neutral-300: #a8a8a0;
+  --ui-color-neutral-400: #8b8b87;
+  --ui-color-neutral-500: #6272a4;
+  --ui-color-neutral-600: #565775;
+  --ui-color-neutral-700: #44475a;
+  --ui-color-neutral-800: #353746;
+  --ui-color-neutral-900: #282a36;
+  --ui-color-neutral-950: #191a21;
+
+  /* primary: dracula purple #bd93f9 */
+  --ui-color-primary-50: color-mix(in oklch, #bd93f9, white 95%);
+  --ui-color-primary-100: color-mix(in oklch, #bd93f9, white 88%);
+  --ui-color-primary-200: color-mix(in oklch, #bd93f9, white 70%);
+  --ui-color-primary-300: color-mix(in oklch, #bd93f9, white 50%);
+  --ui-color-primary-400: color-mix(in oklch, #bd93f9, white 25%);
+  --ui-color-primary-500: #bd93f9;
+  --ui-color-primary-600: color-mix(in oklch, #bd93f9, black 15%);
+  --ui-color-primary-700: color-mix(in oklch, #bd93f9, black 35%);
+  --ui-color-primary-800: color-mix(in oklch, #bd93f9, black 55%);
+  --ui-color-primary-900: color-mix(in oklch, #bd93f9, black 70%);
+  --ui-color-primary-950: color-mix(in oklch, #bd93f9, black 85%);
+
+  /* secondary: dracula pink #ff79c6 */
+  --ui-color-secondary-50: color-mix(in oklch, #ff79c6, white 95%);
+  --ui-color-secondary-100: color-mix(in oklch, #ff79c6, white 88%);
+  --ui-color-secondary-200: color-mix(in oklch, #ff79c6, white 70%);
+  --ui-color-secondary-300: color-mix(in oklch, #ff79c6, white 50%);
+  --ui-color-secondary-400: color-mix(in oklch, #ff79c6, white 25%);
+  --ui-color-secondary-500: #ff79c6;
+  --ui-color-secondary-600: color-mix(in oklch, #ff79c6, black 15%);
+  --ui-color-secondary-700: color-mix(in oklch, #ff79c6, black 35%);
+  --ui-color-secondary-800: color-mix(in oklch, #ff79c6, black 55%);
+  --ui-color-secondary-900: color-mix(in oklch, #ff79c6, black 70%);
+  --ui-color-secondary-950: color-mix(in oklch, #ff79c6, black 85%);
+
+  /* success: dracula green #50fa7b */
+  --ui-color-success-50: color-mix(in oklch, #50fa7b, white 95%);
+  --ui-color-success-100: color-mix(in oklch, #50fa7b, white 88%);
+  --ui-color-success-200: color-mix(in oklch, #50fa7b, white 70%);
+  --ui-color-success-300: color-mix(in oklch, #50fa7b, white 50%);
+  --ui-color-success-400: color-mix(in oklch, #50fa7b, white 25%);
+  --ui-color-success-500: #50fa7b;
+  --ui-color-success-600: color-mix(in oklch, #50fa7b, black 15%);
+  --ui-color-success-700: color-mix(in oklch, #50fa7b, black 35%);
+  --ui-color-success-800: color-mix(in oklch, #50fa7b, black 55%);
+  --ui-color-success-900: color-mix(in oklch, #50fa7b, black 70%);
+  --ui-color-success-950: color-mix(in oklch, #50fa7b, black 85%);
+
+  /* warning: dracula yellow #f1fa8c */
+  --ui-color-warning-50: color-mix(in oklch, #f1fa8c, white 95%);
+  --ui-color-warning-100: color-mix(in oklch, #f1fa8c, white 88%);
+  --ui-color-warning-200: color-mix(in oklch, #f1fa8c, white 70%);
+  --ui-color-warning-300: color-mix(in oklch, #f1fa8c, white 50%);
+  --ui-color-warning-400: color-mix(in oklch, #f1fa8c, white 25%);
+  --ui-color-warning-500: #f1fa8c;
+  --ui-color-warning-600: color-mix(in oklch, #f1fa8c, black 15%);
+  --ui-color-warning-700: color-mix(in oklch, #f1fa8c, black 35%);
+  --ui-color-warning-800: color-mix(in oklch, #f1fa8c, black 55%);
+  --ui-color-warning-900: color-mix(in oklch, #f1fa8c, black 70%);
+  --ui-color-warning-950: color-mix(in oklch, #f1fa8c, black 85%);
+
+  /* error: dracula red #ff5555 */
+  --ui-color-error-50: color-mix(in oklch, #ff5555, white 95%);
+  --ui-color-error-100: color-mix(in oklch, #ff5555, white 88%);
+  --ui-color-error-200: color-mix(in oklch, #ff5555, white 70%);
+  --ui-color-error-300: color-mix(in oklch, #ff5555, white 50%);
+  --ui-color-error-400: color-mix(in oklch, #ff5555, white 25%);
+  --ui-color-error-500: #ff5555;
+  --ui-color-error-600: color-mix(in oklch, #ff5555, black 15%);
+  --ui-color-error-700: color-mix(in oklch, #ff5555, black 35%);
+  --ui-color-error-800: color-mix(in oklch, #ff5555, black 55%);
+  --ui-color-error-900: color-mix(in oklch, #ff5555, black 70%);
+  --ui-color-error-950: color-mix(in oklch, #ff5555, black 85%);
+
+  /* info: dracula cyan #8be9fd */
+  --ui-color-info-50: color-mix(in oklch, #8be9fd, white 95%);
+  --ui-color-info-100: color-mix(in oklch, #8be9fd, white 88%);
+  --ui-color-info-200: color-mix(in oklch, #8be9fd, white 70%);
+  --ui-color-info-300: color-mix(in oklch, #8be9fd, white 50%);
+  --ui-color-info-400: color-mix(in oklch, #8be9fd, white 25%);
+  --ui-color-info-500: #8be9fd;
+  --ui-color-info-600: color-mix(in oklch, #8be9fd, black 15%);
+  --ui-color-info-700: color-mix(in oklch, #8be9fd, black 35%);
+  --ui-color-info-800: color-mix(in oklch, #8be9fd, black 55%);
+  --ui-color-info-900: color-mix(in oklch, #8be9fd, black 70%);
+  --ui-color-info-950: color-mix(in oklch, #8be9fd, black 85%);
+
+  --ui-bg: #282a36;
+  --ui-bg-muted: #21222c;
+  --ui-bg-elevated: #353746;
+  --ui-bg-accented: #44475a;
+  --ui-bg-inverted: #f8f8f2;
+
+  --ui-text-dimmed: #6272a4;
+  --ui-text-muted: #8b8b87;
+  --ui-text-toned: #a8a8a0;
+  --ui-text: #d2d2c0;
+  --ui-text-highlighted: #f8f8f2;
+  --ui-text-inverted: #282a36;
+
+  --ui-border: #44475a;
+  --ui-border-muted: #353746;
+  --ui-border-accented: #565775;
+  --ui-border-inverted: #f8f8f2;
+}
