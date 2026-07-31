@@ -17,6 +17,7 @@
     "format": "vp fmt ."
   },
   "dependencies": {
+    "@better-auth/api-key": "catalog:",
     "@hono/node-server": "catalog:",
     "@hono/node-ws": "catalog:",
     "@hono/zod-openapi": "catalog:",
@@ -31,6 +32,7 @@
     "@opentelemetry/sdk-trace-node": "catalog:",
     "@scalar/hono-api-reference": "catalog:",
     "bcryptjs": "catalog:",
+    "better-auth": "catalog:",
     "bullmq": "catalog:",
     "chokidar": "catalog:",
     "drizzle-orm": "catalog:",

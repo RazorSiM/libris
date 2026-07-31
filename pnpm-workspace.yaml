@@ -46,7 +46,13 @@ catalog:
   "@vue/test-utils": ^2.4.6
   "@vueuse/core": ^14.2.1
   # Auth
+  # The apiKey plugin ships as its own package — it is not re-exported from
+  # `better-auth/plugins`. Keep its version pinned in step with better-auth;
+  # it declares a `@better-auth/core` peer and mismatched majors break the
+  # plugin contract.
+  "@better-auth/api-key": ^1.6.25
   bcryptjs: ^3.0.3
+  better-auth: ^1.6.25
   # >=12.10 required to compile against Node 26's V8 headers (12.6 fails to build)
   better-sqlite3: ^12.10.0
   # Queue
@@ -117,6 +123,15 @@ peerDependencyRules:
     - vite
   allowedVersions:
     vite: "*"
+    # better-auth's Drizzle adapter still declares `drizzle-orm: ^0.45.2`, but
+    # this repo runs the 1.0.0-beta line. Scoped to those two packages rather
+    # than blanket-allowing drizzle-orm, so a genuine mismatch elsewhere still
+    # warns. Verified against 1.0.0-beta.21 in libris-5ng.1: create, findOne,
+    # update, findMany+count and the apiKey plugin's own table all work. This is
+    # unsupported-by-upstream territory — re-run that probe on every upgrade of
+    # either package.
+    "better-auth>drizzle-orm": "*"
+    "@better-auth/drizzle-adapter>drizzle-orm": "*"
 packageExtensions:
   "@nuxt/icon":
     dependencies:
