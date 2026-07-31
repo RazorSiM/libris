@@ -19,6 +19,11 @@ import {
 } from "drizzle-orm/pg-core";
 import type { NormalizedMetadata } from "../types/book.js";
 
+// Better Auth's tables live in their own file so upgrade diffs stay contained,
+// but are re-exported here so `import * as schema` (and therefore drizzle-kit,
+// the Drizzle adapter and defineRelations) sees one complete schema.
+export * from "./auth-schema.js";
+
 const tsvector = customType<{ data: string }>({
   dataType() {
     return "tsvector";
