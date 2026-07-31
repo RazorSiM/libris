@@ -171,6 +171,7 @@ jobs:
       LIBRIS_INBOX_PATH: /tmp/e2e-inbox
       LIBRIS_LIBRARY_PATH: /tmp/e2e-library
       API_SECRET_KEY: ci-e2e-test-secret-key-minimum-32-chars!
+      BETTER_AUTH_SECRET: ci-e2e-better-auth-secret-min-32-chars!
       COOKIE_DOMAIN: ""
       MIGRATIONS_PATH: ./services/api-hono/migrations
     steps:

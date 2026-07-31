@@ -47,6 +47,8 @@ const testEnv: Env = {
   LIBRIS_INBOX_PATH: "/tmp/libris-test-inbox",
   LIBRIS_LIBRARY_PATH: "/tmp/libris-test-library",
   API_SECRET_KEY: "test-secret-key-at-least-32-characters-long!!",
+  BETTER_AUTH_SECRET: "test-better-auth-secret-at-least-32-chars!!",
+  BETTER_AUTH_URL: "",
   COOKIE_DOMAIN: "",
   MIGRATIONS_PATH: "./migrations",
   TRUST_PROXY_HEADERS: "0",

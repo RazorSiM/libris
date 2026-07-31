@@ -11,11 +11,15 @@ describe("resolvePolicy", () => {
     ["/_docs/scalar", "skip"],
     ["/_docs/openapi.json", "skip"],
 
-    // Public auth routes — exact match
-    ["/api/auth/login", "public"],
-    ["/api/auth/logout", "public"],
-    ["/api/auth/setup", "public"],
-    ["/api/auth/session", "public"],
+    // Better Auth owns everything under /api/auth/ and does its own
+    // authentication, so the middleware must stand aside for the whole prefix.
+    ["/api/auth/ok", "skip"],
+    ["/api/auth/sign-in/email", "skip"],
+    ["/api/auth/sign-up/email", "skip"],
+    ["/api/auth/get-session", "skip"],
+    ["/api/auth/list-sessions", "skip"],
+    ["/api/auth/admin/list-users", "skip"],
+    ["/api/auth/api-key/create", "skip"],
 
     // Optional auth — exact match
     ["/api/health", "optional"],
@@ -50,18 +54,29 @@ describe("resolvePolicy", () => {
       expect(resolvePolicy("/__test/cleanup")).toBe("skip");
     });
 
-    it("matches /api/auth/login exactly, not as /api/ prefix", () => {
-      // Exact match on /api/auth/login should return "public", not "api-key"
-      expect(resolvePolicy("/api/auth/login")).toBe("public");
-    });
-
     it("matches /api/health exactly as optional, not as /api/ prefix", () => {
       expect(resolvePolicy("/api/health")).toBe("optional");
     });
 
-    it("does not match /api/auth/login/extra as an exact public route", () => {
-      // Subpath should fall through to /api/ prefix → api-key
-      expect(resolvePolicy("/api/auth/login/extra")).toBe("api-key");
+    it("skips every depth under /api/auth/, not just the first level", () => {
+      // Better Auth nests plugin endpoints (/api/auth/admin/…,
+      // /api/auth/api-key/…), so a rule that only covered one segment would
+      // hand those to the api-key policy and 401 them.
+      expect(resolvePolicy("/api/auth/a/b/c/d")).toBe("skip");
+    });
+
+    it("keeps the legacy key routes authenticated despite the /api/auth/ skip", () => {
+      // TRANSITIONAL: the bespoke key routes still live inside Better Auth's
+      // prefix. If the skip rule won here, creating and deleting API keys would
+      // become anonymous. Remove with libris-5ng.15.
+      expect(resolvePolicy("/api/auth/keys")).toBe("api-key");
+      expect(resolvePolicy("/api/auth/keys/abc-123")).toBe("api-key");
+    });
+
+    it("does not let the /api/auth/ rule leak onto sibling paths", () => {
+      // /api/authors would be a real route; the prefix must not swallow it.
+      expect(resolvePolicy("/api/authors")).toBe("api-key");
+      expect(resolvePolicy("/api/auth-something")).toBe("api-key");
     });
 
     it("matches /_docs via the /_ prefix rule, not the default", () => {

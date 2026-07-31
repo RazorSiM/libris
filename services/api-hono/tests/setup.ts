@@ -1,4 +1,4 @@
-import { createTestDb } from "#db/test-utils";
+import { createTestAuth, createTestDb } from "#db/test-utils";
 import type { Db } from "#db/client";
 import { createApp } from "../src/app.js";
 import type { Env } from "../src/env.js";
@@ -13,6 +13,8 @@ const testEnv: Env = {
   LIBRIS_INBOX_PATH: "/tmp/libris-test-inbox",
   LIBRIS_LIBRARY_PATH: "/tmp/libris-test-library",
   API_SECRET_KEY: "test-secret-key-at-least-32-characters-long!!",
+  BETTER_AUTH_SECRET: "test-better-auth-secret-at-least-32-chars!!",
+  BETTER_AUTH_URL: "",
   COOKIE_DOMAIN: "",
   MIGRATIONS_PATH: "./migrations",
   TRUST_PROXY_HEADERS: "0",
@@ -52,6 +54,7 @@ export async function createTestApp() {
     queues: mockQueues,
     redisStorage: createMemoryKVStore(),
     cacheStorage: createMemoryKVStore(),
+    auth: createTestAuth(testDb.db, testEnv),
     shutdown: async () => {},
   };
 

@@ -51,21 +51,22 @@ books.example.com/_docs/*  → Hono API (OpenAPI docs)
 
 ### Required
 
-| Variable              | Purpose                                                                               |
-| --------------------- | ------------------------------------------------------------------------------------- |
-| `POSTGRES_HOST`       | Postgres host. The app assembles the connection URL from the `POSTGRES_*` split vars. |
-| `POSTGRES_PORT`       | Postgres port. Optional, defaults to `5432`.                                          |
-| `POSTGRES_USER`       | Postgres user.                                                                        |
-| `POSTGRES_PASSWORD`   | Postgres password.                                                                    |
-| `POSTGRES_DB`         | Postgres database name.                                                               |
-| `REDIS_HOST`          | Redis host. The app assembles the connection URL from the `REDIS_*` split vars.       |
-| `REDIS_PORT`          | Redis port. Optional, defaults to `6379`.                                             |
-| `REDIS_USER`          | Redis ACL user. Optional.                                                             |
-| `REDIS_PASSWORD`      | Redis password. Optional.                                                             |
-| `REDIS_TLS`           | Set to `1` for `rediss://` (TLS). Required by most managed Redis providers.           |
-| `LIBRIS_INBOX_PATH`   | Writable directory for uploaded book files                                            |
-| `LIBRIS_LIBRARY_PATH` | Writable directory for organized book storage                                         |
-| `API_SECRET_KEY`      | Token/cookie encryption secret — **minimum 32 characters**                            |
+| Variable              | Purpose                                                                                                                                                                                    |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `POSTGRES_HOST`       | Postgres host. The app assembles the connection URL from the `POSTGRES_*` split vars.                                                                                                      |
+| `POSTGRES_PORT`       | Postgres port. Optional, defaults to `5432`.                                                                                                                                               |
+| `POSTGRES_USER`       | Postgres user.                                                                                                                                                                             |
+| `POSTGRES_PASSWORD`   | Postgres password.                                                                                                                                                                         |
+| `POSTGRES_DB`         | Postgres database name.                                                                                                                                                                    |
+| `REDIS_HOST`          | Redis host. The app assembles the connection URL from the `REDIS_*` split vars.                                                                                                            |
+| `REDIS_PORT`          | Redis port. Optional, defaults to `6379`.                                                                                                                                                  |
+| `REDIS_USER`          | Redis ACL user. Optional.                                                                                                                                                                  |
+| `REDIS_PASSWORD`      | Redis password. Optional.                                                                                                                                                                  |
+| `REDIS_TLS`           | Set to `1` for `rediss://` (TLS). Required by most managed Redis providers.                                                                                                                |
+| `LIBRIS_INBOX_PATH`   | Writable directory for uploaded book files                                                                                                                                                 |
+| `LIBRIS_LIBRARY_PATH` | Writable directory for organized book storage                                                                                                                                              |
+| `API_SECRET_KEY`      | Token/cookie encryption secret — **minimum 32 characters**                                                                                                                                 |
+| `BETTER_AUTH_SECRET`  | Signs Better Auth session cookies — **minimum 32 characters**. Separate from `API_SECRET_KEY`, with no fallback: the server refuses to start without it. Changing it signs out every user. |
 
 ### Optional
 
@@ -169,6 +170,7 @@ services:
       LIBRIS_INBOX_PATH: /data/inbox
       LIBRIS_LIBRARY_PATH: /data/library
       API_SECRET_KEY: # openssl rand -hex 32
+      BETTER_AUTH_SECRET: # openssl rand -base64 32
     volumes:
       - inbox:/data/inbox
       - library:/data/library

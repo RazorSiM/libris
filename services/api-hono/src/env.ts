@@ -18,6 +18,16 @@ const RawEnvSchema = z.object({
   LIBRIS_INBOX_PATH: z.string().min(1, "LIBRIS_INBOX_PATH is required"),
   LIBRIS_LIBRARY_PATH: z.string().min(1, "LIBRIS_LIBRARY_PATH is required"),
   API_SECRET_KEY: z.string().min(32, "API_SECRET_KEY must be at least 32 characters"),
+  // Signs Better Auth session cookies. Required with no fallback to
+  // API_SECRET_KEY: the two rotate independently, and silently reusing a
+  // long-lived secret for session signing is worse than failing to boot.
+  // Adding this is a breaking change for existing deployments.
+  BETTER_AUTH_SECRET: z.string().min(32, "BETTER_AUTH_SECRET must be at least 32 characters"),
+  // Optional. When empty, Better Auth derives its origin from the incoming
+  // request, which is what production wants: the container listens on http
+  // while Traefik terminates https, so any hardcoded value would be wrong.
+  // Set it only when the public URL cannot be inferred.
+  BETTER_AUTH_URL: z.string().default(""),
   COOKIE_DOMAIN: z.string().default(""),
   MIGRATIONS_PATH: z.string().default("./migrations"),
   TRUST_PROXY_HEADERS: z.enum(["0", "1"]).default("0"),
@@ -60,11 +70,19 @@ const EnvSchema = RawEnvSchema.transform((raw, ctx) => {
 
 export type Env = z.infer<typeof EnvSchema>;
 
+/**
+ * Parse and validate a raw environment. Exported so the validation rules can be
+ * tested directly, without the module-level cache getEnv() keeps.
+ */
+export function parseEnv(raw: Record<string, string | undefined>): Env {
+  return EnvSchema.parse(raw);
+}
+
 let _env: Env | null = null;
 
 export function getEnv(): Env {
   if (!_env) {
-    _env = EnvSchema.parse(process.env);
+    _env = parseEnv(process.env);
   }
   return _env;
 }

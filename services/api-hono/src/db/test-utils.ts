@@ -9,6 +9,9 @@ import { fileURLToPath } from "node:url";
 import { PGlite } from "@electric-sql/pglite";
 import { pg_trgm } from "@electric-sql/pglite/contrib/pg_trgm";
 import { drizzle } from "drizzle-orm/pglite";
+import type { Env } from "../env";
+import { createAuth, type Auth } from "../lib/auth";
+import { createMemorySecondaryStorage } from "../services/auth-secondary-storage";
 import { relations } from "./relations";
 import * as schema from "./schema";
 
@@ -70,4 +73,22 @@ export async function createTestDb(): Promise<{ pglite: PGlite; db: TestDb }> {
   }
 
   return { pglite, db };
+}
+
+/**
+ * Better Auth instance for tests, backed by in-memory secondary storage.
+ *
+ * Exists so the ~8 route suites that build an AppServices object do not each
+ * have to wire up createAuth: `auth` is required at runtime, so it cannot be
+ * omitted, and duplicating its construction would mean touching every suite
+ * again on the next signature change.
+ */
+export function createTestAuth(db: TestDb, env: Env): Auth {
+  return createAuth({
+    db: db as unknown as Parameters<typeof createAuth>[0]["db"],
+    secondaryStorage: createMemorySecondaryStorage(),
+    env,
+    secret: env.BETTER_AUTH_SECRET,
+    baseURL: "http://localhost:3000",
+  });
 }

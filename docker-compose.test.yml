@@ -56,6 +56,7 @@ services:
       LIBRIS_INBOX_PATH: /repo/tmp/test-inbox
       LIBRIS_LIBRARY_PATH: /repo/tmp/test-library
       API_SECRET_KEY: e2e-test-secret-key-minimum-32-chars!
+      BETTER_AUTH_SECRET: e2e-better-auth-secret-minimum-32-chars!
       COOKIE_DOMAIN: ""
       MIGRATIONS_PATH: /repo/services/api-hono/migrations
       E2E_DOCKER: "1"

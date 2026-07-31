@@ -44,6 +44,7 @@ export default defineConfig({
       LIBRIS_INBOX_PATH: "/tmp/libris-test-inbox",
       LIBRIS_LIBRARY_PATH: "/tmp/libris-test-library",
       API_SECRET_KEY: "test-secret-key-at-least-32-characters-long!!",
+      BETTER_AUTH_SECRET: "test-better-auth-secret-at-least-32-chars!!",
       KOSYNC_USERNAME: "testuser",
       KOSYNC_PASSWORD_HASH: "$2b$10$Awb/V5CEX/pMaJHmAetwluMtevWSFx3mR3q5vNJMBQa4cK/HtGwJ2",
     },

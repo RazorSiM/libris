@@ -30,6 +30,11 @@ import { setWorkers } from "./services/workers.js";
 import { getDb } from "./services/db.js";
 import { getSharedRedis, closeSharedRedis } from "./services/redis.js";
 import { createRedisKVStore, createMemoryKVStore, type KVStore } from "./services/kv-store.js";
+import {
+  createMemorySecondaryStorage,
+  createRedisSecondaryStorage,
+} from "./services/auth-secondary-storage.js";
+import { createAuth, type Auth } from "./lib/auth.js";
 
 const SHUTDOWN_TIMEOUT_MS = 30_000;
 
@@ -46,6 +51,7 @@ export interface AppServices {
   queues: Queues;
   redisStorage: KVStore;
   cacheStorage: KVStore;
+  auth: Auth;
   shutdown: () => Promise<void>;
 }
 
@@ -85,16 +91,32 @@ export async function bootstrap(env: Env): Promise<AppServices> {
   // 4. Setup KV stores (memory in dev/test, Redis-backed in production)
   let redisStorage: KVStore;
   let cacheStorage: KVStore;
+  // Better Auth's session and rate-limit store. Same dev/prod split as the KV
+  // stores above, and in production it shares the one ioredis connection rather
+  // than opening another.
+  let authStorage: ReturnType<typeof createMemorySecondaryStorage>;
 
   if (isDev || isTest) {
     redisStorage = createMemoryKVStore();
     cacheStorage = createMemoryKVStore();
+    authStorage = createMemorySecondaryStorage();
   } else {
     const sharedRedis = getSharedRedis();
     redisStorage = createRedisKVStore(sharedRedis, "kv");
     cacheStorage = createRedisKVStore(sharedRedis, "cache");
+    authStorage = createRedisSecondaryStorage(sharedRedis, "ba");
     logger.info("Redis KV stores mounted (shared connection).");
   }
+
+  const auth = createAuth({
+    db,
+    secondaryStorage: authStorage,
+    env,
+    secret: env.BETTER_AUTH_SECRET,
+    // Empty means "infer from the request", which is what production needs
+    // behind a TLS-terminating proxy.
+    baseURL: env.BETTER_AUTH_URL || undefined,
+  });
 
   // 5. Create BullMQ queues (reuse the shared ioredis instance via getQueues())
   const queues = isTest
@@ -534,5 +556,5 @@ export async function bootstrap(env: Env): Promise<AppServices> {
     logger.info("Shutdown complete.");
   };
 
-  return { db, queues, redisStorage, cacheStorage, shutdown };
+  return { db, queues, redisStorage, cacheStorage, auth, shutdown };
 }

@@ -14,7 +14,7 @@ import { hash } from "bcryptjs";
 import { afterAll, beforeAll, describe, expect, it } from "vite-plus/test";
 import type { PGlite } from "@electric-sql/pglite";
 import { createApp } from "../app.js";
-import { createTestDb, type TestDb } from "../db/test-utils.js";
+import { createTestAuth, createTestDb, type TestDb } from "../db/test-utils.js";
 import * as schema from "../db/schema.js";
 import { createMemoryKVStore } from "../services/kv-store.js";
 import { md5 } from "./auth.js";
@@ -35,6 +35,8 @@ const TEST_ENV: Env = {
   LIBRIS_INBOX_PATH: "/tmp/libris-test-inbox",
   LIBRIS_LIBRARY_PATH: "/tmp/libris-test-library",
   API_SECRET_KEY: "test-secret-key-at-least-32-characters-long!!",
+  BETTER_AUTH_SECRET: "test-better-auth-secret-at-least-32-chars!!",
+  BETTER_AUTH_URL: "",
   COOKIE_DOMAIN: "",
   MIGRATIONS_PATH: "./migrations",
   TRUST_PROXY_HEADERS: "0",
@@ -69,6 +71,7 @@ beforeAll(async () => {
     },
     redisStorage: createMemoryKVStore(),
     cacheStorage: createMemoryKVStore(),
+    auth: createTestAuth(db, TEST_ENV),
     shutdown: async () => {},
   };
 

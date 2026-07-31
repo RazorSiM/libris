@@ -29,7 +29,13 @@ export interface CreateAuthDeps {
    * and type-checked independently of that slice.
    */
   secret: string;
-  baseURL: string;
+  /**
+   * Omit to let Better Auth derive the origin from the incoming request, which
+   * is what production needs: the container listens on http behind a proxy that
+   * terminates https, so a fixed value would produce wrong cookie and redirect
+   * origins.
+   */
+  baseURL?: string | undefined;
 }
 
 /**
