@@ -1,5 +1,5 @@
 /**
- * First-run bootstrap (libris-5ng.6).
+ * First-run bootstrap.
  *
  * A fresh self-hosted install has no accounts and no way in. This is the only
  * public write endpoint in the whole auth surface — everything else is

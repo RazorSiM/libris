@@ -1,19 +1,16 @@
 /**
- * Access control between two people (libris-5ng.23, rewritten not ported).
+ * Access control between two people.
  *
- * The old model had a key BE a user, so every fixture here minted keys and
- * every authorization question was asked with one. Two things changed:
+ * A person and their credentials are different objects: an account comes from
+ * the admin plugin, and app passwords are things that account holds. App
+ * passwords are also scoped — refused on admin routes, /api/auth/*,
+ * /api/app-passwords and /api/credentials, whoever owns them.
  *
- *   • A person and their credentials are different objects. An account comes
- *     from the admin plugin; app passwords are things that account holds.
- *   • An app password is scoped (libris-5ng.28). It is refused on admin routes,
- *     /api/auth/*, /api/app-passwords and /api/credentials, whoever owns it.
- *
- * That second point decides which credential each test below uses, and it is
- * not cosmetic: a role assertion made with a Bearer key would pass even if the
- * role check were deleted, because the key is refused before the role is read.
- * Role tests use SESSIONS. Tests about the ordinary library surface use keys,
- * because that is what an e-reader holds.
+ * That decides which credential each test below uses, and it is not cosmetic: a
+ * role assertion made with a Bearer key would pass even if the role check were
+ * deleted, because the key is refused before the role is ever read. Role tests
+ * use SESSIONS. Tests about the ordinary library surface use keys, because that
+ * is what an e-reader holds.
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vite-plus/test";
 import { bootstrapAdmin, createAccount, createTestApp, createFetchHelper } from "./setup.js";
@@ -125,11 +122,9 @@ describe("admin vs non-admin access control", () => {
   });
 
   it("minting a credential is not an admin power any more", async () => {
-    // Was "non-admin gets 403 on POST /api/auth/keys". That 403 protected the
-    // creation of a PERSON, which is what a key was. Issuing yourself a
-    // credential for your own e-reader needs no privilege at all, and refusing
-    // it would mean a household member could not connect a reader without an
-    // admin doing it for them.
+    // Issuing yourself a credential for your own e-reader needs no privilege.
+    // Refusing it would mean a household member cannot connect a reader without
+    // an admin doing it for them.
     const { status } = await $fetchRaw("/api/app-passwords", {
       method: "POST",
       body: { name: "their-own-reader" },
@@ -155,10 +150,8 @@ describe("admin vs non-admin access control", () => {
   });
 
   it("nobody sees anyone else's credentials, admin included", async () => {
-    // Was a pair: "non-admin sees only their own" and "admin can list ALL
-    // keys". The second is gone. An admin manages accounts, not the credentials
-    // those accounts hold — they cannot read a member's app passwords any more
-    // than they can read their password.
+    // An admin manages accounts, not the credentials those accounts hold — they
+    // can no more read a member's app passwords than read their password.
     const { data: userList, status } = await $fetchRaw("/api/app-passwords", {
       headers: userSession(),
     });
@@ -234,10 +227,8 @@ describe("book ownership (requireBookOwnership)", () => {
   });
 
   it("cannot create an unowned book at all", async () => {
-    // There used to be a whole authorization branch for books with
-    // createdBy = null, and a test asserting they were admin-only. The cutover
-    // made created_by NOT NULL, which deletes the case rather than handling it —
-    // so the assertion worth keeping is that the database refuses.
+    // created_by is NOT NULL, so there is no unowned-book case for
+    // authorization to handle. The database is what enforces it.
     await expect(
       testDb
         .insert(books)
@@ -302,11 +293,9 @@ describe("book ownership (requireBookOwnership)", () => {
  * The credential lifecycle, end to end: issue it, use it, revoke it, and watch
  * it stop working on the very next request.
  *
- * "Cannot delete the last remaining API key" used to live here and has no
- * successor. It existed because the last key was the last USER — deleting it
- * locked everyone out of the install permanently. A credential is disposable
- * now; the thing that must not be deleted is the last admin, which the admin
- * plugin guards and tests/e2e/auth.spec.ts covers.
+ * There is no "cannot delete your last credential" guard, deliberately — a
+ * credential is disposable. The thing that must not be deleted is the last
+ * ADMIN, which the admin plugin enforces and tests/e2e/auth.spec.ts covers.
  */
 describe("app password lifecycle", () => {
   it("issue, use, revoke, and it is dead immediately", async () => {
@@ -377,7 +366,7 @@ describe("app password lifecycle", () => {
 // ═══════════════════════════════════════════════════════════════════
 
 /**
- * Sessions throughout: /api/credentials refuses app passwords (libris-5ng.28),
+ * Sessions throughout: /api/credentials refuses app passwords,
  * so a Bearer key would 403 before any isolation logic ran.
  *
  * "opds" is also no longer one of these. OPDS readers hold an app password now,

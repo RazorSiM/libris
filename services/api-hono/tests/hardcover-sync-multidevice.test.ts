@@ -16,7 +16,7 @@ import {
   resolveBookIdForDocument,
 } from "../src/lib/progress-linking.js";
 
-// Multi-device Hardcover sync (libris-3cw8).
+// Multi-device Hardcover sync.
 //
 // reading_progress.book_id is resolved from the KoReader `document` hash at
 // write time. Progress that arrives before a book is organized — or that

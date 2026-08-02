@@ -91,7 +91,7 @@ beforeAll(async () => {
   ({ app } = createApp({ services, env: TEST_ENV }));
 
   // 3. A user and an app password — OPDS credentials are Better Auth api keys
-  // now, not rows in service_credentials (libris-5ng.12).
+  // now, not rows in service_credentials.
   const created = await auth.api.createUser({
     body: {
       email: "opds-int-test@example.test",

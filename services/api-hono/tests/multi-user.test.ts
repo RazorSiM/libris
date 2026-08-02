@@ -5,19 +5,12 @@
  * isolation, KoSync progress isolation, reading stats isolation, Hardcover sync
  * log isolation, and admin-only route protection.
  *
- * Rewritten rather than ported (libris-5ng.23). The old version was built on a
- * model where a key WAS a user, so "admin creates a key" meant "admin creates a
- * person" and key management was admin-only. Both halves of that inverted:
- * accounts come from the admin plugin, and everyone manages their own
- * credentials. Assertions like "non-admin gets 403 creating a key" were not
- * renamed, they were turned around.
- *
  * Two kinds of credential appear below, and which one a test uses is load-
  * bearing:
  *   • app password (Bearer) — the library surface, and what an e-reader holds.
  *   • session cookie — admin routes, /api/auth/* and credential management,
- *     which refuse app passwords outright since libris-5ng.28. A role test
- *     MUST use a session, or it would pass without any role check existing.
+ *     which refuse app passwords outright. A role test MUST use a session, or
+ *     it would pass without any role check existing.
  */
 
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vite-plus/test";
@@ -95,15 +88,12 @@ afterEach(async () => {
 // ── App password management ───────────────────────────────────────
 
 /**
- * The block that inverted.
- *
- * /api/auth/keys was admin-only because minting a key was how an admin created
- * a person. /api/app-passwords is per-user: a credential is something you hold,
- * so everyone manages their own and nobody — admin included — manages anyone
- * else's. Creating accounts is a separate, genuinely admin act.
+ * A credential is something you hold, so everyone manages their own and nobody
+ * — admin included — manages anyone else's. Creating an ACCOUNT is a separate
+ * and genuinely admin act.
  */
 describe("app password management", () => {
-  it("a non-admin can mint their own — this used to be a 403", async () => {
+  it("a non-admin can mint their own", async () => {
     const { data, status } = await $fetchRaw("/api/app-passwords", {
       method: "POST",
       body: { name: "their-own-kobo" },
@@ -125,9 +115,8 @@ describe("app password management", () => {
   });
 
   it("everyone sees only their own, admin included", async () => {
-    // The old assertion was "admin sees ALL keys". An admin is not a superuser
-    // over other people's credentials — they cannot read them, only manage the
-    // accounts that hold them.
+    // An admin is not a superuser over other people's credentials. They manage
+    // the accounts that hold them, not the credentials themselves.
     await $fetchRaw("/api/app-passwords", {
       method: "POST",
       body: { name: "admin-extra" },
@@ -176,9 +165,9 @@ describe("app password management", () => {
   });
 
   it("nothing stops you revoking the credential you are holding", async () => {
-    // "Cannot delete the active key" has no equivalent any more. It existed
-    // because deleting your key deleted YOU; now it costs you a credential and
-    // nothing else, and your session is untouched.
+    // Revoking the credential you are authenticating with costs you that
+    // credential and nothing else — the session doing the revoking is a
+    // separate thing and survives.
     const { data: list } = await $fetchRaw("/api/app-passwords", { headers: userSession() });
     const { status } = await $fetchRaw(`/api/app-passwords/${list.keys[0].id}`, {
       method: "DELETE",
@@ -252,11 +241,9 @@ describe("book ownership", () => {
   });
 
   it("there is no such thing as an unowned book any more", async () => {
-    // Two tests used to live here, for a non-admin and an admin editing a book
-    // with createdBy NULL. books.created_by is NOT NULL since the cutover, so
-    // that state is unreachable and the branch handling it was deleted rather
-    // than fixed. What is worth pinning is that the seeder cannot produce one:
-    // an unattributed book falls to the oldest admin, the same rule the
+    // books.created_by is NOT NULL, so an unowned book is not a state the app
+    // can reach. What is worth pinning is that the seeder cannot produce one
+    // either: an unattributed book falls to the oldest admin, the same rule the
     // ingestion worker follows.
     const { data: seeded } = await $fetchRaw("/__test/seed-books", {
       method: "POST",
@@ -279,7 +266,7 @@ describe("book ownership", () => {
  * 1. "opds" is no longer a credential service. OPDS clients authenticate with
  *    app passwords, so CredentialServiceParamSchema accepts only kosync and
  *    hardcover — a PUT to /api/credentials/opds is now a validation error.
- * 2. /api/credentials refuses app passwords (libris-5ng.28), so these use
+ * 2. /api/credentials refuses app passwords, so these use
  *    sessions. A Bearer key would 403 before reaching the isolation logic and
  *    the test would pass for entirely the wrong reason.
  */
@@ -591,9 +578,9 @@ describe("hardcover sync log isolation", () => {
 /**
  * Sessions throughout, deliberately.
  *
- * Since libris-5ng.28 an app password is refused on admin routes whoever owns
- * it, so a Bearer key would make "non-admin gets 403" pass even if the role
- * check were deleted. These have to be about the PERSON to mean anything.
+ * An app password is refused on admin routes whoever owns it, so a Bearer key
+ * would make "non-admin gets 403" pass even if the role check were deleted.
+ * These have to be about the PERSON to mean anything.
  */
 describe("admin-only routes", () => {
   it("non-admin gets 403 on PATCH /api/settings", async () => {
@@ -627,8 +614,8 @@ describe("admin-only routes", () => {
   });
 
   it("refuses even the ADMIN's app password on an admin route", async () => {
-    // The libris-5ng.28 boundary, stated where an admin-routes suite will see
-    // it: authority is not the only question, the kind of credential is too.
+    // Authority is not the only question on an admin route — the kind of
+    // credential matters too.
     const { status } = await $fetchRaw("/api/jobs/status", { headers: adminAuth() });
     expect(status).toBe(403);
   });

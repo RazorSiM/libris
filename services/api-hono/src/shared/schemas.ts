@@ -232,12 +232,6 @@ export const LibraryPatchBodySchema = wrap(BookUpdateSchema)
 
 // ── Auth schemas ─────────────────────────────────────────────────────
 //
-// The api key response schemas that lived here described the legacy table
-// (label, isAdmin, lastUsedAt) and served the removed /api/auth/keys routes.
-// The app-password endpoints in libris-5ng.15 need schemas shaped to the
-// Better Auth apikey model instead, so they are written there rather than
-// guessed at here.
-
 export const ApiKeyDeletedSchema = z
   .object({
     deleted: z.boolean(),

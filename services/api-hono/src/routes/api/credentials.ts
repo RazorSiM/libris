@@ -102,7 +102,7 @@ export const credentialsRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
     const db = c.get("db");
     const userId = getUserId(c);
 
-    // KoSync moved to its own table (libris-5ng.14); only Hardcover still lives
+    // KoSync moved to its own table; only Hardcover still lives
     // in service_credentials.
     const [row] =
       service === "kosync"

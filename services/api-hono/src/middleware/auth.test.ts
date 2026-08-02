@@ -1,5 +1,5 @@
 /**
- * authMiddleware against the Better Auth session (libris-5ng.8).
+ * authMiddleware against the Better Auth session.
  *
  * The bet the epic is built on: because `enableSessionForAPIKeys` is on, a
  * single `auth.api.getSession()` resolves BOTH a cookie session and an app
@@ -92,7 +92,7 @@ beforeAll(async () => {
       userId: c.get("userId"),
       userName: c.get("userName"),
       role: c.get("role"),
-      // Derived from role, not a context variable of its own (libris-5ng.9).
+      // Derived from role, not a context variable of its own.
       isAdmin: isAdmin(c),
     });
 
@@ -102,7 +102,7 @@ beforeAll(async () => {
   app.get("/api/jobs", probe); // admin
   app.get("/api/health", probe); // optional
   app.get("/opds", probe); // opds
-  // api-key policy, but on the app-password deny list (libris-5ng.28). Present
+  // api-key policy, but on the app-password deny list. Present
   // so the scoping tests below can tell "refused" apart from "no such route".
   app.get("/api/app-passwords", probe);
   app.get("/api/credentials/kosync", probe);
@@ -247,9 +247,9 @@ describe("authMiddleware admin gating", () => {
   });
 
   it("refuses an admin route to an admin's app password", async () => {
-    // The scoping libris-5ng.28 added. A key acts as the person who minted it,
-    // so before this an admin's key WAS admin — and that key lives in plaintext
-    // in a KOReader config on a device that leaves the house.
+    // A key acts as the person who minted it, so without scoping an admin's key
+    // is admin — and that key lives in plaintext in a KOReader config, on a
+    // device that leaves the house.
     const { userId } = await signUp("boss2@example.test", "admin");
     const key = await createAppPassword(userId);
 
@@ -271,7 +271,7 @@ describe("authMiddleware admin gating", () => {
   });
 });
 
-// ── app-password scoping (libris-5ng.28) ────────────────────────────
+// ── app-password scoping ────────────────────────────
 
 describe("authMiddleware app-password scoping", () => {
   /**
@@ -395,7 +395,7 @@ describe("authMiddleware revocation", () => {
     // secondaryStorage as a {session, user} snapshot taken at sign-in, so
     // privilege changes have to go through Better Auth's own APIs — which
     // refresh or revoke the affected sessions — rather than through a bare
-    // UPDATE. Admin user management (libris-5ng.20) must use auth.api.*.
+    // UPDATE. Admin user management must use auth.api.*.
     const { userId, cookie } = await signUp("sneaky@example.test");
     await db.update(schema.users).set({ role: "admin" }).where(eq(schema.users.id, userId));
 
@@ -452,9 +452,8 @@ describe("authMiddleware policies", () => {
 
 describe("app passwords over Authorization", () => {
   it("accepts a Bearer key, which is what Bruno, curl and cron send", async () => {
-    // libris-5ng.13. The plugin only reads x-api-key by default; every existing
-    // consumer of a Libris key sends Bearer, so dropping it would break them
-    // all silently on deploy.
+    // The plugin only reads x-api-key by default. Bruno, curl and cron all send
+    // Bearer, so not accepting it would break every one of them silently.
     const { userId } = await signUp("bearer@example.test");
     const key = await createAppPassword(userId, "Bruno");
 
@@ -464,9 +463,9 @@ describe("app passwords over Authorization", () => {
   });
 
   it("accepts a Basic password, which is all an OPDS reader can send", async () => {
-    // libris-5ng.12. KOReader, Moon+, Thorium and Panels speak Basic and
-    // nothing else. The username is informational — the app password in the
-    // password field is the credential.
+    // KOReader, Moon+, Thorium and Panels speak Basic and nothing else. The
+    // username is informational — the app password in the password field is the
+    // credential.
     const { userId } = await signUp("opds@example.test");
     const key = await createAppPassword(userId, "KOReader");
 

@@ -85,7 +85,7 @@ async function materialize(relPath: string) {
 }
 
 describe("createCleanupOrphanedFilesProcessor", () => {
-  it("removes every orphan in a single pass even when batches contain deletions (regression for libris-434)", async () => {
+  it("removes every orphan in a single pass even when batches contain deletions", async () => {
     // Seed enough rows to span multiple small batches. With BATCH_SIZE=10 and
     // an even split, the buggy offset-based loop would skip rows after each
     // delete; this test fails against that implementation.

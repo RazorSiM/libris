@@ -65,7 +65,7 @@ export const books = pgTable(
     tags: text("tags").array().notNull().default([]),
     hardcoverBookId: integer("hardcover_book_id"),
     hardcoverEditionId: integer("hardcover_edition_id"),
-    // NOT NULL since libris-5ng.7: every book has an owner, which is what lets
+    // NOT NULL: every book has an owner, which is what lets
     // authorization drop its "unowned book" branch. RESTRICT rather than
     // CASCADE or SET NULL — deleting a user must not delete or orphan their
     // books, so the admin delete path reassigns them first and a path that

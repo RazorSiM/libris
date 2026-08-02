@@ -1,5 +1,5 @@
 /**
- * Integration tests: KoSync authentication (libris-5ng.14).
+ * Integration tests: KoSync authentication.
  *
  * KOReader sends md5(password) as x-auth-key, so the md5 digest IS the bearer
  * secret — the plaintext never reaches the server. The old implementation

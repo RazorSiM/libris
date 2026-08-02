@@ -1,5 +1,5 @@
 /**
- * Specification for the Better Auth cutover migration (libris-5ng.7).
+ * Specification for the Better Auth cutover migration.
  *
  * Two halves, and they need different setups:
  *
@@ -110,8 +110,8 @@ describe("auth cutover — resulting schema", () => {
   // carries Better Auth's text ids.
   //
   // These run against a FULLY migrated database, so the column names are the
-  // post-rename ones (libris-5ng.10 renamed api_key_id to user_id in a later
-  // migration). What this suite still owns is the delete rules: the cutover is
+  // post-rename ones — a later migration renames api_key_id to user_id.
+  // What this suite still owns is the delete rules: the cutover is
   // where "revoking a credential must not delete a reading history" became
   // true, and user-id-rename.test.ts only asserts the rename preserved them.
   const repointed: { table: string; column: string; nullable: boolean; onDelete: string }[] = [
@@ -141,8 +141,8 @@ describe("auth cutover — resulting schema", () => {
   }
 
   it("books.created_by is text NOT NULL and references users.id ON DELETE RESTRICT", async () => {
-    // NOT NULL is what lets libris-5ng.9 delete the "unowned book" authorization
-    // branch. RESTRICT is the database backstop: the admin delete-user path
+    // NOT NULL is what lets authorization drop its "unowned book" branch.
+    // RESTRICT is the database backstop: the admin delete-user path
     // reassigns a user's books before removing them, and a path that forgets
     // fails loudly rather than orphaning rows.
     const info = await column(pglite, "books", "created_by");

@@ -78,7 +78,7 @@ export const authMiddleware = createMiddleware<{ Variables: AppVariables }>(asyn
   };
 
   /**
-   * How much authority this credential is allowed to carry (libris-5ng.28).
+   * How much authority this credential is allowed to carry.
    *
    * An app password resolves into a full session, so without this an OPDS
    * credential copied off an e-reader is its owner — admin included. The check
@@ -141,7 +141,7 @@ export const authMiddleware = createMiddleware<{ Variables: AppVariables }>(asyn
 
     // OPDS clients send their app password over Basic auth, which a
     // customAPIKeyGetter turns into the same session everything else gets
-    // (libris-5ng.12). No branch of its own any more.
+    //. No branch of its own any more.
     case "opds":
     case "api-key":
       await resolveSession(true);

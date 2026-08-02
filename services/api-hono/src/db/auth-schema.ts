@@ -134,11 +134,9 @@ export const verifications = pgTable(
 
 /**
  * The apiKey plugin's table — Libris' app passwords for OPDS and e-reader
- * clients (libris-5ng.12, .15, .21).
+ * clients.
  *
- * This replaced the bespoke `api_keys` table that used to double as the user
- * table; the cutover is libris-5ng.7's migration. Two naming constraints meet
- * here and neither is negotiable:
+ * Two naming constraints meet here and neither is negotiable:
  *
  *   - the adapter resolves the model by `schema[modelName]`, i.e. the EXPORT
  *     name, so the export must be `apiKeys` and lib/auth.ts must pass

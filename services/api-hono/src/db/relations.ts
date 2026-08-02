@@ -2,9 +2,8 @@ import { defineRelations } from "drizzle-orm";
 import * as schema from "./schema";
 
 /**
- * Ownership now hangs off `users`, not `apiKeys`. Before libris-5ng.7 the two
- * were the same table; an api key is now just one of a user's credentials, so
- * the "owner" side of every relation below points at users.
+ * Ownership hangs off `users`, not `apiKeys`: an api key is one of a user's
+ * credentials, so the "owner" side of every relation below points at users.
  */
 export const relations = defineRelations(schema, (r) => ({
   users: {

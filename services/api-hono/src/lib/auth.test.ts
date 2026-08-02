@@ -5,8 +5,8 @@ import type { Env } from "../env.js";
 import { createAuth, type CreateAuthDeps } from "./auth.js";
 
 /**
- * These assertions pin the config to the decisions locked in the libris-5ng
- * epic. They are deliberately about *options*, not behaviour: each one is a
+ * These assertions pin the config to its deliberate choices. They are about
+ * *options*, not behaviour: each one is a
  * choice that is cheap to flip by accident during an upgrade and expensive to
  * notice in production (a re-enabled cookie cache delays revocation, a lost
  * modelName silently points at the wrong table, and so on).
@@ -127,7 +127,7 @@ describe("createAuth", () => {
     // enableSessionForAPIKeys and storage:"database" cannot be asserted here —
     // the plugin object exposes only id/hooks/endpoints/schema, not the options
     // it was built with. They get behavioural coverage where they matter: an
-    // API key resolving through getSession (libris-5ng.12 / .8).
+    // API key resolving through getSession.
   });
 
   describe("trusted origins", () => {

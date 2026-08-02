@@ -1,7 +1,7 @@
 /**
- * Specification for the api_key_id -> user_id rename (libris-5ng.10).
+ * Specification for the api_key_id -> user_id rename.
  *
- * The cutover (libris-5ng.7) repointed six foreign keys from api_keys.id to
+ * The cutover repointed six foreign keys from api_keys.id to
  * users.id but deliberately left the column names alone, so the schema read as
  * a lie: `api_key_id` holding a user id. This migration finishes the job.
  *

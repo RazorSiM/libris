@@ -200,7 +200,7 @@ describe("sessions", () => {
     // so DELETEing the row is NOT a revocation — the session stays valid until
     // its TTL lapses.
     //
-    // The "connected devices" page (libris-5ng.22) must therefore revoke through
+    // The "connected devices" page must therefore revoke through
     // auth.api.revokeSession, which clears both stores. A hand-rolled
     // `db.delete(sessions)` would render a device as signed-out in the UI while
     // it kept working.

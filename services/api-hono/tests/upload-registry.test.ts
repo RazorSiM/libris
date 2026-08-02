@@ -30,10 +30,9 @@ let adminKey: string;
 /**
  * The admin's USER id.
  *
- * Was adminKeyId, and the rename is the whole point of the new model: the
- * registry attributes an upload to a person, not to the credential they
- * happened to upload with. The same user can hold several app passwords and
- * every one of them produces the same owner here.
+ * The registry attributes an upload to a person, not to the credential it
+ * arrived with — one user can hold several app passwords and every one of them
+ * produces the same owner here.
  */
 let adminUserId: string;
 
@@ -53,8 +52,8 @@ beforeAll(async () => {
 beforeEach(async () => {
   await $fetchRaw("/__test/cleanup", { method: "POST" });
 
-  // POST /api/auth/setup is gone. Bootstrapping the first admin and minting a
-  // credential are two separate things now, and bootstrapAdmin does both.
+  // Bootstrapping the first admin and minting them a credential are two
+  // separate acts; bootstrapAdmin does both.
   const admin = await bootstrapAdmin(testApp.services, $fetchRaw);
   adminUserId = admin.userId;
   adminKey = admin.rawKey;
@@ -141,9 +140,8 @@ describe("upload route creates registry entry", () => {
   });
 
   it("associates registry entry with the correct non-admin user", async () => {
-    // POST /api/auth/keys was how an admin created a PERSON, so a non-admin
-    // fixture used to mean "mint a second key". Those are separate acts now:
-    // seedAppPassword creates the user and issues them a credential.
+    // seedAppPassword creates the person and issues them a credential — two
+    // separate acts, both needed for a non-admin fixture.
     const { userId: regularUserId, rawKey: userKey } = await seedAppPassword(
       testApp.services.auth,
       testApp.testDb,
@@ -241,11 +239,9 @@ describe("book-detected worker uses registry for ownership", () => {
   });
 
   it("gives an unattributed filesystem drop to the oldest admin", async () => {
-    // This used to assert createdBy was left NULL. books.created_by is NOT NULL
-    // since the cutover migration, so there is no such state to fall back to —
-    // the worker assigns the oldest admin instead, matching the rule the cutover
-    // applied to the books it found. Oldest rather than any admin so two files
-    // arriving at once cannot land on different owners.
+    // books.created_by is NOT NULL, so there is no unowned state to fall back
+    // to — the worker assigns the oldest admin. Oldest rather than any admin so
+    // two files arriving at once cannot land on different owners.
     const tempDir = await mkdtemp(join(tmpdir(), "libris-worker-test-"));
     const filePath = join(tempDir, "filesystem-drop.epub");
     await writeFile(filePath, "PK\x03\x04filesystem-dropped-book");

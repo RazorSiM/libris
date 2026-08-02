@@ -98,13 +98,11 @@ let seedUserSeq = 0;
 /**
  * Insert a user directly and return its id.
  *
- * Ownership moved from the api key to the person in libris-5ng.7, so the many
- * suites that used to mint an api key purely to have an owner id now need a
- * user instead. This writes the row directly rather than going through
- * `auth.api.createUser` because most of those suites only need an id to hang
- * books and reading progress off — they never sign in, and paying for a
- * password hash per fixture would slow the suite down for nothing. Tests that
- * do authenticate should use `createTestAuth` and go through Better Auth.
+ * Books and reading progress hang off a user, so most suites need one purely
+ * to have an owner id. This writes the row directly rather than going through
+ * `auth.api.createUser`: those suites never sign in, and paying for a password
+ * hash per fixture would slow the run down for nothing. Tests that DO
+ * authenticate should use `createTestAuth` and go through Better Auth.
  */
 export async function seedUser(
   db: TestDb,

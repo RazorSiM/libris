@@ -29,7 +29,7 @@ function auth() {
 
 /**
  * A browser session, for the routes app passwords are scoped out of
- * (libris-5ng.28): admin routes, /api/auth/*, /api/app-passwords and
+ *: admin routes, /api/auth/*, /api/app-passwords and
  * /api/credentials.
  */
 function session() {
@@ -122,12 +122,8 @@ describe("auth middleware", () => {
 // ── App password management ────────────────────────────────────────
 
 /**
- * Was "auth key management" against /api/auth/keys, which took a `label`,
- * returned `{id, key, label}` and answered 200 with `{deleted: true}`. The
- * replacement takes a `name`, and DELETE is a 204 with no body.
- *
  * Sessions, not `auth()`: /api/app-passwords refuses app passwords, so a
- * credential cannot mint or revoke credentials (libris-5ng.28).
+ * credential cannot mint or revoke credentials.
  */
 describe("app password management", () => {
   it("POST /api/app-passwords — issues one, plaintext included", async () => {
@@ -170,9 +166,9 @@ describe("app password management", () => {
   });
 
   it("DELETE /api/app-passwords/:id — revoking the one you are using is allowed", async () => {
-    // Was "cannot delete active key" (409). That guard existed because the key
-    // WAS the user, so deleting it deleted the account. Revoking a credential
-    // costs you the credential now; the session doing the revoking is untouched.
+    // Revoking the credential you are authenticating with is allowed: it costs
+    // you that credential and nothing else, and the session doing the revoking
+    // is untouched.
     const { data: list } = await $fetchRaw("/api/app-passwords", { headers: session() });
     const active = list.keys.find((k: { id: string }) => k.id);
 
@@ -605,11 +601,9 @@ async function seedKosyncCredentials() {
 /**
  * What an OPDS reader sends.
  *
- * There is nothing to seed any more: seedOpdsCredentials() used to PUT a row
- * into service_credentials, and "opds" is no longer one of the services. A
- * reader authenticates with an ordinary app password sent as Basic's PASSWORD
- * — the username half is informational, which is why the default here is the
- * account's email rather than a second secret.
+ * A reader authenticates with an ordinary app password in Basic's PASSWORD
+ * field. The username half is informational, which is why the default here is
+ * the account's email rather than a second secret.
  */
 function opdsBasicAuth(username = "integration-test@example.test", password?: string) {
   const encoded = Buffer.from(`${username}:${password ?? apiKey}`).toString("base64");
@@ -1017,13 +1011,9 @@ describe("OPDS: GET /opds/ (index feed)", () => {
   });
 
   /**
-   * Two tests used to sit here: "clears cached OPDS auth immediately after
-   * credential update" and "...after deletion". They existed because the old
-   * middleware cached auth results for five minutes behind a manual
-   * clearAuthCaches() invariant, and every route that changed a credential had
-   * to remember to call it. Nothing caches now, so there is no invalidation to
-   * test — but "immediately" is still the property worth pinning, so it is
-   * asserted directly against revocation below.
+   * Nothing caches anywhere in the auth path, so revocation needs no
+   * invalidation step to be felt. "Immediately" is the property worth pinning,
+   * and this asserts it directly.
    */
   it("stops serving a revoked credential on the very next request", async () => {
     const { data: issued } = await $fetchRaw("/api/app-passwords", {

@@ -129,12 +129,11 @@ export const TEST_PASSWORD = "correct-horse-battery-staple";
 /**
  * A replayable cookie header for an existing account.
  *
- * Needed because app passwords are scoped out of the admin, account and
- * credential routes (libris-5ng.28): a suite that drives /api/jobs,
- * /api/app-passwords or /api/credentials has to authenticate the way a browser
- * does. It is also the only way to keep a ROLE test honest — with a Bearer key
- * those routes 403 whoever owns it, so the assertion would pass with no role
- * check in place at all.
+ * App passwords are scoped out of the admin, account and credential routes, so
+ * a suite driving /api/jobs, /api/app-passwords or /api/credentials has to
+ * authenticate the way a browser does. It is also the only way to keep a ROLE
+ * test honest — with a Bearer key those routes 403 whoever owns them, so the
+ * assertion would pass with no role check in place at all.
  */
 export async function signInAs(
   services: AppServices,
@@ -154,10 +153,9 @@ export async function signInAs(
 /**
  * An additional account: the person, a credential, and a session.
  *
- * Replaces `POST /api/auth/keys`, which conflated all three — minting a key WAS
- * creating a user, because a key was a person. Accounts come from the admin
- * plugin now (self-registration is disabled outright), and a credential is
- * something a person holds rather than something they are.
+ * Accounts come from the admin plugin — self-registration is disabled outright
+ * — and a credential is something a person holds rather than something they
+ * are, so all three are separate steps.
  *
  * Signs in rather than failing if the account already exists, so suites whose
  * /__test/cleanup preserves accounts can call this from a beforeEach.

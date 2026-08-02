@@ -66,7 +66,7 @@ describe("resolvePolicy", () => {
     });
 
     it("hands the whole /api/auth/ prefix to Better Auth, key routes included", () => {
-      // The bespoke /api/auth/keys routes are gone (libris-5ng.11); the plugin's
+      // The bespoke /api/auth/keys routes are gone; the plugin's
       // own endpoints live under this prefix and authenticate themselves, so the
       // skip rule is now correct for everything beneath it.
       expect(resolvePolicy("/api/auth/keys")).toBe("skip");

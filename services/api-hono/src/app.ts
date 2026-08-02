@@ -88,12 +88,12 @@ export function createApp({ services, env }: CreateAppOptions) {
   // does not try to authenticate them first.
   //
   // Registered BEFORE the app router now that the bespoke /api/auth/* routes are
-  // gone (libris-5ng.11/.15); it used to sit after them so their exact paths
+  // gone; it used to sit after them so their exact paths
   // could win over the catch-all.
   //
   // Consequence: a catch-all contributes nothing to Hono's RPC type graph, so
   // there is no typed client for these paths. The frontend talks to them
-  // through the Better Auth client instead (libris-5ng.17).
+  // through the Better Auth client instead.
   app.on(["GET", "POST"], "/api/auth/*", (c) => services.auth.handler(c.req.raw));
 
   // Mount routes

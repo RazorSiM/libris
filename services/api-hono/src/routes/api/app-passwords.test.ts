@@ -1,5 +1,5 @@
 /**
- * App password endpoints (libris-5ng.15).
+ * App password endpoints.
  *
  * These replace the bespoke /api/auth/keys routes. The credential itself is a
  * Better Auth api key, so most of the behaviour under test is about the

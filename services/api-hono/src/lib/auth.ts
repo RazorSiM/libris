@@ -3,7 +3,7 @@ import { drizzleAdapter } from "better-auth/adapters/drizzle";
 // `better-auth/minimal` rather than `better-auth`: it is the documented entry
 // point when a database adapter is used, and it keeps Kysely (only needed for
 // direct database connections) out of the bundle entirely. Verified absent from
-// dist in libris-5ng.1.
+// the bundle.
 import { betterAuth } from "better-auth/minimal";
 import { admin } from "better-auth/plugins/admin";
 import type { BetterAuthOptions } from "better-auth/types";
@@ -27,10 +27,9 @@ export interface CreateAuthDeps {
   secondaryStorage: SecondaryStorage;
   env: Env;
   /**
-   * Passed in rather than read from `env` because BETTER_AUTH_SECRET and
-   * BETTER_AUTH_URL are added to the env schema in libris-5ng.5, which also
-   * mounts the handler. Keeping them as arguments lets this config be written
-   * and type-checked independently of that slice.
+   * Passed in rather than read from `env` so this config can be constructed and
+   * type-checked without the env schema, which matters for tests that build an
+   * auth instance directly.
    */
   secret: string;
   /**
@@ -58,7 +57,7 @@ export interface CreateAuthDeps {
  * models. When that happens the adapter fails loudly at runtime with
  * `The field "x" does not exist in the "y" Drizzle schema` rather than silently
  * reading the wrong column — but only on the code path that touches it, so
- * re-run the schema generation in libris-5ng.4 after any bump and diff it.
+ * re-run the schema generation after any bump and diff it.
  */
 /**
  * Where an app password may arrive, in precedence order.
@@ -68,8 +67,8 @@ export interface CreateAuthDeps {
  *
  * - `x-api-key` — the plugin's own convention.
  * - `Authorization: Bearer` — what Bruno, curl and cron already send
- *   (libris-5ng.13). Every existing consumer of a Libris key uses this form.
- * - `Authorization: Basic` — all an OPDS reader can speak (libris-5ng.12).
+ *  . Every existing consumer of a Libris key uses this form.
+ * - `Authorization: Basic` — all an OPDS reader can speak.
  *   KOReader, Moon+, Thorium and Panels have no other option. The PASSWORD
  *   component is the credential; the username is informational.
  *
@@ -82,7 +81,7 @@ export interface CreateAuthDeps {
  *
  * Exported because authMiddleware needs the same answer this getter gives, to
  * decide whether the session it just resolved came from an app password or from
- * a browser cookie (libris-5ng.28). Two independent parsers would be two things
+ * a browser cookie. Two independent parsers would be two things
  * to keep in agreement; the scoping check would silently stop firing the moment
  * they drifted.
  */
@@ -122,7 +121,7 @@ export function createAuth({ db, secondaryStorage, env, secret, baseURL }: Creat
     database: drizzleAdapter(db, { provider: "pg", schema }),
 
     // Sessions and rate-limit counters go to Redis; session rows are still
-    // written to Postgres so the "connected devices" page (libris-5ng.22) can
+    // written to Postgres so the "connected devices" page can
     // list and revoke them per-device.
     secondaryStorage,
 
@@ -149,13 +148,13 @@ export function createAuth({ db, secondaryStorage, env, secret, baseURL }: Creat
       // go through the admin plugin's createUser instead: the first-run
       // bootstrap in routes/api/setup.ts, and admin user management.
       disableSignUp: true,
-      // No SMTP transport yet (libris-2ld), so there is nowhere to send a
+      // No SMTP transport yet, so there is nowhere to send a
       // verification or reset mail. Admins reset passwords on a user's behalf.
       requireEmailVerification: false,
     },
 
     // Better Auth owns rate limiting for /api/auth/* — the app's own
-    // LIBRIS_RATELIMIT_AUTH_* vars are retired in libris-5ng.25. Counters go to
+    // LIBRIS_RATELIMIT_AUTH_* vars are retired. Counters go to
     // the same Redis as sessions so they survive a restart and are shared if
     // this ever runs more than one process.
     rateLimit: {
@@ -169,7 +168,7 @@ export function createAuth({ db, secondaryStorage, env, secret, baseURL }: Creat
     },
 
     // `advanced.database.generateId` is deliberately NOT set, leaving Better
-    // Auth's default text ids in place. The cutover migration (libris-5ng.7)
+    // Auth's default text ids in place. The cutover migration
     // converts the seven FK columns from uuid to text to match.
     advanced: {
       useSecureCookies: isProduction,
@@ -203,7 +202,7 @@ export function createAuth({ db, secondaryStorage, env, secret, baseURL }: Creat
         schema: { apikey: { modelName: "apiKeys" } },
         // Lets an app password resolve through the same getSession call as a
         // cookie session, which is what collapses the old five-branch policy
-        // switch in middleware/auth.ts into one lookup (libris-5ng.8).
+        // switch in middleware/auth.ts into one lookup.
         //
         // Upstream flags this as "not recommended for production" because a
         // leaked key then carries full session authority. Libris accepts that
@@ -212,7 +211,7 @@ export function createAuth({ db, secondaryStorage, env, secret, baseURL }: Creat
         //
         // THE MITIGATION IS NOT HERE. It is APP_PASSWORD_DENIED plus the admin
         // policy in shared/route-policy.ts, enforced by authMiddleware before
-        // the session is even resolved (libris-5ng.28). Scoping in the
+        // the session is even resolved. Scoping in the
         // middleware rather than through this plugin's `permissions` was
         // deliberate: permissions are stamped onto each key at creation time,
         // so a key minted before a rule changed keeps the old authority, and
