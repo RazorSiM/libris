@@ -11,8 +11,9 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vite-plus/test";
-import { createTestApp, createFetchHelper } from "./setup.js";
+import { bootstrapAdmin, createTestApp, createFetchHelper } from "./setup.js";
 import type { Db } from "../src/db/client.js";
+import { seedAppPassword } from "../src/db/test-utils.js";
 import { books, bookFiles, uploadRegistry } from "../src/db/schema.js";
 import { computeChecksumFromBuffer } from "../src/shared/checksum.js";
 import { createBookDetectedProcessor } from "../src/workers/book-detected.js";
@@ -26,11 +27,15 @@ let testApp: Awaited<ReturnType<typeof createTestApp>>;
 // ── Per-test state ───────────────────────────────────────────────
 
 let adminKey: string;
-let adminKeyId: string;
-
-function adminAuth() {
-  return { authorization: `Bearer ${adminKey}` };
-}
+/**
+ * The admin's USER id.
+ *
+ * Was adminKeyId, and the rename is the whole point of the new model: the
+ * registry attributes an upload to a person, not to the credential they
+ * happened to upload with. The same user can hold several app passwords and
+ * every one of them produces the same owner here.
+ */
+let adminUserId: string;
 
 // ── App lifecycle ──────────────────────────────────────────────────
 
@@ -48,14 +53,11 @@ beforeAll(async () => {
 beforeEach(async () => {
   await $fetchRaw("/__test/cleanup", { method: "POST" });
 
-  // Create admin key via setup (first key is always admin)
-  const { data, status } = await $fetchRaw("/api/auth/setup", {
-    method: "POST",
-    body: { label: "admin-key" },
-  });
-  expect(status).toBe(201);
-  adminKey = data.key;
-  adminKeyId = data.id;
+  // POST /api/auth/setup is gone. Bootstrapping the first admin and minting a
+  // credential are two separate things now, and bootstrapAdmin does both.
+  const admin = await bootstrapAdmin(testApp.services, $fetchRaw);
+  adminUserId = admin.userId;
+  adminKey = admin.rawKey;
 });
 
 afterEach(async () => {
@@ -93,7 +95,7 @@ describe("upload route creates registry entry", () => {
     const registryRows = await testDb.select().from(uploadRegistry);
     expect(registryRows).toHaveLength(1);
     expect(registryRows[0].checksum).toBe(expectedChecksum);
-    expect(registryRows[0].userId).toBe(adminKeyId);
+    expect(registryRows[0].userId).toBe(adminUserId);
     expect(registryRows[0].filename).toBe("test-book.epub");
   });
 
@@ -134,19 +136,19 @@ describe("upload route creates registry entry", () => {
 
     // Both should reference the admin key
     for (const row of registryRows) {
-      expect(row.userId).toBe(adminKeyId);
+      expect(row.userId).toBe(adminUserId);
     }
   });
 
   it("associates registry entry with the correct non-admin user", async () => {
-    // Create a non-admin key
-    const { data: userData } = await $fetchRaw("/api/auth/keys", {
-      method: "POST",
-      body: { label: "regular-user" },
-      headers: adminAuth(),
-    });
-    const userKey = userData.key;
-    const userKeyId = userData.id;
+    // POST /api/auth/keys was how an admin created a PERSON, so a non-admin
+    // fixture used to mean "mint a second key". Those are separate acts now:
+    // seedAppPassword creates the user and issues them a credential.
+    const { userId: regularUserId, rawKey: userKey } = await seedAppPassword(
+      testApp.services.auth,
+      testApp.testDb,
+      { name: "regular-user", role: "user" },
+    );
 
     const epubContent = Buffer.from("PK\x03\x04user-uploaded-epub");
     const expectedChecksum = computeChecksumFromBuffer(epubContent);
@@ -169,7 +171,8 @@ describe("upload route creates registry entry", () => {
     // Verify the registry entry belongs to the regular user, not admin
     const registryRows = await testDb.select().from(uploadRegistry);
     expect(registryRows).toHaveLength(1);
-    expect(registryRows[0].userId).toBe(userKeyId);
+    expect(registryRows[0].userId).toBe(regularUserId);
+    expect(registryRows[0].userId).not.toBe(adminUserId);
     expect(registryRows[0].checksum).toBe(expectedChecksum);
   });
 });
@@ -191,7 +194,7 @@ describe("book-detected worker uses registry for ownership", () => {
     // Insert a registry entry as if the upload route created it
     await testDb.insert(uploadRegistry).values({
       checksum: expectedChecksum,
-      userId: adminKeyId,
+      userId: adminUserId,
       filename: "detected-book.epub",
     });
 
@@ -220,7 +223,7 @@ describe("book-detected worker uses registry for ownership", () => {
     // Verify a book was created with createdBy set
     const allBooks = await testDb.select().from(books);
     expect(allBooks).toHaveLength(1);
-    expect(allBooks[0].createdBy).toBe(adminKeyId);
+    expect(allBooks[0].createdBy).toBe(adminUserId);
     expect(allBooks[0].status).toBe("inbox");
 
     // Verify book_files record was created with the correct checksum
@@ -237,8 +240,12 @@ describe("book-detected worker uses registry for ownership", () => {
     expect(addedJobs).toHaveLength(1);
   });
 
-  it("leaves createdBy null when no registry entry exists (filesystem drop)", async () => {
-    // Simulate a book dropped into inbox via filesystem (no upload registry)
+  it("gives an unattributed filesystem drop to the oldest admin", async () => {
+    // This used to assert createdBy was left NULL. books.created_by is NOT NULL
+    // since the cutover migration, so there is no such state to fall back to —
+    // the worker assigns the oldest admin instead, matching the rule the cutover
+    // applied to the books it found. Oldest rather than any admin so two files
+    // arriving at once cannot land on different owners.
     const tempDir = await mkdtemp(join(tmpdir(), "libris-worker-test-"));
     const filePath = join(tempDir, "filesystem-drop.epub");
     await writeFile(filePath, "PK\x03\x04filesystem-dropped-book");
@@ -259,10 +266,9 @@ describe("book-detected worker uses registry for ownership", () => {
 
     await processor(mockJob as never);
 
-    // Book should exist but with null createdBy
     const allBooks = await testDb.select().from(books);
     expect(allBooks).toHaveLength(1);
-    expect(allBooks[0].createdBy).toBeNull();
+    expect(allBooks[0].createdBy).toBe(adminUserId);
 
     // No registry entries should exist
     const registryRows = await testDb.select().from(uploadRegistry);
@@ -270,6 +276,29 @@ describe("book-detected worker uses registry for ownership", () => {
 
     // Parse job should still be enqueued
     expect(addedJobs).toHaveLength(1);
+  });
+
+  it("refuses to ingest an unattributed file when no admin exists at all", async () => {
+    // The flip side of NOT NULL: with nobody to own it, the worker must fail
+    // loudly rather than invent an owner or write a half-row. This is the state
+    // a fresh install is in before first-run setup, and the watcher can be
+    // running by then.
+    await $fetchRaw("/__test/cleanup", { method: "POST", body: { includeAuth: true } });
+
+    const tempDir = await mkdtemp(join(tmpdir(), "libris-worker-test-"));
+    const filePath = join(tempDir, "no-admin.epub");
+    await writeFile(filePath, "PK\x03\x04nobody-to-own-this");
+
+    const processor = createBookDetectedProcessor({ add: async () => ({}) } as never);
+
+    await expect(
+      processor({
+        data: { filePath, detectedAt: new Date().toISOString() },
+        log: async () => {},
+      } as never),
+    ).rejects.toThrow(/no admin exists/i);
+
+    expect(await testDb.select().from(books)).toHaveLength(0);
   });
 
   it("skips duplicate files and does not consume registry entry", async () => {
@@ -300,7 +329,7 @@ describe("book-detected worker uses registry for ownership", () => {
 
     await testDb.insert(uploadRegistry).values({
       checksum,
-      userId: adminKeyId,
+      userId: adminUserId,
       filename: "duplicate.epub",
     });
 

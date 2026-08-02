@@ -65,7 +65,11 @@ export async function createTestApp() {
   __setTestQueues(mockQueues as never);
 
   const { app } = createApp({ services, env: testEnv });
-  return { app, db, services, env: testEnv };
+  // `db` is the cast the app wants; `testDb.db` is the real Drizzle/PGlite
+  // handle, which is what the seedUser/seedAppPassword fixtures are typed
+  // against. Both are the same object — returning each under its own type
+  // saves every caller a cast.
+  return { app, db, testDb: testDb.db, services, env: testEnv };
 }
 
 /**
@@ -94,7 +98,17 @@ export function createFetchHelper(app: ReturnType<typeof createApp>["app"]) {
     }
 
     const res = await app.request(url, init);
-    const data = opts?.responseType === "text" ? await res.text() : await res.json();
+    // 204 carries no body, and res.json() on an empty one throws "Unexpected
+    // end of JSON input" — which surfaces as a parse error pointing at this
+    // line rather than at the assertion that wanted the status code. Routes
+    // that answer 204 are ordinary now (revoking an app password is one), so
+    // the helper has to expect it.
+    const data =
+      opts?.responseType === "text"
+        ? await res.text()
+        : res.status === 204 || res.headers.get("content-length") === "0"
+          ? null
+          : await res.json();
     return { data, status: res.status, headers: res.headers };
   };
 }
@@ -110,13 +124,76 @@ export function createFetchHelper(app: ReturnType<typeof createApp>["app"]) {
  * The returned key works as `Authorization: Bearer`, as Basic's password and as
  * `x-api-key`.
  */
+export const TEST_PASSWORD = "correct-horse-battery-staple";
+
+/**
+ * A replayable cookie header for an existing account.
+ *
+ * Needed because app passwords are scoped out of the admin, account and
+ * credential routes (libris-5ng.28): a suite that drives /api/jobs,
+ * /api/app-passwords or /api/credentials has to authenticate the way a browser
+ * does. It is also the only way to keep a ROLE test honest — with a Bearer key
+ * those routes 403 whoever owns it, so the assertion would pass with no role
+ * check in place at all.
+ */
+export async function signInAs(
+  services: AppServices,
+  email: string,
+  password: string = TEST_PASSWORD,
+): Promise<string> {
+  const { headers } = await services.auth.api.signInEmail({
+    body: { email, password },
+    returnHeaders: true,
+  });
+  return headers
+    .getSetCookie()
+    .map((c) => c.split(";")[0])
+    .join("; ");
+}
+
+/**
+ * An additional account: the person, a credential, and a session.
+ *
+ * Replaces `POST /api/auth/keys`, which conflated all three — minting a key WAS
+ * creating a user, because a key was a person. Accounts come from the admin
+ * plugin now (self-registration is disabled outright), and a credential is
+ * something a person holds rather than something they are.
+ *
+ * Signs in rather than failing if the account already exists, so suites whose
+ * /__test/cleanup preserves accounts can call this from a beforeEach.
+ */
+export async function createAccount(
+  services: AppServices,
+  options: { email: string; name?: string; role?: "user" | "admin" } = {
+    email: "member@example.test",
+  },
+): Promise<{ userId: string; rawKey: string; cookie: string }> {
+  const { email, name = email.split("@")[0], role = "user" } = options;
+
+  let userId: string;
+  try {
+    const created = await services.auth.api.createUser({
+      body: { email, password: TEST_PASSWORD, name, role },
+    });
+    userId = created.user.id;
+  } catch {
+    const signedIn = await services.auth.api.signInEmail({
+      body: { email, password: TEST_PASSWORD },
+    });
+    userId = signedIn.user.id;
+  }
+
+  const created = await services.auth.api.createApiKey({ body: { userId, name: `${name}-key` } });
+  return { userId, rawKey: created.key, cookie: await signInAs(services, email) };
+}
+
 export async function bootstrapAdmin(
   services: AppServices,
   $fetchRaw: ReturnType<typeof createFetchHelper>,
   options: { email?: string; name?: string } = {},
-): Promise<{ userId: string; rawKey: string }> {
+): Promise<{ userId: string; rawKey: string; cookie: string }> {
   const email = options.email ?? "integration-test@example.test";
-  const password = "correct-horse-battery-staple";
+  const password = TEST_PASSWORD;
   const { data, status } = await $fetchRaw("/api/setup", {
     method: "POST",
     body: { email, password, name: options.name ?? "Integration Admin" },
@@ -138,5 +215,5 @@ export async function bootstrapAdmin(
   const created = await services.auth.api.createApiKey({
     body: { userId, name: "integration-test-key" },
   });
-  return { userId, rawKey: created.key };
+  return { userId, rawKey: created.key, cookie: await signInAs(services, email, password) };
 }

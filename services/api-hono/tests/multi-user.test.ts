@@ -1,14 +1,29 @@
 /**
  * Multi-user integration tests.
  *
- * Tests authorization boundaries: admin vs non-admin keys, book ownership,
- * credential isolation, KoSync progress isolation, reading stats isolation,
- * Hardcover sync log isolation, and admin-only route protection.
+ * Authorization boundaries between two people: book ownership, credential
+ * isolation, KoSync progress isolation, reading stats isolation, Hardcover sync
+ * log isolation, and admin-only route protection.
+ *
+ * Rewritten rather than ported (libris-5ng.23). The old version was built on a
+ * model where a key WAS a user, so "admin creates a key" meant "admin creates a
+ * person" and key management was admin-only. Both halves of that inverted:
+ * accounts come from the admin plugin, and everyone manages their own
+ * credentials. Assertions like "non-admin gets 403 creating a key" were not
+ * renamed, they were turned around.
+ *
+ * Two kinds of credential appear below, and which one a test uses is load-
+ * bearing:
+ *   • app password (Bearer) — the library surface, and what an e-reader holds.
+ *   • session cookie — admin routes, /api/auth/* and credential management,
+ *     which refuse app passwords outright since libris-5ng.28. A role test
+ *     MUST use a session, or it would pass without any role check existing.
  */
 
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vite-plus/test";
-import { createTestApp, createFetchHelper } from "./setup.js";
+import { bootstrapAdmin, createAccount, createTestApp, createFetchHelper } from "./setup.js";
 import type { Db } from "../src/db/client.js";
+import type { AppServices } from "../src/bootstrap.js";
 import { books, readingProgress, hardcoverSyncLog } from "../src/db/schema.js";
 import { eq } from "drizzle-orm";
 
@@ -16,14 +31,18 @@ import { eq } from "drizzle-orm";
 
 let $fetchRaw: ReturnType<typeof createFetchHelper>;
 let testDb: Db;
+let services: AppServices;
 
 // ── Per-test state ───────────────────────────────────────────────
 
 let adminKey: string;
-let adminKeyId: string;
+let adminUserId: string;
+let adminCookie: string;
 let userKey: string;
-let userKeyId: string;
+let userUserId: string;
+let userCookie: string;
 
+/** An app password: the library surface, and what an e-reader holds. */
 function adminAuth() {
   return { authorization: `Bearer ${adminKey}` };
 }
@@ -32,119 +51,147 @@ function userAuth() {
   return { authorization: `Bearer ${userKey}` };
 }
 
+/** A browser session: everything app passwords are scoped out of. */
+function adminSession() {
+  return { cookie: adminCookie };
+}
+
+function userSession() {
+  return { cookie: userCookie };
+}
+
 // ── App lifecycle ──────────────────────────────────────────────────
 
 beforeAll(async () => {
   const testApp = await createTestApp();
   $fetchRaw = createFetchHelper(testApp.app);
   testDb = testApp.db;
+  services = testApp.services;
 });
 
 // ── Per-test lifecycle ─────────────────────────────────────────────
 
 beforeEach(async () => {
-  // Wipe all tables + redis
-  await $fetchRaw("/__test/cleanup", { method: "POST" });
+  // includeAuth so every test starts from an empty install. These suites assert
+  // on how many credentials a person holds, which only means something if the
+  // previous test's fixtures are gone.
+  await $fetchRaw("/__test/cleanup", { method: "POST", body: { includeAuth: true } });
 
-  // Create admin key via setup (first key is always admin)
-  const { data: setupData, status: setupStatus } = await $fetchRaw("/api/auth/setup", {
-    method: "POST",
-    body: { label: "admin-key" },
-  });
-  expect(setupStatus).toBe(201);
-  adminKey = setupData.key;
-  adminKeyId = setupData.id;
+  const admin = await bootstrapAdmin(services, $fetchRaw);
+  adminUserId = admin.userId;
+  adminKey = admin.rawKey;
+  adminCookie = admin.cookie;
 
-  // Create non-admin key via authenticated endpoint
-  const { data: userData, status: userStatus } = await $fetchRaw("/api/auth/keys", {
-    method: "POST",
-    body: { label: "regular-user-key" },
-    headers: adminAuth(),
-  });
-  expect(userStatus).toBe(201);
-  userKey = userData.key;
-  userKeyId = userData.id;
+  const member = await createAccount(services, { email: "member@example.test", role: "user" });
+  userUserId = member.userId;
+  userKey = member.rawKey;
+  userCookie = member.cookie;
 });
 
 afterEach(async () => {
-  await $fetchRaw("/__test/cleanup", { method: "POST" });
+  await $fetchRaw("/__test/cleanup", { method: "POST", body: { includeAuth: true } });
 });
 
-// ── API Key Management ────────────────────────────────────────────
+// ── App password management ───────────────────────────────────────
 
-describe("API key management", () => {
-  it("admin can create new keys", async () => {
-    const { data, status } = await $fetchRaw("/api/auth/keys", {
+/**
+ * The block that inverted.
+ *
+ * /api/auth/keys was admin-only because minting a key was how an admin created
+ * a person. /api/app-passwords is per-user: a credential is something you hold,
+ * so everyone manages their own and nobody — admin included — manages anyone
+ * else's. Creating accounts is a separate, genuinely admin act.
+ */
+describe("app password management", () => {
+  it("a non-admin can mint their own — this used to be a 403", async () => {
+    const { data, status } = await $fetchRaw("/api/app-passwords", {
       method: "POST",
-      body: { label: "third-key" },
-      headers: adminAuth(),
+      body: { name: "their-own-kobo" },
+      headers: userSession(),
     });
     expect(status).toBe(201);
     expect(data).toMatchObject({
       id: expect.any(String),
       key: expect.any(String),
-      label: "third-key",
+      name: "their-own-kobo",
     });
+
+    // And it works: the credential a regular user issues themselves reaches the
+    // library, which is the whole point of them being allowed to issue it.
+    const { status: used } = await $fetchRaw("/api/library", {
+      headers: { authorization: `Bearer ${data.key}` },
+    });
+    expect(used).toBe(200);
   });
 
-  it("non-admin gets 403 when creating keys", async () => {
-    const { status } = await $fetchRaw("/api/auth/keys", {
+  it("everyone sees only their own, admin included", async () => {
+    // The old assertion was "admin sees ALL keys". An admin is not a superuser
+    // over other people's credentials — they cannot read them, only manage the
+    // accounts that hold them.
+    await $fetchRaw("/api/app-passwords", {
       method: "POST",
-      body: { label: "unauthorized-key" },
-      headers: userAuth(),
+      body: { name: "admin-extra" },
+      headers: adminSession(),
     });
-    expect(status).toBe(403);
+
+    const { data: adminList } = await $fetchRaw("/api/app-passwords", {
+      headers: adminSession(),
+    });
+    const { data: userList } = await $fetchRaw("/api/app-passwords", {
+      headers: userSession(),
+    });
+
+    expect(adminList.keys.every((k: { name: string }) => k.name !== "member-key")).toBe(true);
+    expect(userList.keys).toHaveLength(1);
+    expect(userList.keys[0].name).toBe("member-key");
   });
 
-  it("admin can delete non-active keys", async () => {
-    // Create an extra key to delete
-    const { data: extra } = await $fetchRaw("/api/auth/keys", {
+  it("revoking your own works", async () => {
+    const { data: extra } = await $fetchRaw("/api/app-passwords", {
       method: "POST",
-      body: { label: "to-delete" },
-      headers: adminAuth(),
+      body: { name: "to-revoke" },
+      headers: userSession(),
     });
-    const { status } = await $fetchRaw(`/api/auth/keys/${extra.id}`, {
+    const { status } = await $fetchRaw(`/api/app-passwords/${extra.id}`, {
       method: "DELETE",
-      headers: adminAuth(),
+      headers: userSession(),
     });
-    expect(status).toBe(200);
+    expect(status).toBe(204);
   });
 
-  it("non-admin gets 403 when deleting keys", async () => {
-    // Create an extra key so we have something to try to delete
-    const { data: extra } = await $fetchRaw("/api/auth/keys", {
+  it("revoking someone else's is a 404, not a 403", async () => {
+    // Deliberate: 403 would confirm the id exists, which is what an attacker
+    // enumerating ids wants to learn. Note this holds for the ADMIN trying to
+    // revoke a member's credential too.
+    const { data: theirs } = await $fetchRaw("/api/app-passwords", {
       method: "POST",
-      body: { label: "extra" },
-      headers: adminAuth(),
+      body: { name: "not-yours" },
+      headers: userSession(),
     });
-    const { status } = await $fetchRaw(`/api/auth/keys/${extra.id}`, {
+    const { status } = await $fetchRaw(`/api/app-passwords/${theirs.id}`, {
       method: "DELETE",
-      headers: userAuth(),
+      headers: adminSession(),
     });
-    expect(status).toBe(403);
+    expect(status).toBe(404);
   });
 
-  it("cannot delete the last admin key", async () => {
-    // Try to delete the admin key (it's the only admin key)
-    const { status } = await $fetchRaw(`/api/auth/keys/${adminKeyId}`, {
+  it("nothing stops you revoking the credential you are holding", async () => {
+    // "Cannot delete the active key" has no equivalent any more. It existed
+    // because deleting your key deleted YOU; now it costs you a credential and
+    // nothing else, and your session is untouched.
+    const { data: list } = await $fetchRaw("/api/app-passwords", { headers: userSession() });
+    const { status } = await $fetchRaw(`/api/app-passwords/${list.keys[0].id}`, {
       method: "DELETE",
-      headers: adminAuth(),
+      headers: userSession(),
     });
-    // Should fail — either 409 (cannot delete active key) or 409 (last key)
-    expect(status).toBe(409);
-  });
+    expect(status).toBe(204);
 
-  it("admin sees all keys, non-admin sees only own key", async () => {
-    const { data: adminList } = await $fetchRaw("/api/auth/keys", {
-      headers: adminAuth(),
-    });
-    expect(adminList.keys.length).toBeGreaterThanOrEqual(2);
-
-    const { data: userList } = await $fetchRaw("/api/auth/keys", {
-      headers: userAuth(),
-    });
-    expect(userList.keys.length).toBe(1);
-    expect(userList.keys[0].id).toBe(userKeyId);
+    // The credential is dead...
+    const { status: withKey } = await $fetchRaw("/api/library", { headers: userAuth() });
+    expect(withKey).toBe(401);
+    // ...and the person is not.
+    const { status: withSession } = await $fetchRaw("/api/library", { headers: userSession() });
+    expect(withSession).toBe(200);
   });
 });
 
@@ -153,7 +200,6 @@ describe("API key management", () => {
 describe("book ownership", () => {
   let adminBookId: string;
   let userBookId: string;
-  let unownedBookId: string;
 
   beforeEach(async () => {
     // Seed a book owned by admin
@@ -165,7 +211,7 @@ describe("book ownership", () => {
     });
     adminBookId = seedAdmin.inserted[0].id;
     // Set created_by on admin book
-    await testDb.update(books).set({ createdBy: adminKeyId }).where(eq(books.id, adminBookId));
+    await testDb.update(books).set({ createdBy: adminUserId }).where(eq(books.id, adminBookId));
 
     // Seed a book owned by regular user
     const { data: seedUser } = await $fetchRaw("/__test/seed-books", {
@@ -175,16 +221,7 @@ describe("book ownership", () => {
       },
     });
     userBookId = seedUser.inserted[0].id;
-    await testDb.update(books).set({ createdBy: userKeyId }).where(eq(books.id, userBookId));
-
-    // Seed an unowned book (created_by = null)
-    const { data: seedUnowned } = await $fetchRaw("/__test/seed-books", {
-      method: "POST",
-      body: {
-        books: [{ title: "Unowned Book", author: "Nobody", status: "organized" }],
-      },
-    });
-    unownedBookId = seedUnowned.inserted[0].id;
+    await testDb.update(books).set({ createdBy: userUserId }).where(eq(books.id, userBookId));
   });
 
   it("admin can edit any book", async () => {
@@ -214,78 +251,98 @@ describe("book ownership", () => {
     expect(status).toBe(403);
   });
 
-  it("non-admin gets 403 editing unowned (null createdBy) book", async () => {
-    const { status } = await $fetchRaw(`/api/library/${unownedBookId}`, {
-      method: "PATCH",
-      body: { title: "Should Fail" },
-      headers: userAuth(),
+  it("there is no such thing as an unowned book any more", async () => {
+    // Two tests used to live here, for a non-admin and an admin editing a book
+    // with createdBy NULL. books.created_by is NOT NULL since the cutover, so
+    // that state is unreachable and the branch handling it was deleted rather
+    // than fixed. What is worth pinning is that the seeder cannot produce one:
+    // an unattributed book falls to the oldest admin, the same rule the
+    // ingestion worker follows.
+    const { data: seeded } = await $fetchRaw("/__test/seed-books", {
+      method: "POST",
+      body: { books: [{ title: "Nobody Claimed It", author: "Nobody", status: "organized" }] },
     });
-    expect(status).toBe(403);
-  });
 
-  it("admin can edit unowned book", async () => {
-    const { status } = await $fetchRaw(`/api/library/${unownedBookId}`, {
-      method: "PATCH",
-      body: { title: "Updated by Admin" },
-      headers: adminAuth(),
-    });
-    expect(status).toBe(200);
+    const [row] = await testDb
+      .select({ createdBy: books.createdBy })
+      .from(books)
+      .where(eq(books.id, seeded.inserted[0].id));
+    expect(row.createdBy).toBe(adminUserId);
   });
 });
 
 // ── Credential Isolation ──────────────────────────────────────────
 
+/**
+ * Two changes since this block was written, both structural:
+ *
+ * 1. "opds" is no longer a credential service. OPDS clients authenticate with
+ *    app passwords, so CredentialServiceParamSchema accepts only kosync and
+ *    hardcover — a PUT to /api/credentials/opds is now a validation error.
+ * 2. /api/credentials refuses app passwords (libris-5ng.28), so these use
+ *    sessions. A Bearer key would 403 before reaching the isolation logic and
+ *    the test would pass for entirely the wrong reason.
+ */
 describe("credential isolation", () => {
   it("user A's credentials are invisible to user B", async () => {
-    // Admin sets OPDS credentials
-    const { status: putStatus } = await $fetchRaw("/api/credentials/opds", {
+    const { status: putStatus } = await $fetchRaw("/api/credentials/kosync", {
       method: "PUT",
-      body: { username: "admin-opds", password: "admin-pass" },
-      headers: adminAuth(),
+      body: { username: "admin-kosync", password: "admin-pass" },
+      headers: adminSession(),
     });
     expect(putStatus).toBe(200);
 
     // Admin sees own credentials
-    const { data: adminCred, status: adminStatus } = await $fetchRaw("/api/credentials/opds", {
-      headers: adminAuth(),
+    const { data: adminCred, status: adminStatus } = await $fetchRaw("/api/credentials/kosync", {
+      headers: adminSession(),
     });
     expect(adminStatus).toBe(200);
     expect(adminCred.configured).toBe(true);
-    expect(adminCred.username).toBe("admin-opds");
+    expect(adminCred.username).toBe("admin-kosync");
 
     // Regular user sees unconfigured (no credentials for their userId)
-    const { data: userCred, status: userStatus } = await $fetchRaw("/api/credentials/opds", {
-      headers: userAuth(),
+    const { data: userCred, status: userStatus } = await $fetchRaw("/api/credentials/kosync", {
+      headers: userSession(),
     });
     expect(userStatus).toBe(200);
     expect(userCred.configured).toBe(false);
   });
 
-  it("each user can set independent credentials", async () => {
-    // Admin sets OPDS credentials
-    await $fetchRaw("/api/credentials/opds", {
+  it("opds is not a credential service any more", async () => {
+    // It was the reason this block existed. OPDS readers hold an app password
+    // now, so the service enum dropped it rather than leaving a dead row shape
+    // that half the code still wrote to.
+    const { status } = await $fetchRaw("/api/credentials/opds", {
       method: "PUT",
       body: { username: "admin-opds", password: "admin-pass" },
-      headers: adminAuth(),
+      headers: adminSession(),
+    });
+    expect(status).toBe(400);
+  });
+
+  it("each user can set independent credentials", async () => {
+    await $fetchRaw("/api/credentials/kosync", {
+      method: "PUT",
+      body: { username: "admin-kosync", password: "admin-pass" },
+      headers: adminSession(),
     });
 
-    // User sets different OPDS credentials
-    await $fetchRaw("/api/credentials/opds", {
+    await $fetchRaw("/api/credentials/kosync", {
       method: "PUT",
-      body: { username: "user-opds", password: "user-pass" },
-      headers: userAuth(),
+      body: { username: "user-kosync", password: "user-pass" },
+      headers: userSession(),
     });
 
     // Verify each sees their own
-    const { data: adminCred } = await $fetchRaw("/api/credentials/opds", {
-      headers: adminAuth(),
+    const { data: adminCred } = await $fetchRaw("/api/credentials/kosync", {
+      headers: adminSession(),
     });
-    expect(adminCred.username).toBe("admin-opds");
+    expect(adminCred.username).toBe("admin-kosync");
 
-    const { data: userCred } = await $fetchRaw("/api/credentials/opds", {
-      headers: userAuth(),
+    const { data: userCred } = await $fetchRaw("/api/credentials/kosync", {
+      headers: userSession(),
     });
-    expect(userCred.username).toBe("user-opds");
+    expect(userCred.username).toBe("user-kosync");
   });
 
   it("deleting one user's credential does not affect the other", async () => {
@@ -293,31 +350,31 @@ describe("credential isolation", () => {
     await $fetchRaw("/api/credentials/kosync", {
       method: "PUT",
       body: { username: "admin-kosync", password: "admin-pass" },
-      headers: adminAuth(),
+      headers: adminSession(),
     });
     await $fetchRaw("/api/credentials/kosync", {
       method: "PUT",
       body: { username: "user-kosync", password: "user-pass" },
-      headers: userAuth(),
+      headers: userSession(),
     });
 
     // Delete admin's credential
     const { status: delStatus } = await $fetchRaw("/api/credentials/kosync", {
       method: "DELETE",
-      headers: adminAuth(),
+      headers: adminSession(),
     });
     expect(delStatus).toBe(200);
 
     // User's credential still exists
     const { data: userCred } = await $fetchRaw("/api/credentials/kosync", {
-      headers: userAuth(),
+      headers: userSession(),
     });
     expect(userCred.configured).toBe(true);
     expect(userCred.username).toBe("user-kosync");
 
     // Admin's credential is gone
     const { data: adminCred } = await $fetchRaw("/api/credentials/kosync", {
-      headers: adminAuth(),
+      headers: adminSession(),
     });
     expect(adminCred.configured).toBe(false);
   });
@@ -331,7 +388,7 @@ describe("KoSync progress isolation", () => {
   async function seedKosyncForAdmin() {
     await $fetchRaw("/api/credentials/kosync", {
       method: "PUT",
-      headers: adminAuth(),
+      headers: adminSession(),
       body: { username: "admin-kosync", password: "testpass" },
     });
   }
@@ -339,7 +396,7 @@ describe("KoSync progress isolation", () => {
   async function seedKosyncForUser() {
     await $fetchRaw("/api/credentials/kosync", {
       method: "PUT",
-      headers: userAuth(),
+      headers: userSession(),
       body: { username: "user-kosync", password: "testpass" },
     });
   }
@@ -441,7 +498,7 @@ describe("reading stats isolation", () => {
     ] as const) {
       await testDb.insert(readingProgress).values({
         bookId,
-        userId: adminKeyId,
+        userId: adminUserId,
         document: hash,
         device: "kindle",
         progress: "end",
@@ -453,7 +510,7 @@ describe("reading stats isolation", () => {
     // User finishes 1 book
     await testDb.insert(readingProgress).values({
       bookId: ub1.id,
-      userId: userKeyId,
+      userId: userUserId,
       document: "hash-u1",
       device: "kindle",
       progress: "end",
@@ -465,13 +522,13 @@ describe("reading stats isolation", () => {
     const adminRows = await testDb
       .select()
       .from(readingProgress)
-      .where(eq(readingProgress.userId, adminKeyId));
+      .where(eq(readingProgress.userId, adminUserId));
     expect(adminRows).toHaveLength(3);
 
     const userRows = await testDb
       .select()
       .from(readingProgress)
-      .where(eq(readingProgress.userId, userKeyId));
+      .where(eq(readingProgress.userId, userUserId));
     expect(userRows).toHaveLength(1);
 
     // Verify all admin rows have >= 95% (finished threshold)
@@ -498,7 +555,7 @@ describe("hardcover sync log isolation", () => {
     // Insert sync log entries for both users directly
     await testDb.insert(hardcoverSyncLog).values({
       bookId,
-      userId: adminKeyId,
+      userId: adminUserId,
       lastStatus: "currently_reading",
       lastProgress: "0.5000",
       lastSyncedAt: new Date(),
@@ -506,7 +563,7 @@ describe("hardcover sync log isolation", () => {
 
     await testDb.insert(hardcoverSyncLog).values({
       bookId,
-      userId: userKeyId,
+      userId: userUserId,
       lastStatus: "want_to_read",
       lastProgress: "0.0000",
       lastSyncedAt: new Date(),
@@ -516,14 +573,14 @@ describe("hardcover sync log isolation", () => {
     const adminLogs = await testDb
       .select()
       .from(hardcoverSyncLog)
-      .where(eq(hardcoverSyncLog.userId, adminKeyId));
+      .where(eq(hardcoverSyncLog.userId, adminUserId));
     expect(adminLogs).toHaveLength(1);
     expect(adminLogs[0]!.lastStatus).toBe("currently_reading");
 
     const userLogs = await testDb
       .select()
       .from(hardcoverSyncLog)
-      .where(eq(hardcoverSyncLog.userId, userKeyId));
+      .where(eq(hardcoverSyncLog.userId, userUserId));
     expect(userLogs).toHaveLength(1);
     expect(userLogs[0]!.lastStatus).toBe("want_to_read");
   });
@@ -531,34 +588,48 @@ describe("hardcover sync log isolation", () => {
 
 // ── Admin-Only Routes ─────────────────────────────────────────────
 
+/**
+ * Sessions throughout, deliberately.
+ *
+ * Since libris-5ng.28 an app password is refused on admin routes whoever owns
+ * it, so a Bearer key would make "non-admin gets 403" pass even if the role
+ * check were deleted. These have to be about the PERSON to mean anything.
+ */
 describe("admin-only routes", () => {
-  it("non-admin gets 403 on GET /api/settings (PATCH)", async () => {
+  it("non-admin gets 403 on PATCH /api/settings", async () => {
     const { status } = await $fetchRaw("/api/settings", {
       method: "PATCH",
       body: { hardcoverSyncEnabled: false },
-      headers: userAuth(),
+      headers: userSession(),
     });
     expect(status).toBe(403);
   });
 
   it("non-admin gets 403 on GET /api/jobs/status", async () => {
     const { status } = await $fetchRaw("/api/jobs/status", {
-      headers: userAuth(),
+      headers: userSession(),
     });
     expect(status).toBe(403);
   });
 
   it("admin can access GET /api/jobs/status", async () => {
     const { status } = await $fetchRaw("/api/jobs/status", {
-      headers: adminAuth(),
+      headers: adminSession(),
     });
     expect(status).toBe(200);
   });
 
   it("non-admin can still GET /api/settings (read-only)", async () => {
     const { status } = await $fetchRaw("/api/settings", {
-      headers: userAuth(),
+      headers: userSession(),
     });
     expect(status).toBe(200);
+  });
+
+  it("refuses even the ADMIN's app password on an admin route", async () => {
+    // The libris-5ng.28 boundary, stated where an admin-routes suite will see
+    // it: authority is not the only question, the kind of credential is too.
+    const { status } = await $fetchRaw("/api/jobs/status", { headers: adminAuth() });
+    expect(status).toBe(403);
   });
 });

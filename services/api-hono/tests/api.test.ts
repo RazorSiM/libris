@@ -1,7 +1,8 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { eq } from "drizzle-orm";
-import { createTestApp, createFetchHelper } from "./setup.js";
+import { bootstrapAdmin, createTestApp, createFetchHelper, TEST_PASSWORD } from "./setup.js";
 import type { Db } from "../src/db/client.js";
+import type { AppServices } from "../src/bootstrap.js";
 import {
   books,
   readingAggregate,
@@ -13,14 +14,26 @@ import {
 
 let $fetchRaw: ReturnType<typeof createFetchHelper>;
 let testDb: Db;
+let services: AppServices;
 
 // ── Per-test state ───────────────────────────────────────────────
 
 let apiKey: string;
 let userId: string;
+let cookie: string;
 
+/** An app password — the library surface, and what an e-reader holds. */
 function auth() {
   return { authorization: `Bearer ${apiKey}` };
+}
+
+/**
+ * A browser session, for the routes app passwords are scoped out of
+ * (libris-5ng.28): admin routes, /api/auth/*, /api/app-passwords and
+ * /api/credentials.
+ */
+function session() {
+  return { cookie };
 }
 
 // ── App lifecycle: create once ─────────────────────────────────────
@@ -29,37 +42,41 @@ beforeAll(async () => {
   const testApp = await createTestApp();
   $fetchRaw = createFetchHelper(testApp.app);
   testDb = testApp.db;
+  services = testApp.services;
 });
 
-// ── Per-test lifecycle: clean DB → create fresh key ──────────────
+// ── Per-test lifecycle: clean DB → bootstrap the admin ─────────────
 
 beforeEach(async () => {
-  // Wipe all tables + redis rate-limit counters
-  await $fetchRaw("/__test/cleanup", { method: "POST" });
+  // includeAuth so each test starts from a genuinely empty install — the setup
+  // and app-password tests below both count what exists.
+  await $fetchRaw("/__test/cleanup", { method: "POST", body: { includeAuth: true } });
 
-  // Create a fresh API key for this test
-  const { data, status } = await $fetchRaw("/api/auth/setup", {
-    method: "POST",
-    body: { label: "integration-test-key" },
-  });
-  expect(status).toBe(201);
-  apiKey = data.key;
-  userId = data.id;
+  // POST /api/auth/setup took a key label and returned a raw key, because a key
+  // was a user. Creating the admin and issuing them a credential are separate
+  // acts now; bootstrapAdmin does both and hands back a session too.
+  const admin = await bootstrapAdmin(services, $fetchRaw);
+  apiKey = admin.rawKey;
+  userId = admin.userId;
+  cookie = admin.cookie;
 });
 
 afterEach(async () => {
   vi.restoreAllMocks();
-  await $fetchRaw("/__test/cleanup", { method: "POST" });
+  await $fetchRaw("/__test/cleanup", { method: "POST", body: { includeAuth: true } });
 });
 
-// ── Auth: Setup ────────────────────────────────────────────────────
+// ── Auth: first-run setup ──────────────────────────────────────────
 
-describe("POST /api/auth/setup", () => {
-  it("creates first key with 201 and returns raw key", async () => {
-    // beforeEach already created a key; calling again should 409
-    const { status } = await $fetchRaw("/api/auth/setup", {
+describe("POST /api/setup", () => {
+  it("closes for good once any user exists", async () => {
+    // beforeEach already bootstrapped the admin, so this is the second call.
+    // The route is public by design — it has to be, nobody can authenticate on
+    // a fresh install — so the 409 is the only thing standing between a public
+    // endpoint and anyone minting themselves an admin account.
+    const { status } = await $fetchRaw("/api/setup", {
       method: "POST",
-      body: { label: "duplicate" },
+      body: { email: "second@example.test", password: TEST_PASSWORD, name: "Second" },
     });
     expect(status).toBe(409);
   });
@@ -102,116 +119,92 @@ describe("auth middleware", () => {
   });
 });
 
-// ── Auth key management ────────────────────────────────────────────
+// ── App password management ────────────────────────────────────────
 
-describe("auth key management", () => {
-  it("POST /api/auth/keys — creates a new key", async () => {
-    const { data, status } = await $fetchRaw("/api/auth/keys", {
+/**
+ * Was "auth key management" against /api/auth/keys, which took a `label`,
+ * returned `{id, key, label}` and answered 200 with `{deleted: true}`. The
+ * replacement takes a `name`, and DELETE is a 204 with no body.
+ *
+ * Sessions, not `auth()`: /api/app-passwords refuses app passwords, so a
+ * credential cannot mint or revoke credentials (libris-5ng.28).
+ */
+describe("app password management", () => {
+  it("POST /api/app-passwords — issues one, plaintext included", async () => {
+    const { data, status } = await $fetchRaw("/api/app-passwords", {
       method: "POST",
-      body: { label: "second-key" },
-      headers: auth(),
+      body: { name: "second-key" },
+      headers: session(),
     });
     expect(status).toBe(201);
     expect(data).toMatchObject({
       id: expect.any(String),
       key: expect.any(String),
-      label: "second-key",
+      name: "second-key",
     });
   });
 
-  it("POST /api/auth/keys — creates third key", async () => {
-    const { data, status } = await $fetchRaw("/api/auth/keys", {
-      method: "POST",
-      body: { label: "third-key" },
-      headers: auth(),
-    });
-    expect(status).toBe(201);
-    expect(data).toHaveProperty("id");
-  });
+  it("GET /api/app-passwords — lists them without exposing the secret", async () => {
+    for (const name of ["second-key", "third-key"]) {
+      await $fetchRaw("/api/app-passwords", {
+        method: "POST",
+        body: { name },
+        headers: session(),
+      });
+    }
 
-  it("GET /api/auth/keys — lists keys without exposing hashes", async () => {
-    // Create extra keys so we have >= 3
-    await $fetchRaw("/api/auth/keys", {
-      method: "POST",
-      body: { label: "second-key" },
-      headers: auth(),
-    });
-    await $fetchRaw("/api/auth/keys", {
-      method: "POST",
-      body: { label: "third-key" },
-      headers: auth(),
-    });
-
-    const { data, status } = await $fetchRaw("/api/auth/keys", {
-      headers: auth(),
-    });
+    const { data, status } = await $fetchRaw("/api/app-passwords", { headers: session() });
     expect(status).toBe(200);
     expect(data.keys).toBeInstanceOf(Array);
     expect(data.keys.length).toBeGreaterThanOrEqual(3);
     for (const k of data.keys) {
+      // `key` holds a plugin-computed hash and must never leave the server;
+      // `start` is a few plaintext characters, which is how the UI tells two
+      // credentials apart in a list.
+      expect(k).not.toHaveProperty("key");
       expect(k).not.toHaveProperty("keyHash");
-      expect(k).not.toHaveProperty("keyPrefix");
       expect(k).toHaveProperty("id");
-      expect(k).toHaveProperty("label");
+      expect(k).toHaveProperty("name");
       expect(k).toHaveProperty("createdAt");
     }
   });
 
-  it("DELETE /api/auth/keys/:id — cannot delete active key", async () => {
-    const { status } = await $fetchRaw(`/api/auth/keys/${userId}`, {
+  it("DELETE /api/app-passwords/:id — revoking the one you are using is allowed", async () => {
+    // Was "cannot delete active key" (409). That guard existed because the key
+    // WAS the user, so deleting it deleted the account. Revoking a credential
+    // costs you the credential now; the session doing the revoking is untouched.
+    const { data: list } = await $fetchRaw("/api/app-passwords", { headers: session() });
+    const active = list.keys.find((k: { id: string }) => k.id);
+
+    const { status } = await $fetchRaw(`/api/app-passwords/${active.id}`, {
       method: "DELETE",
-      headers: auth(),
+      headers: session(),
     });
-    expect(status).toBe(409);
+    expect(status).toBe(204);
+    expect((await $fetchRaw("/api/inbox", { headers: auth() })).status).toBe(401);
   });
 
-  it("DELETE /api/auth/keys/:id — deletes second key", async () => {
-    // Create a key to delete
-    const { data: created } = await $fetchRaw("/api/auth/keys", {
+  it("DELETE /api/app-passwords/:id — revokes one, 204 with no body", async () => {
+    const { data: created } = await $fetchRaw("/api/app-passwords", {
       method: "POST",
-      body: { label: "second-key" },
-      headers: auth(),
+      body: { name: "second-key" },
+      headers: session(),
     });
-    const secondKeyId = created.id;
 
-    const { data, status } = await $fetchRaw(`/api/auth/keys/${secondKeyId}`, {
+    const { data, status } = await $fetchRaw(`/api/app-passwords/${created.id}`, {
       method: "DELETE",
-      headers: auth(),
+      headers: session(),
     });
-    expect(status).toBe(200);
-    expect(data).toMatchObject({ deleted: true, id: secondKeyId });
+    expect(status).toBe(204);
+    expect(data).toBeNull();
   });
 
-  it("DELETE /api/auth/keys/:id — 404 for non-existent key", async () => {
-    // Create a second key so "last key" check won't trigger
-    await $fetchRaw("/api/auth/keys", {
-      method: "POST",
-      body: { label: "extra-key" },
-      headers: auth(),
-    });
-
-    const { status } = await $fetchRaw("/api/auth/keys/00000000-0000-0000-0000-000000000000", {
+  it("DELETE /api/app-passwords/:id — 404 for an id that is not yours or not real", async () => {
+    const { status } = await $fetchRaw("/api/app-passwords/00000000-0000-0000-0000-000000000000", {
       method: "DELETE",
-      headers: auth(),
+      headers: session(),
     });
     expect(status).toBe(404);
-  });
-
-  it("DELETE /api/auth/keys/:id — deletes third key", async () => {
-    // Create a key to delete
-    const { data: created } = await $fetchRaw("/api/auth/keys", {
-      method: "POST",
-      body: { label: "third-key" },
-      headers: auth(),
-    });
-    const thirdKeyId = created.id;
-
-    const { data, status } = await $fetchRaw(`/api/auth/keys/${thirdKeyId}`, {
-      method: "DELETE",
-      headers: auth(),
-    });
-    expect(status).toBe(200);
-    expect(data).toMatchObject({ deleted: true, id: thirdKeyId });
   });
 });
 
@@ -294,7 +287,7 @@ describe("settings", () => {
 describe("GET /api/jobs/status", () => {
   it("returns queue counts", async () => {
     const { data, status } = await $fetchRaw("/api/jobs/status", {
-      headers: auth(),
+      headers: session(),
     });
     expect(status).toBe(200);
     expect(data).toHaveProperty("queues");
@@ -313,13 +306,13 @@ describe("GET /api/jobs/status", () => {
 
 describe("GET /api/jobs/:id (queueName disambiguation)", () => {
   it("400 when queueName query param is missing", async () => {
-    const { status } = await $fetchRaw("/api/jobs/1", { headers: auth() });
+    const { status } = await $fetchRaw("/api/jobs/1", { headers: session() });
     expect(status).toBe(400);
   });
 
   it("404 when queueName does not match a registered queue", async () => {
     const { data, status } = await $fetchRaw("/api/jobs/1?queueName=does-not-exist", {
-      headers: auth(),
+      headers: session(),
     });
     expect(status).toBe(404);
     expect(data.error).toMatch(/Queue "does-not-exist" not found/);
@@ -328,13 +321,13 @@ describe("GET /api/jobs/:id (queueName disambiguation)", () => {
 
 describe("GET /api/jobs/:id/logs (queueName disambiguation)", () => {
   it("400 when queueName query param is missing", async () => {
-    const { status } = await $fetchRaw("/api/jobs/1/logs", { headers: auth() });
+    const { status } = await $fetchRaw("/api/jobs/1/logs", { headers: session() });
     expect(status).toBe(400);
   });
 
   it("404 when queueName does not match a registered queue", async () => {
     const { status } = await $fetchRaw("/api/jobs/1/logs?queueName=does-not-exist", {
-      headers: auth(),
+      headers: session(),
     });
     expect(status).toBe(404);
   });
@@ -344,7 +337,7 @@ describe("POST /api/jobs/:id/retry (queueName disambiguation)", () => {
   it("400 when queueName query param is missing", async () => {
     const { status } = await $fetchRaw("/api/jobs/1/retry", {
       method: "POST",
-      headers: auth(),
+      headers: session(),
     });
     expect(status).toBe(400);
   });
@@ -352,7 +345,7 @@ describe("POST /api/jobs/:id/retry (queueName disambiguation)", () => {
   it("404 when queueName does not match a registered queue", async () => {
     const { status } = await $fetchRaw("/api/jobs/1/retry?queueName=does-not-exist", {
       method: "POST",
-      headers: auth(),
+      headers: session(),
     });
     expect(status).toBe(404);
   });
@@ -600,26 +593,26 @@ function kosyncAuth() {
   return { "x-auth-user": "testuser", "x-auth-key": TESTPASS_MD5 };
 }
 
-/** Seed KoSync credentials into service_credentials via the API. */
+/** Seed KoSync credentials via the API. Session: /api/credentials refuses keys. */
 async function seedKosyncCredentials() {
   await $fetchRaw("/api/credentials/kosync", {
     method: "PUT",
-    headers: auth(),
+    headers: session(),
     body: { username: "testuser", password: "testpass" },
   });
 }
 
-/** Seed OPDS credentials into service_credentials via the API. */
-async function seedOpdsCredentials() {
-  await $fetchRaw("/api/credentials/opds", {
-    method: "PUT",
-    headers: auth(),
-    body: { username: "opds-user", password: "opds-pass" },
-  });
-}
-
-function opdsBasicAuth(username = "opds-user", password = "opds-pass") {
-  const encoded = Buffer.from(`${username}:${password}`).toString("base64");
+/**
+ * What an OPDS reader sends.
+ *
+ * There is nothing to seed any more: seedOpdsCredentials() used to PUT a row
+ * into service_credentials, and "opds" is no longer one of the services. A
+ * reader authenticates with an ordinary app password sent as Basic's PASSWORD
+ * — the username half is informational, which is why the default here is the
+ * account's email rather than a second secret.
+ */
+function opdsBasicAuth(username = "integration-test@example.test", password?: string) {
+  const encoded = Buffer.from(`${username}:${password ?? apiKey}`).toString("base64");
   return { authorization: `Basic ${encoded}` };
 }
 
@@ -975,8 +968,6 @@ async function seedOpdsBooks() {
 }
 
 describe("OPDS: GET /opds/ (index feed)", () => {
-  beforeEach(seedOpdsCredentials);
-
   it("returns OPDS navigation feed with Basic auth", async () => {
     const { data, status, headers } = await $fetchRaw("/opds/", {
       headers: opdsBasicAuth(),
@@ -1025,67 +1016,41 @@ describe("OPDS: GET /opds/ (index feed)", () => {
     expect(status).toBe(401);
   });
 
-  it("rejects when no OPDS credentials configured", async () => {
-    // Delete the credentials seeded by beforeEach
-    await $fetchRaw("/api/credentials/opds", { method: "DELETE", headers: auth() });
-
-    const { status } = await $fetchRaw("/opds/", {
-      headers: opdsBasicAuth(),
+  /**
+   * Two tests used to sit here: "clears cached OPDS auth immediately after
+   * credential update" and "...after deletion". They existed because the old
+   * middleware cached auth results for five minutes behind a manual
+   * clearAuthCaches() invariant, and every route that changed a credential had
+   * to remember to call it. Nothing caches now, so there is no invalidation to
+   * test — but "immediately" is still the property worth pinning, so it is
+   * asserted directly against revocation below.
+   */
+  it("stops serving a revoked credential on the very next request", async () => {
+    const { data: issued } = await $fetchRaw("/api/app-passwords", {
+      method: "POST",
+      body: { name: "reader" },
+      headers: session(),
     });
-    expect(status).toBe(401);
-  });
 
-  it("clears cached OPDS auth immediately after credential update", async () => {
-    const { status: firstStatus } = await $fetchRaw("/opds/", {
-      headers: opdsBasicAuth(),
-      responseType: "text",
-    });
-    expect(firstStatus).toBe(200);
+    const readerAuth = {
+      authorization: `Basic ${Buffer.from(`reader:${issued.key}`).toString("base64")}`,
+    };
+    expect((await $fetchRaw("/opds/", { headers: readerAuth, responseType: "text" })).status).toBe(
+      200,
+    );
 
-    const { status: putStatus } = await $fetchRaw("/api/credentials/opds", {
-      method: "PUT",
-      headers: auth(),
-      body: { username: "opds-user", password: "new-opds-pass" },
-    });
-    expect(putStatus).toBe(200);
-
-    const { status: oldStatus } = await $fetchRaw("/opds/", {
-      headers: opdsBasicAuth(),
-      responseType: "text",
-    });
-    expect(oldStatus).toBe(401);
-
-    const { status: newStatus } = await $fetchRaw("/opds/", {
-      headers: opdsBasicAuth("opds-user", "new-opds-pass"),
-      responseType: "text",
-    });
-    expect(newStatus).toBe(200);
-  });
-
-  it("clears cached OPDS auth immediately after credential deletion", async () => {
-    const { status: firstStatus } = await $fetchRaw("/opds/", {
-      headers: opdsBasicAuth(),
-      responseType: "text",
-    });
-    expect(firstStatus).toBe(200);
-
-    const { status: deleteStatus } = await $fetchRaw("/api/credentials/opds", {
+    await $fetchRaw(`/api/app-passwords/${issued.id}`, {
       method: "DELETE",
-      headers: auth(),
+      headers: session(),
     });
-    expect(deleteStatus).toBe(200);
 
-    const { status: secondStatus } = await $fetchRaw("/opds/", {
-      headers: opdsBasicAuth(),
-      responseType: "text",
-    });
-    expect(secondStatus).toBe(401);
+    expect((await $fetchRaw("/opds/", { headers: readerAuth, responseType: "text" })).status).toBe(
+      401,
+    );
   });
 });
 
 describe("OPDS: GET /opds/books (book listing)", () => {
-  beforeEach(seedOpdsCredentials);
-
   it("returns acquisition feed with organized books only", async () => {
     await seedOpdsBooks();
 
@@ -1138,8 +1103,6 @@ describe("OPDS: GET /opds/books (book listing)", () => {
 });
 
 describe("OPDS: GET /opds/search", () => {
-  beforeEach(seedOpdsCredentials);
-
   it("returns OpenSearch description when no query provided", async () => {
     const { data, status, headers } = await $fetchRaw("/opds/search", {
       headers: opdsBasicAuth(),
@@ -1179,8 +1142,6 @@ describe("OPDS: GET /opds/search", () => {
 });
 
 describe("OPDS: GET /opds/covers/:id", () => {
-  beforeEach(seedOpdsCredentials);
-
   it("returns 404 for non-existent book", async () => {
     const { status } = await $fetchRaw("/opds/covers/00000000-0000-0000-0000-000000000000", {
       headers: opdsBasicAuth(),
@@ -1209,8 +1170,6 @@ describe("OPDS: GET /opds/covers/:id", () => {
 });
 
 describe("OPDS: GET /opds/download/:fileId", () => {
-  beforeEach(seedOpdsCredentials);
-
   it("returns 401 without auth", async () => {
     const { status } = await $fetchRaw("/opds/download/00000000-0000-0000-0000-000000000000");
     expect(status).toBe(401);
