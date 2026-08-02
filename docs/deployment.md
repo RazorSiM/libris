@@ -88,14 +88,14 @@ There are three tiers, each with a request limit and a sliding window in seconds
 - `auth` — applies to authentication endpoints (login, setup). Defaults to 30 requests per 60 seconds.
 - `keyCreation` — applies to API-key creation. Defaults to 30 requests per 3600 seconds (1 hour).
 
-| Variable                                       | Purpose                                          | Default |
-| ---------------------------------------------- | ------------------------------------------------ | ------- |
-| `LIBRIS_RATELIMIT_GENERAL_LIMIT`               | Max requests per window for general API traffic. | `600`   |
-| `LIBRIS_RATELIMIT_GENERAL_WINDOW_SECONDS`      | General tier window length, in seconds.          | `60`    |
-| `LIBRIS_RATELIMIT_AUTH_LIMIT`                  | Max requests per window for auth endpoints.      | `30`    |
-| `LIBRIS_RATELIMIT_AUTH_WINDOW_SECONDS`         | Auth tier window length, in seconds.             | `60`    |
-| `LIBRIS_RATELIMIT_KEY_CREATION_LIMIT`          | Max requests per window for API-key creation.    | `30`    |
-| `LIBRIS_RATELIMIT_KEY_CREATION_WINDOW_SECONDS` | Key-creation tier window length, in seconds.     | `3600`  |
+| Variable                                       | Purpose                                                  | Default |
+| ---------------------------------------------- | -------------------------------------------------------- | ------- |
+| `LIBRIS_RATELIMIT_GENERAL_LIMIT`               | Max requests per window for general API traffic.         | `600`   |
+| `LIBRIS_RATELIMIT_GENERAL_WINDOW_SECONDS`      | General tier window length, in seconds.                  | `60`    |
+| `LIBRIS_RATELIMIT_AUTH_LIMIT`                  | Max requests per window for the KoSync credential check. | `30`    |
+| `LIBRIS_RATELIMIT_AUTH_WINDOW_SECONDS`         | Auth tier window length, in seconds.                     | `60`    |
+| `LIBRIS_RATELIMIT_KEY_CREATION_LIMIT`          | Max requests per window for credential creation.         | `30`    |
+| `LIBRIS_RATELIMIT_KEY_CREATION_WINDOW_SECONDS` | Key-creation tier window length, in seconds.             | `3600`  |
 
 The `auth` and `keyCreation` tiers fall back to an in-memory limiter when Redis is unavailable; the `general` tier fails open. Set `TRUST_PROXY_HEADERS=1` behind a reverse proxy so limits key off the real client IP. See _Reverse Proxy_ below.
 

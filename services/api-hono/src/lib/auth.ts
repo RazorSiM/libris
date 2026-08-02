@@ -153,10 +153,10 @@ export function createAuth({ db, secondaryStorage, env, secret, baseURL }: Creat
       requireEmailVerification: false,
     },
 
-    // Better Auth owns rate limiting for /api/auth/* — the app's own
-    // LIBRIS_RATELIMIT_AUTH_* vars are retired. Counters go to
-    // the same Redis as sessions so they survive a restart and are shared if
-    // this ever runs more than one process.
+    // Better Auth owns rate limiting for the whole /api/auth/* prefix and
+    // middleware/rate-limit.ts stands aside for it, so the two budgets cannot
+    // stack. Counters go to the same Redis as sessions, so they survive a
+    // restart and are shared if this ever runs more than one process.
     rateLimit: {
       // Off under test. Better Auth applies a much stricter window to
       // /sign-in/email than to other endpoints, and an E2E run signs in several

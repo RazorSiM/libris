@@ -217,9 +217,10 @@ export const kosyncRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
   })
 
   // POST /users/create — registration disabled, credentials are set via the dashboard
-  .openapi(postCreateRoute, async (c) => {
-    await c.req.json<{ username: string; password: string }>();
-
+  .openapi(postCreateRoute, () => {
+    // The body is deliberately never read. Parsing it bought nothing — the
+    // answer is the same whatever KOReader sends — and a bodyless POST made
+    // c.req.json() throw, turning a refusal into a 500.
     throw new HTTPException(409, {
       message: "Registration is disabled. Set KoSync credentials in the Libris dashboard.",
     });

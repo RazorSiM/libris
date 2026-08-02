@@ -284,15 +284,21 @@ Any operation that changes key validity or privileges (deletion, role changes, c
 
 ### Rate Limiting
 
-Three tiers, enforced per client IP via Redis (with in-memory fallback for auth-critical tiers). Defaults are sized for LAN/VPN deployments (the typical Libris install). All limits are tunable via `LIBRIS_RATELIMIT_*` env vars — see [Environment Variables](./environment.md).
+Two limiters, split by prefix.
 
-| Tier          | Default limit | Applied to                                                                                                                                                                                 |
-| ------------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `auth`        | 30 req/min    | Credential-input endpoints only: `POST /api/auth/login`, `POST /api/auth/setup`, `POST /api/auth/keys`, `/kosync/users/auth`                                                               |
-| `keyCreation` | 30 req/hour   | `POST /api/auth/setup`, `POST /api/auth/keys` (stacks with `auth`)                                                                                                                         |
-| `general`     | 600 req/min   | Everything else under `/api/*`, `/kosync/*`, and `/opds/*` — including OPDS browsing, `GET /api/auth/keys`, `DELETE /api/auth/keys/{id}`, `GET /api/auth/session`, `POST /api/auth/logout` |
+**Better Auth owns `/api/auth/*`** — sign-in, sign-out, password and email changes, the admin plugin, API-key management. It applies its own per-endpoint windows, far tighter than a shared tier can express (three requests per ten seconds on sign-in and password change), with counters in the same Redis as sessions so they survive a restart. The app's limiter skips that prefix entirely: two limiters on one route means two budgets and a 429 that neither one accounts for. Tune it in `services/api-hono/src/lib/auth.ts`, not through env vars.
 
-OPDS and read-only/session-management auth endpoints are intentionally in `general`: they don't take a credential as input, so they don't deserve the brute-force budget, and reader apps (KOReader, etc.) browse OPDS feeds in chatty bursts.
+**The app's limiter owns everything else**, per client IP via Redis, with an in-memory fallback for the credential tiers. Defaults are sized for LAN/VPN deployments (the typical Libris install) and are tunable via `LIBRIS_RATELIMIT_*` — see [Environment Variables](./environment.md).
+
+| Tier          | Default limit | Applied to                                                                                                                         |
+| ------------- | ------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `auth`        | 30 req/min    | `/kosync/users/auth`, plus the credential-creation routes below                                                                    |
+| `keyCreation` | 30 req/hour   | `POST /api/setup`, `POST /api/app-passwords` (stacks with `auth`)                                                                  |
+| `general`     | 600 req/min   | Everything else under `/api/*`, `/kosync/*` and `/opds/*` — including OPDS browsing and listing or revoking your own app passwords |
+
+`/kosync/users/auth` is the one credential check outside Better Auth's reach: KOReader speaks its own protocol on its own prefix. The two creation routes each cost a password hash, and `POST /api/setup` is public by necessity — nobody can authenticate on a fresh install — so it gets the strictest budget in the app.
+
+Reading and revoking your own credentials sits in `general`: those probe nothing. So does OPDS, because reader apps browse feeds in chatty bursts.
 
 If exposing Libris publicly, lower the defaults via env vars (e.g. `LIBRIS_RATELIMIT_GENERAL_LIMIT=100`, `LIBRIS_RATELIMIT_AUTH_LIMIT=10`).
 

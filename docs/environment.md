@@ -30,14 +30,36 @@
 
 Defaults are tuned for LAN/VPN deployments — generous enough that normal use (OPDS browsing, API-key management, the frontend's polling) never trips them. If exposing Libris publicly, lower these to something like `100`/`10`/`5` for general/auth/key-creation. See [Architecture › Rate Limiting](./architecture.md#rate-limiting) for the per-endpoint tier mapping.
 
-| Variable                                       | Required | Default | Purpose                                                                             |
-| ---------------------------------------------- | -------- | ------- | ----------------------------------------------------------------------------------- |
-| `LIBRIS_RATELIMIT_GENERAL_LIMIT`               | No       | `600`   | Max requests per window for general API/OPDS/kosync traffic.                        |
-| `LIBRIS_RATELIMIT_GENERAL_WINDOW_SECONDS`      | No       | `60`    | Window size in seconds for the `general` tier.                                      |
-| `LIBRIS_RATELIMIT_AUTH_LIMIT`                  | No       | `30`    | Max credential-input requests per window (login, setup, key creation, kosync auth). |
-| `LIBRIS_RATELIMIT_AUTH_WINDOW_SECONDS`         | No       | `60`    | Window size in seconds for the `auth` tier.                                         |
-| `LIBRIS_RATELIMIT_KEY_CREATION_LIMIT`          | No       | `30`    | Max API-key-creation requests per window (stacks with `auth`).                      |
-| `LIBRIS_RATELIMIT_KEY_CREATION_WINDOW_SECONDS` | No       | `3600`  | Window size in seconds for the `keyCreation` tier.                                  |
+| Variable                                       | Required | Default | Purpose                                                                               |
+| ---------------------------------------------- | -------- | ------- | ------------------------------------------------------------------------------------- |
+| `LIBRIS_RATELIMIT_GENERAL_LIMIT`               | No       | `600`   | Max requests per window for general API/OPDS/kosync traffic.                          |
+| `LIBRIS_RATELIMIT_GENERAL_WINDOW_SECONDS`      | No       | `60`    | Window size in seconds for the `general` tier.                                        |
+| `LIBRIS_RATELIMIT_AUTH_LIMIT`                  | No       | `30`    | Max credential-input requests per window (`/kosync/users/auth`, credential creation). |
+| `LIBRIS_RATELIMIT_AUTH_WINDOW_SECONDS`         | No       | `60`    | Window size in seconds for the `auth` tier.                                           |
+| `LIBRIS_RATELIMIT_KEY_CREATION_LIMIT`          | No       | `30`    | Max credential-creation requests per window (stacks with `auth`).                     |
+| `LIBRIS_RATELIMIT_KEY_CREATION_WINDOW_SECONDS` | No       | `3600`  | Window size in seconds for the `keyCreation` tier.                                    |
+
+### `/api/auth/*` is limited by Better Auth, not by these
+
+None of the variables above apply to Better Auth's own endpoints — sign-in,
+sign-out, password and email changes, the admin plugin, and API-key management.
+Better Auth rate-limits that prefix itself, with much tighter per-endpoint
+windows than a shared tier can express (three requests per ten seconds on
+sign-in and password change). The app's limiter stands aside for the whole
+prefix so the two budgets cannot stack and produce a 429 that neither one
+explains.
+
+Those counters live in the same Redis as sessions, so they survive a restart.
+There is nothing to configure — to change them, edit `rateLimit` in
+`services/api-hono/src/lib/auth.ts`.
+
+What the app's own tiers still cover:
+
+| Tier          | Applies to                                                                           |
+| ------------- | ------------------------------------------------------------------------------------ |
+| `auth`        | `/kosync/users/auth` — KOReader speaks its own protocol, outside Better Auth's reach |
+| `keyCreation` | `POST /api/setup` and `POST /api/app-passwords` — each costs a password hash         |
+| `general`     | everything else under `/api/`, `/kosync/` and `/opds`                                |
 
 `DATABASE_URL` is still read as an escape hatch. When set, `src/lib/resolve-database-url.ts` returns it verbatim and it takes precedence over the split `POSTGRES_*` vars. When unset, the app assembles the connection URL from the split vars above. This gives docker-compose and the app a single source of truth in dev (compose interpolates the same `POSTGRES_*` values; see `docker-compose.dev.yml` for the `${POSTGRES_USER:-libris}` interpolation), while CI and tests can override with a single `DATABASE_URL`.
 

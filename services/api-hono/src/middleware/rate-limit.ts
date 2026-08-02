@@ -5,24 +5,34 @@ import type { RateLimitTier } from "../services/rate-limit.js";
 import { getRequestIp } from "../shared/request-ip.js";
 
 export function resolveRateLimitTiers(path: string, method: string): RateLimitTier[] {
+  // Better Auth rate-limits its own prefix, with per-endpoint windows far
+  // tighter than anything here (three requests per ten seconds on sign-in,
+  // change-password and change-email). Applying a second limiter on top would
+  // stack two independent budgets and produce 429s neither one explains, so
+  // this middleware stands aside for the whole prefix.
+  if (path.startsWith("/api/auth/")) return [];
+
   const tiers: RateLimitTier[] = [];
 
-  if (
-    (path === "/api/auth/setup" && method === "POST") ||
-    (path === "/api/auth/keys" && method === "POST")
-  ) {
+  // Endpoints that mint a credential. Slow and expensive, and worth capping
+  // separately from ordinary traffic:
+  //   /api/setup is PUBLIC — it has to be, nobody can authenticate on a fresh
+  //   install — and hashes a password before it can 409.
+  //   /api/app-passwords needs a session, so it is far less exposed, but a
+  //   loop through it still costs a hash apiece.
+  const isCredentialCreation =
+    method === "POST" && (path === "/api/setup" || path === "/api/app-passwords");
+
+  if (isCredentialCreation) {
     tiers.push("keyCreation");
   }
 
-  // Brute-force tier: only endpoints that take a credential as input.
-  // Read/list/delete/session endpoints don't probe credentials and belong in `general`.
-  const isCredentialInput =
-    (path === "/api/auth/login" && method === "POST") ||
-    (path === "/api/auth/setup" && method === "POST") ||
-    (path === "/api/auth/keys" && method === "POST") ||
-    path === "/kosync/users/auth";
+  // Brute-force tier: endpoints that take a credential as input and say whether
+  // it was right. Better Auth covers its own; KoSync is the one left, because
+  // KOReader speaks its own protocol on its own prefix.
+  const isCredentialCheck = path === "/kosync/users/auth" || isCredentialCreation;
 
-  if (isCredentialInput) {
+  if (isCredentialCheck) {
     tiers.push("auth");
   } else if (path.startsWith("/api/") || path.startsWith("/kosync/") || path.startsWith("/opds")) {
     tiers.push("general");

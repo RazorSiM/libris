@@ -38,6 +38,12 @@ Set a username and password in the **Set KoSync Credentials** form. KOReader sen
 
 To connect a device, in KOReader go to **Settings -> Cloud sync -> Progress sync -> Custom server** and enter the URL shown on this tab.
 
+Use **Login**, not **Register**. Libris accounts are created by an admin, so
+KOReader's registration button is refused by the server — it will report that
+registration is disabled and tell you to set your credentials here. Create them
+in the form above first, then log in on the device with the same username and
+password.
+
 ### Hardcover
 
 Hardcover is the external metadata source used during ingestion, and the service that reading progress is synced to. It is connected per-user with an API token.

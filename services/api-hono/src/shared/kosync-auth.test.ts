@@ -186,15 +186,41 @@ describe("KoSync Auth (integration)", () => {
     expect(res.status).toBe(401);
   });
 
-  it("POST /kosync/users/create always returns 409", async () => {
+  /**
+   * KOReader offers a "Register" button that posts here. Libris accounts are
+   * admin-created, so this is a second way in that must not work — and what
+   * matters is that nothing is written, not merely that the status is 409.
+   *
+   * 409 rather than 404: KOReader surfaces the message, so the user reads
+   * "set your credentials in the dashboard" instead of a bare failure. Hiding
+   * the route would buy nothing — /users/auth already announces that this is a
+   * KoSync server, and no credential is accepted here either way.
+   */
+  it("POST /kosync/users/create refuses, and creates nothing", async () => {
+    const usersBefore = await db.select().from(schema.users);
+    const credsBefore = await db.select().from(schema.kosyncCredentials);
+
     const res = await app.request("/kosync/users/create", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        username: "new-user",
-        password: "new-pass",
-      }),
+      body: JSON.stringify({ username: "new-user", password: "new-pass" }),
     });
+
+    expect(res.status).toBe(409);
+    expect(await db.select().from(schema.users)).toHaveLength(usersBefore.length);
+    expect(await db.select().from(schema.kosyncCredentials)).toHaveLength(credsBefore.length);
+
+    // And the credential it tried to register does not authenticate.
+    const authRes = await app.request("/kosync/users/auth", {
+      headers: { "x-auth-user": "new-user", "x-auth-key": md5("new-pass") },
+    });
+    expect(authRes.status).toBe(401);
+  });
+
+  it("POST /kosync/users/create refuses a bodyless request too", async () => {
+    // KOReader is not the only thing that reaches a public endpoint. Reading a
+    // body that is never used turned an empty POST into a 500.
+    const res = await app.request("/kosync/users/create", { method: "POST" });
 
     expect(res.status).toBe(409);
   });
