@@ -1,57 +1,21 @@
 /**
- * Playwright auth setup for the regular (non-admin) user.
+ * Playwright auth setup — non-admin session.
  *
- * Authenticates via the Hono API login endpoint using E2E_USER_API_KEY,
- * then persists the session to .auth/regular-user.json so tests that
- * need a non-admin context can use this storageState.
+ * Same real sign-in as the admin setup; see auth.setup.ts for why this goes
+ * through the UI rather than forging a cookie.
  */
 
 import { mkdirSync } from "node:fs";
-import { test as setup } from "@playwright/test";
+import { test as setup, expect } from "@playwright/test";
+import { REGULAR_USER } from "./helpers/accounts.js";
+import { signInThroughUi } from "./helpers/sign-in.js";
 
-const API_BASE = "http://localhost:3000";
 const AUTH_FILE = ".auth/regular-user.json";
 
 setup("authenticate regular user", async ({ page }) => {
-  const apiKey = process.env.E2E_USER_API_KEY;
-  if (!apiKey) {
-    throw new Error("E2E_USER_API_KEY not set — did global-setup.ts run?");
-  }
+  await signInThroughUi(page, REGULAR_USER.email, REGULAR_USER.password);
 
-  // Call the Hono API login endpoint directly to get the httpOnly session cookie
-  const res = await fetch(`${API_BASE}/api/auth/login`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ apiKey }),
-  });
-
-  if (!res.ok) {
-    throw new Error(`API login (regular user) failed: ${res.status} ${res.statusText}`);
-  }
-
-  const setCookieHeader = res.headers.get("set-cookie");
-  if (!setCookieHeader) {
-    throw new Error("No Set-Cookie header returned from /api/auth/login (regular user)");
-  }
-
-  // Parse Set-Cookie into a Playwright cookie object
-  const cookieValue = setCookieHeader.split(";")[0].split("=").slice(1).join("=");
-
-  // Add cookie for both the API (port 3000) and web (port 3100) on localhost
-  await page.context().addCookies([
-    {
-      name: "books-auth",
-      value: cookieValue,
-      domain: "localhost",
-      path: "/",
-      httpOnly: true,
-      sameSite: "Lax",
-    },
-  ]);
-
-  // Navigate to verify the session works, then save state
-  await page.goto("/");
-  await page.getByRole("link", { name: "Home" }).waitFor({ timeout: 10_000 });
+  await expect(page.getByRole("link", { name: "Home" })).toBeVisible({ timeout: 10_000 });
 
   mkdirSync(".auth", { recursive: true });
   await page.context().storageState({ path: AUTH_FILE });

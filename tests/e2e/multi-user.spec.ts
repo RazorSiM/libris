@@ -13,6 +13,7 @@
 import type { Page } from "@playwright/test";
 import { test, expect } from "./fixtures";
 import {
+  getAdminUserId,
   API_BASE,
   authHeaders,
   userAuthHeaders,
@@ -46,20 +47,11 @@ async function goStats(page: Page): Promise<void> {
 }
 
 /**
- * Get the admin's apiKeyId from the session endpoint.
+ * Get the admin's ownerId from the session endpoint.
  */
-async function getAdminKeyId(): Promise<string> {
-  const keysRes = await fetch(`${API_BASE}/api/auth/keys`, {
-    headers: authHeaders(),
-  });
-  const data = (await keysRes.json()) as { keys: Array<{ id: string; isAdmin: boolean }> };
-  const adminKey = data.keys.find((k) => k.isAdmin);
-  if (!adminKey) throw new Error("No admin key found");
-  return adminKey.id;
-}
 
 /**
- * Get the regular user's apiKeyId from the keys list (user sees only own key).
+ * Get the regular user's ownerId from the keys list (user sees only own key).
  */
 async function getUserKeyId(): Promise<string> {
   const keysRes = await fetch(`${API_BASE}/api/auth/keys`, {
@@ -71,12 +63,12 @@ async function getUserKeyId(): Promise<string> {
 }
 
 /**
- * Seed reading progress for a book, linked to a specific apiKeyId.
+ * Seed reading progress for a book, linked to a specific ownerId.
  */
 async function seedProgressForUser(
   bookId: string,
   contentHash: string,
-  apiKeyId: string,
+  ownerId: string,
   percentage: number,
 ): Promise<void> {
   const sql = getSql();
@@ -84,7 +76,7 @@ async function seedProgressForUser(
   try {
     await sql`
       INSERT INTO reading_progress (book_id, api_key_id, document, device, progress, percentage, timestamp)
-      VALUES (${bookId}, ${apiKeyId}, ${contentHash}, 'e2e-device', 'pos', ${percentage.toFixed(4)}, ${ts})
+      VALUES (${bookId}, ${ownerId}, ${contentHash}, 'e2e-device', 'pos', ${percentage.toFixed(4)}, ${ts})
       ON CONFLICT (api_key_id, document, device) DO UPDATE
         SET percentage = ${percentage.toFixed(4)}, timestamp = ${ts}, updated_at = NOW()
     `;
@@ -99,14 +91,14 @@ async function seedProgressForUser(
 async function seedProgressHistory(
   bookId: string,
   contentHash: string,
-  apiKeyId: string,
+  ownerId: string,
   percentage: number,
 ): Promise<void> {
   const sql = getSql();
   try {
     await sql`
       INSERT INTO reading_progress_history (book_id, api_key_id, document, device, progress, percentage)
-      VALUES (${bookId}, ${apiKeyId}, ${contentHash}, 'e2e-device', 'pos', ${percentage.toFixed(4)})
+      VALUES (${bookId}, ${ownerId}, ${contentHash}, 'e2e-device', 'pos', ${percentage.toFixed(4)})
     `;
   } finally {
     await sql.end();
@@ -263,10 +255,10 @@ test.describe("Multi-User: Book Ownership UI", () => {
     });
 
     // Set ownership
-    const adminKeyId = await getAdminKeyId();
+    const adminUserId = getAdminUserId();
     const sql = getSql();
     try {
-      await sql`UPDATE books SET created_by = ${adminKeyId} WHERE id = ${adminBookId}`;
+      await sql`UPDATE books SET created_by = ${adminUserId} WHERE id = ${adminBookId}`;
     } finally {
       await sql.end();
     }
@@ -341,11 +333,11 @@ test.describe("Multi-User: Reading Progress Isolation", () => {
     }
 
     // Get key IDs
-    const adminKeyId = await getAdminKeyId();
+    const adminUserId = getAdminUserId();
     const userKeyId = await getUserKeyId();
 
     // Admin at 75% on the book
-    await seedProgressForUser(sharedBookId, contentHash, adminKeyId, 0.75);
+    await seedProgressForUser(sharedBookId, contentHash, adminUserId, 0.75);
     // User at 25% on the book
     await seedProgressForUser(sharedBookId, contentHash, userKeyId, 0.25);
 
@@ -383,7 +375,7 @@ test.describe("Multi-User: Stats Isolation", () => {
   test.beforeAll(async () => {
     await deleteAllBooks();
 
-    const adminKeyId = await getAdminKeyId();
+    const adminUserId = getAdminUserId();
     const userKeyId = await getUserKeyId();
 
     // Admin finishes 3 books
@@ -405,8 +397,8 @@ test.describe("Multi-User: Stats Isolation", () => {
         await sql.end();
       }
 
-      await seedProgressForUser(bookId, hash, adminKeyId, 0.98);
-      await seedProgressHistory(bookId, hash, adminKeyId, 0.98);
+      await seedProgressForUser(bookId, hash, adminUserId, 0.98);
+      await seedProgressHistory(bookId, hash, adminUserId, 0.98);
     }
 
     // User finishes 1 book

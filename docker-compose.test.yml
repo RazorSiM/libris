@@ -13,13 +13,17 @@ services:
       POSTGRES_DB: libris_test
       POSTGRES_USER: libris_test
       POSTGRES_PASSWORD: libris_test
+      # Off /var/lib/postgresql/data on purpose: that path is a declared VOLUME
+      # in the postgres image, and podman then rejects the tmpfs below as a
+      # "duplicate mount destination". Any path outside the image's volumes works.
+      PGDATA: /pgdata
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U libris_test -d libris_test"]
       interval: 2s
       timeout: 5s
       retries: 10
     tmpfs:
-      - /var/lib/postgresql/data
+      - /pgdata
 
   redis:
     image: redis:7
@@ -60,6 +64,11 @@ services:
       COOKIE_DOMAIN: ""
       MIGRATIONS_PATH: /repo/services/api-hono/migrations
       E2E_DOCKER: "1"
+      # Turns off Better Auth's rate limiting (see lib/auth.ts) and enables the
+      # /__test/* support routes. Without it the setup project's sign-in is the
+      # third in a few seconds and gets throttled, which the UI can only report
+      # as a failed login.
+      E2E_TEST: "1"
       # Image bundles browsers at /ms-playwright; don't inherit a host override.
       PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
       # Install `n`-managed Node and global npm bins into a cached volume rather

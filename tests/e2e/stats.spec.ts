@@ -17,7 +17,7 @@
 
 import type { Page } from "@playwright/test";
 import { test, expect } from "./fixtures";
-import { getSql, deleteAllBooks, seedOrganizedBook, getAdminKeyId } from "./helpers";
+import { getSql, deleteAllBooks, seedOrganizedBook, getAdminUserId } from "./helpers";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -59,17 +59,17 @@ async function seedFinishedBookProgress(
     // Set updated_at to last history date so stats SQL uses the correct "finished" date
     const dates = opts.historyDates ?? [new Date()];
     const lastDate = dates[dates.length - 1];
-    const apiKeyId = await getAdminKeyId();
+    const ownerId = getAdminUserId();
     await sql`
       INSERT INTO reading_progress (api_key_id, book_id, document, device, progress, percentage, timestamp, updated_at)
-      VALUES (${apiKeyId}, ${bookId}, ${contentHash}, ${device}, ${String(opts.percentage)}, ${opts.percentage}, ${timestampEpoch}, ${lastDate.toISOString()})
+      VALUES (${ownerId}, ${bookId}, ${contentHash}, ${device}, ${String(opts.percentage)}, ${opts.percentage}, ${timestampEpoch}, ${lastDate.toISOString()})
     `;
 
     // Create reading_progress_history entries
     for (const date of dates) {
       await sql`
         INSERT INTO reading_progress_history (api_key_id, book_id, document, device, progress, percentage, created_at)
-        VALUES (${apiKeyId}, ${bookId}, ${contentHash}, ${device}, ${String(opts.percentage)}, ${opts.percentage}, ${date.toISOString()})
+        VALUES (${ownerId}, ${bookId}, ${contentHash}, ${device}, ${String(opts.percentage)}, ${opts.percentage}, ${date.toISOString()})
       `;
     }
 

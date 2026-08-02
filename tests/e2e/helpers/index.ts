@@ -6,6 +6,7 @@ import { requireDatabaseUrl } from "./resolve-urls.js";
 
 export const API_BASE = "http://localhost:3000";
 
+/** The admin's app password, for requests that authenticate by header. */
 export function getApiKey(): string {
   const key = process.env.E2E_API_KEY;
   if (!key) throw new Error("E2E_API_KEY not set — did global-setup.ts run?");
@@ -36,15 +37,14 @@ export function userAuthHeaders(): { Authorization: string } {
 }
 
 /**
- * Get the admin user's API key ID from the keys endpoint.
+ * The admin's USER id — what owned rows point at.
+ *
+ * Was getAdminUserId(), which fetched the admin's api key id from the removed
+ * /api/auth/keys. Ownership hangs off the person now, and a credential id is
+ * not an identity, so seeding reading progress against one would produce rows
+ * no query can find.
  */
-export async function getAdminKeyId(): Promise<string> {
-  const res = await fetch(`${API_BASE}/api/auth/keys`, { headers: authHeaders() });
-  const data = (await res.json()) as { keys: Array<{ id: string; isAdmin: boolean }> };
-  const adminKey = data.keys.find((k) => k.isAdmin);
-  if (!adminKey) throw new Error("No admin key found");
-  return adminKey.id;
-}
+export { getAdminUserId, getRegularUserId } from "./accounts.js";
 
 /**
  * Reset DB between tests by calling POST /__test/cleanup.
@@ -53,10 +53,13 @@ export async function getAdminKeyId(): Promise<string> {
  *
  * NOTE: Requires the API server to be running in test mode (import.meta.test).
  */
-export async function cleanup(): Promise<void> {
+export async function cleanup(options: { includeAuth?: boolean } = {}): Promise<void> {
+  // Content only by default. Wiping accounts would sign the whole run out —
+  // every spec shares one storageState captured in the setup project.
   const res = await fetch(`${API_BASE}/__test/cleanup`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ includeAuth: options.includeAuth ?? false }),
   });
   if (!res.ok) {
     throw new Error(`Cleanup failed: ${res.status} ${res.statusText}`);

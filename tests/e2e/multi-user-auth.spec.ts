@@ -11,6 +11,7 @@ import { join } from "node:path";
 import type { Page } from "@playwright/test";
 import { test, expect } from "./fixtures";
 import {
+  getAdminUserId,
   API_BASE,
   authHeaders,
   userAuthHeaders,
@@ -38,14 +39,6 @@ async function switchTab(page: Page, tabLabel: string): Promise<void> {
 
 function opdsBasicAuth(username: string, password: string): { Authorization: string } {
   return { Authorization: `Basic ${Buffer.from(`${username}:${password}`).toString("base64")}` };
-}
-
-async function getAdminKeyId(): Promise<string> {
-  const res = await fetch(`${API_BASE}/api/auth/keys`, { headers: authHeaders() });
-  const data = (await res.json()) as { keys: Array<{ id: string; isAdmin: boolean }> };
-  const adminKey = data.keys.find((k) => k.isAdmin);
-  if (!adminKey) throw new Error("No admin key found");
-  return adminKey.id;
 }
 
 /** Seed a book in "review" status (for approve tests). */
@@ -346,13 +339,13 @@ test.describe("Book Ownership: API Enforcement", () => {
   test.beforeAll(async () => {
     await deleteAllBooks();
 
-    const adminKeyId = await getAdminKeyId();
+    const adminUserId = getAdminUserId();
 
     // Seed organized book owned by admin
     adminBookId = await seedOrganizedBook({ title: "Admin Owned Book" });
     const sql = getSql();
     try {
-      await sql`UPDATE books SET created_by = ${adminKeyId} WHERE id = ${adminBookId}`;
+      await sql`UPDATE books SET created_by = ${adminUserId} WHERE id = ${adminBookId}`;
     } finally {
       await sql.end();
     }
@@ -360,7 +353,7 @@ test.describe("Book Ownership: API Enforcement", () => {
     // Seed review book owned by admin (for approve test)
     adminReviewBookId = await seedReviewBook({
       title: "Admin Review Book",
-      createdBy: adminKeyId,
+      createdBy: adminUserId,
     });
 
     // Seed a metadata candidate so approve has something to work with
@@ -404,10 +397,10 @@ test.describe("Book Ownership: API Enforcement", () => {
   test("admin can delete own book (ownership check passes)", async () => {
     // Create a throwaway book for admin to delete
     const throwawayId = await seedOrganizedBook({ title: "Admin Deletable" });
-    const adminKeyId = await getAdminKeyId();
+    const adminUserId = getAdminUserId();
     const sql = getSql();
     try {
-      await sql`UPDATE books SET created_by = ${adminKeyId} WHERE id = ${throwawayId}`;
+      await sql`UPDATE books SET created_by = ${adminUserId} WHERE id = ${throwawayId}`;
     } finally {
       await sql.end();
     }

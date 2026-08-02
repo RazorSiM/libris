@@ -20,7 +20,7 @@ import {
   deleteAllBooks,
   cleanInboxDir,
   seedOrganizedBook,
-  getAdminKeyId,
+  getAdminUserId,
   waitForAllQueuesIdle,
 } from "./helpers";
 
@@ -72,10 +72,10 @@ async function seedReadingProgress(
       VALUES (${bookId}, 'epub', 'test.epub', ${contentHash})
     `;
     // Create reading progress linked via content_hash
-    const apiKeyId = await getAdminKeyId();
+    const ownerId = getAdminUserId();
     await sql`
       INSERT INTO reading_progress (api_key_id, document, device, progress, percentage, timestamp)
-      VALUES (${apiKeyId}, ${contentHash}, ${opts.device}, ${String(opts.percentage)}, ${opts.percentage}, ${opts.timestampEpoch})
+      VALUES (${ownerId}, ${contentHash}, ${opts.device}, ${String(opts.percentage)}, ${opts.percentage}, ${opts.timestampEpoch})
     `;
   } finally {
     await sql.end();

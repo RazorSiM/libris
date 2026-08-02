@@ -1,57 +1,27 @@
 /**
- * Playwright auth setup — runs once before the chromium project tests.
+ * Playwright auth setup — admin session, captured by signing in for real.
  *
- * Authenticates via the Hono API login endpoint (sets httpOnly cookie),
- * then persists the session to .auth/user.json so all chromium tests
- * start pre-authenticated.
+ * This drives the actual login page rather than POSTing to an endpoint and
+ * hand-parsing Set-Cookie, which is what the previous version did: it
+ * hardcoded the cookie name and sameSite, so a change to either produced a
+ * suite that authenticated itself in a way no browser ever would.
+ *
+ * Signing in through the UI also means every run smoke-tests the sign-in flow
+ * before a single spec executes — if login breaks, the failure says so.
  */
 
 import { mkdirSync } from "node:fs";
-import { test as setup } from "@playwright/test";
+import { test as setup, expect } from "@playwright/test";
+import { ADMIN } from "./helpers/accounts.js";
+import { signInThroughUi } from "./helpers/sign-in.js";
 
-const API_BASE = "http://localhost:3000";
 const AUTH_FILE = ".auth/user.json";
 
-setup("authenticate", async ({ page }) => {
-  const apiKey = process.env.E2E_API_KEY;
-  if (!apiKey) {
-    throw new Error("E2E_API_KEY not set — did global-setup.ts run?");
-  }
+setup("authenticate admin", async ({ page }) => {
+  await signInThroughUi(page, ADMIN.email, ADMIN.password);
 
-  // Call the Hono API login endpoint directly to get the httpOnly session cookie
-  const res = await fetch(`${API_BASE}/api/auth/login`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ apiKey }),
-  });
-
-  if (!res.ok) {
-    throw new Error(`API login failed: ${res.status} ${res.statusText}`);
-  }
-
-  const setCookieHeader = res.headers.get("set-cookie");
-  if (!setCookieHeader) {
-    throw new Error("No Set-Cookie header returned from /api/auth/login");
-  }
-
-  // Parse Set-Cookie into a Playwright cookie object
-  const cookieValue = setCookieHeader.split(";")[0].split("=").slice(1).join("=");
-
-  // Add cookie for both the API (port 3000) and web (port 3100) on localhost
-  await page.context().addCookies([
-    {
-      name: "books-auth",
-      value: cookieValue,
-      domain: "localhost",
-      path: "/",
-      httpOnly: true,
-      sameSite: "Lax",
-    },
-  ]);
-
-  // Navigate to verify the session works, then save state
-  await page.goto("/");
-  await page.getByRole("link", { name: "Home" }).waitFor({ timeout: 10_000 });
+  // Landed inside the app, not back on the login page.
+  await expect(page.getByRole("link", { name: "Home" })).toBeVisible({ timeout: 10_000 });
 
   mkdirSync(".auth", { recursive: true });
   await page.context().storageState({ path: AUTH_FILE });
