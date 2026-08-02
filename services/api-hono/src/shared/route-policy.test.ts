@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import { resolvePolicy } from "./route-policy";
+import { deniesAppPasswords, resolvePolicy } from "./route-policy";
 
 describe("resolvePolicy", () => {
   const cases: [string, string][] = [
@@ -83,5 +83,63 @@ describe("resolvePolicy", () => {
       expect(resolvePolicy("/_docs/scalar")).toBe("skip");
       expect(resolvePolicy("/_anything")).toBe("skip");
     });
+  });
+});
+
+describe("deniesAppPasswords", () => {
+  it("refuses the whole /api/auth/ prefix, at every depth", () => {
+    // Deny-by-default: whatever a future Better Auth version nests under here
+    // is covered without anyone remembering to add it.
+    for (const path of [
+      "/api/auth/change-password",
+      "/api/auth/change-email",
+      "/api/auth/admin/list-users",
+      "/api/auth/admin/set-role",
+      "/api/auth/api-key/create",
+      "/api/auth/some/plugin/added/later",
+    ]) {
+      expect(deniesAppPasswords(path), path).toBe(true);
+    }
+  });
+
+  it("refuses credential management", () => {
+    expect(deniesAppPasswords("/api/app-passwords")).toBe(true);
+    expect(deniesAppPasswords("/api/app-passwords/abc123")).toBe(true);
+    expect(deniesAppPasswords("/api/credentials/opds")).toBe(true);
+    expect(deniesAppPasswords("/api/credentials/kosync")).toBe(true);
+  });
+
+  it("leaves the routes app passwords exist for alone", () => {
+    // OPDS and KoSync are the reason the credential exists; /api/library and
+    // friends are what Bruno, curl and cron drive with a Bearer token. If any
+    // of these ever returns true, e-readers stop working.
+    for (const path of [
+      "/opds",
+      "/opds/new",
+      "/opds/download/abc",
+      "/kosync/syncs/progress",
+      "/api/library",
+      "/api/books/abc",
+      "/api/inbox",
+      "/api/search",
+      "/api/health",
+    ]) {
+      expect(deniesAppPasswords(path), path).toBe(false);
+    }
+  });
+
+  it("does not let a deny prefix leak onto a sibling path", () => {
+    // Same trap as the policy table's /api/auth/ rule: a prefix without the
+    // trailing boundary would swallow neighbours that just start the same way.
+    expect(deniesAppPasswords("/api/authors")).toBe(false);
+    expect(deniesAppPasswords("/api/credential-report")).toBe(false);
+  });
+
+  it("says nothing about admin routes — the middleware decides those by policy", () => {
+    // /api/jobs IS refused to app passwords, but via `policy === "admin"` in
+    // authMiddleware, so a new admin route is scoped the moment it is added to
+    // the policy table rather than needing a second edit here.
+    expect(deniesAppPasswords("/api/jobs/status")).toBe(false);
+    expect(resolvePolicy("/api/jobs/status")).toBe("admin");
   });
 });

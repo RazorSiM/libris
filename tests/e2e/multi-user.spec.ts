@@ -15,8 +15,9 @@ import { test, expect } from "./fixtures";
 import {
   getAdminUserId,
   API_BASE,
-  authHeaders,
   userAuthHeaders,
+  sessionHeaders,
+  userSessionHeaders,
   getSql,
   deleteAllBooks,
   seedOrganizedBook,
@@ -192,17 +193,19 @@ test.describe("Multi-User: Credential Isolation", () => {
     adminPage: _adminPage,
     userPage: _userPage,
   }) => {
-    // Admin: go to settings, set OPDS credentials via API
+    // Sessions throughout: /api/credentials refuses app passwords, so a Bearer
+    // key here would 403 before the isolation this test is about is reached
+    // (libris-5ng.28).
     const adminSetRes = await fetch(`${API_BASE}/api/credentials/opds`, {
       method: "PUT",
-      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      headers: { ...sessionHeaders(), "Content-Type": "application/json" },
       body: JSON.stringify({ username: "admin-opds-e2e", password: "admin-pass" }),
     });
     expect(adminSetRes.ok).toBe(true);
 
     // User: verify unconfigured
     const userGetRes = await fetch(`${API_BASE}/api/credentials/opds`, {
-      headers: userAuthHeaders(),
+      headers: userSessionHeaders(),
     });
     const userData = (await userGetRes.json()) as { configured: boolean };
     expect(userData.configured).toBe(false);
@@ -210,14 +213,14 @@ test.describe("Multi-User: Credential Isolation", () => {
     // User: set own OPDS credentials
     const userSetRes = await fetch(`${API_BASE}/api/credentials/opds`, {
       method: "PUT",
-      headers: { ...userAuthHeaders(), "Content-Type": "application/json" },
+      headers: { ...userSessionHeaders(), "Content-Type": "application/json" },
       body: JSON.stringify({ username: "user-opds-e2e", password: "user-pass" }),
     });
     expect(userSetRes.ok).toBe(true);
 
     // Verify isolation: admin still sees admin-opds-e2e
     const adminVerifyRes = await fetch(`${API_BASE}/api/credentials/opds`, {
-      headers: authHeaders(),
+      headers: sessionHeaders(),
     });
     const adminData = (await adminVerifyRes.json()) as { configured: boolean; username: string };
     expect(adminData.configured).toBe(true);
@@ -225,7 +228,7 @@ test.describe("Multi-User: Credential Isolation", () => {
 
     // Verify: user sees user-opds-e2e
     const userVerifyRes = await fetch(`${API_BASE}/api/credentials/opds`, {
-      headers: userAuthHeaders(),
+      headers: userSessionHeaders(),
     });
     const userVerifyData = (await userVerifyRes.json()) as {
       configured: boolean;

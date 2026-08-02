@@ -19,7 +19,7 @@ import {
   type Page,
 } from "@playwright/test";
 import { ADMIN, REGULAR_USER } from "./helpers/accounts.js";
-import { API_BASE, getApiKey, getUserApiKey } from "./helpers";
+import { API_BASE, getApiKey, getUserApiKey, sessionHeaders, userSessionHeaders } from "./helpers";
 import { signInThroughUi } from "./helpers/sign-in.js";
 
 /** A context with no cookies, for testing the signed-out world. */
@@ -247,19 +247,18 @@ test.describe("session", () => {
 
 test.describe("authorization", () => {
   test("a non-admin cannot reach an admin-only endpoint", async () => {
+    // Sessions, not app passwords, so this stays a test about ROLE. Since
+    // libris-5ng.28 a Bearer key is refused on admin routes whoever owns it,
+    // which would make this pass without the role check existing at all.
     const api = await anonymousApi();
-    const res = await api.get(`${API_BASE}/api/jobs/status`, {
-      headers: { Authorization: `Bearer ${getUserApiKey()}` },
-    });
+    const res = await api.get(`${API_BASE}/api/jobs/status`, { headers: userSessionHeaders() });
     expect(res.status()).toBe(403);
     await api.dispose();
   });
 
   test("an admin can", async () => {
     const api = await anonymousApi();
-    const res = await api.get(`${API_BASE}/api/jobs/status`, {
-      headers: { Authorization: `Bearer ${getApiKey()}` },
-    });
+    const res = await api.get(`${API_BASE}/api/jobs/status`, { headers: sessionHeaders() });
     expect(res.ok()).toBe(true);
     await api.dispose();
   });
@@ -292,7 +291,7 @@ test.describe("app passwords", () => {
     // OPDS reader (Basic), a script (Bearer) or the plugin's own header.
     const api = await anonymousApi();
     const created = await api.post(`${API_BASE}/api/app-passwords`, {
-      headers: { Authorization: `Bearer ${getApiKey()}` },
+      headers: sessionHeaders(),
       data: { name: "every-header" },
     });
     expect(created.status()).toBe(201);
@@ -314,7 +313,7 @@ test.describe("app passwords", () => {
     // Nothing caches in the auth path, so "immediately" should be literal.
     const api = await anonymousApi();
     const created = await api.post(`${API_BASE}/api/app-passwords`, {
-      headers: { Authorization: `Bearer ${getApiKey()}` },
+      headers: sessionHeaders(),
       data: { name: "revoke-me" },
     });
     const { id, key } = (await created.json()) as { id: string; key: string };
@@ -324,7 +323,7 @@ test.describe("app passwords", () => {
     );
 
     const deleted = await api.delete(`${API_BASE}/api/app-passwords/${id}`, {
-      headers: { Authorization: `Bearer ${getApiKey()}` },
+      headers: sessionHeaders(),
     });
     expect(deleted.status()).toBe(204);
 
@@ -337,13 +336,13 @@ test.describe("app passwords", () => {
   test("one user cannot revoke another's, and cannot learn it exists", async () => {
     const api = await anonymousApi();
     const created = await api.post(`${API_BASE}/api/app-passwords`, {
-      headers: { Authorization: `Bearer ${getApiKey()}` },
+      headers: sessionHeaders(),
       data: { name: "admin-only" },
     });
     const { id, key } = (await created.json()) as { id: string; key: string };
 
     const res = await api.delete(`${API_BASE}/api/app-passwords/${id}`, {
-      headers: { Authorization: `Bearer ${getUserApiKey()}` },
+      headers: userSessionHeaders(),
     });
     // 404 rather than 403: 403 would confirm the id is real.
     expect(res.status()).toBe(404);
@@ -356,7 +355,7 @@ test.describe("app passwords", () => {
   test("the list shows only your own, and never the plaintext", async () => {
     const api = await anonymousApi();
     const listed = await api.get(`${API_BASE}/api/app-passwords`, {
-      headers: { Authorization: `Bearer ${getUserApiKey()}` },
+      headers: userSessionHeaders(),
     });
     const { keys } = (await listed.json()) as { keys: Record<string, unknown>[] };
 
@@ -371,6 +370,108 @@ test.describe("app passwords", () => {
     const api = await anonymousApi();
     const res = await api.post(`${API_BASE}/api/app-passwords`, { data: { name: "sneaky" } });
     expect(res.status()).toBe(401);
+    await api.dispose();
+  });
+});
+
+// ── How far an app password reaches (libris-5ng.28) ──────────────────
+
+/**
+ * The blast radius of a leaked credential.
+ *
+ * An app password lives in plaintext in a KOReader config, on a device that
+ * leaves the house. Because `enableSessionForAPIKeys` resolves it into a full
+ * session, without scoping it carries everything its owner can do — and the
+ * owner of the OPDS credential in a household install is usually the admin.
+ *
+ * The pair of assertions in each test is the point: the KEY is refused and the
+ * same person's SESSION is not. A one-sided version of this suite would still
+ * pass if the fix had accidentally become "nobody may use these routes".
+ */
+test.describe("app password scope", () => {
+  test("an admin's app password cannot reach admin routes, but their session can", async () => {
+    const api = await anonymousApi();
+
+    expect(
+      (
+        await api.get(`${API_BASE}/api/jobs/status`, {
+          headers: { Authorization: `Bearer ${getApiKey()}` },
+        })
+      ).status(),
+    ).toBe(403);
+    expect((await api.get(`${API_BASE}/api/jobs/status`, { headers: sessionHeaders() })).ok()).toBe(
+      true,
+    );
+
+    await api.dispose();
+  });
+
+  test("an app password cannot mint another one, nor list them", async () => {
+    // A credential that can mint credentials outlives its own revocation.
+    const api = await anonymousApi();
+    const headers = { Authorization: `Bearer ${getApiKey()}` };
+
+    expect(
+      (
+        await api.post(`${API_BASE}/api/app-passwords`, { headers, data: { name: "bootstrap" } })
+      ).status(),
+    ).toBe(403);
+    expect((await api.get(`${API_BASE}/api/app-passwords`, { headers })).status()).toBe(403);
+    expect(
+      (await api.get(`${API_BASE}/api/app-passwords`, { headers: sessionHeaders() })).ok(),
+    ).toBe(true);
+
+    await api.dispose();
+  });
+
+  test("an app password cannot rewrite the service credentials", async () => {
+    const api = await anonymousApi();
+    const res = await api.put(`${API_BASE}/api/credentials/opds`, {
+      headers: { Authorization: `Bearer ${getUserApiKey()}` },
+      data: { username: "hijacked", password: "hijacked-password" },
+    });
+    expect(res.status()).toBe(403);
+    await api.dispose();
+  });
+
+  test("account mutation is refused, and the password still works afterwards", async () => {
+    const api = await anonymousApi();
+    const res = await api.post(`${API_BASE}/api/auth/change-password`, {
+      headers: { Authorization: `Bearer ${getApiKey()}` },
+      data: { currentPassword: ADMIN.password, newPassword: "taken-over-by-a-leaked-key" },
+    });
+    expect(res.ok()).toBe(false);
+
+    // The account is untouched: the original password still signs in.
+    const signIn = await api.post(`${API_BASE}/api/auth/sign-in/email`, {
+      data: { email: ADMIN.email, password: ADMIN.password },
+    });
+    expect(signIn.ok()).toBe(true);
+
+    await api.dispose();
+  });
+
+  test("and none of that touched what app passwords are for", async () => {
+    // The regression that would matter most: scoping the credential so tightly
+    // that the e-reader it exists for stops working.
+    const api = await anonymousApi();
+    const key = getApiKey();
+    const basic = `Basic ${Buffer.from(`${ADMIN.email}:${key}`).toString("base64")}`;
+
+    expect((await api.get(`${API_BASE}/api/library`, { headers: { "x-api-key": key } })).ok()).toBe(
+      true,
+    );
+    // A second router, so this also shows the deny prefixes are not swallowing
+    // the ordinary /api surface along with the routes they name.
+    expect(
+      (
+        await api.get(`${API_BASE}/api/inbox`, { headers: { Authorization: `Bearer ${key}` } })
+      ).ok(),
+    ).toBe(true);
+    expect((await api.get(`${API_BASE}/opds`, { headers: { Authorization: basic } })).ok()).toBe(
+      true,
+    );
+
     await api.dispose();
   });
 });
@@ -408,7 +509,7 @@ test.describe("app passwords in the UI", () => {
   test("lists it, then revokes it and the credential stops working", async ({ page }) => {
     const api = await anonymousApi();
     const created = await api.post(`${API_BASE}/api/app-passwords`, {
-      headers: { Authorization: `Bearer ${getApiKey()}` },
+      headers: sessionHeaders(),
       data: { name: "E2E Revoke Me" },
     });
     const { id, key } = (await created.json()) as { id: string; key: string };
@@ -448,7 +549,9 @@ test.describe("app passwords in the UI", () => {
     expect((await api.get(`${API_BASE}/api/library`, { headers: { "x-api-key": key } })).ok()).toBe(
       true,
     );
-    // ...and it is still only a user: the credential carries their role, not more.
+    // ...and it reaches no further than the library: admin routes refuse app
+    // passwords outright now (libris-5ng.28), on top of this user not being an
+    // admin in the first place.
     expect(
       (await api.get(`${API_BASE}/api/jobs/status`, { headers: { "x-api-key": key } })).status(),
     ).toBe(403);

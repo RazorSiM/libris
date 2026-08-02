@@ -15,6 +15,7 @@ import {
   API_BASE,
   authHeaders,
   userAuthHeaders,
+  sessionHeaders,
   getApiKey,
   seedOpdsCredentials,
   deleteAllBooks,
@@ -80,7 +81,7 @@ test.describe("Credential Rotation Cache Invalidation", () => {
     // Rotate password
     const rotateRes = await fetch(`${API_BASE}/api/credentials/opds`, {
       method: "PUT",
-      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      headers: { ...sessionHeaders(), "Content-Type": "application/json" },
       body: JSON.stringify({ username, password: newPassword }),
     });
     expect(rotateRes.status).toBe(200);
@@ -113,7 +114,7 @@ test.describe("Credential Rotation Cache Invalidation", () => {
     // Delete credentials
     const deleteRes = await fetch(`${API_BASE}/api/credentials/opds`, {
       method: "DELETE",
-      headers: authHeaders(),
+      headers: sessionHeaders(),
     });
     expect(deleteRes.status).toBe(200);
 

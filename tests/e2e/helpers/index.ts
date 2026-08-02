@@ -2,6 +2,7 @@ import { copyFile, mkdir, readdir, unlink } from "node:fs/promises";
 import { basename, join } from "node:path";
 import type { Page } from "@playwright/test";
 import postgres from "postgres";
+import { getAdminCookie, getUserCookie } from "./accounts.js";
 import { requireDatabaseUrl } from "./resolve-urls.js";
 
 export const API_BASE = "http://localhost:3000";
@@ -37,6 +38,23 @@ export function userAuthHeaders(): { Authorization: string } {
 }
 
 /**
+ * Session headers for the routes an app password is refused on (libris-5ng.28):
+ * anything under /api/auth/, /api/app-passwords, /api/credentials, and every
+ * admin route including /api/jobs.
+ *
+ * Reach for authHeaders() everywhere else — most of the suite is exercising the
+ * ordinary library surface, which is exactly what app passwords are for.
+ */
+export function sessionHeaders(): { cookie: string } {
+  return { cookie: getAdminCookie() };
+}
+
+/** Session headers for the non-admin. */
+export function userSessionHeaders(): { cookie: string } {
+  return { cookie: getUserCookie() };
+}
+
+/**
  * The admin's USER id — what owned rows point at.
  *
  * Was getAdminUserId(), which fetched the admin's api key id from the removed
@@ -44,7 +62,7 @@ export function userAuthHeaders(): { Authorization: string } {
  * not an identity, so seeding reading progress against one would produce rows
  * no query can find.
  */
-export { getAdminUserId, getRegularUserId } from "./accounts.js";
+export { getAdminUserId, getRegularUserId, getAdminCookie, getUserCookie } from "./accounts.js";
 
 /**
  * Reset DB between tests by calling POST /__test/cleanup.
@@ -113,9 +131,9 @@ export async function waitForJob(
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const res = await fetch(`${API_BASE}/api/jobs/status`, {
-      headers: { Authorization: `Bearer ${getApiKey()}` },
-    });
+    // Session, not Bearer: /api/jobs is admin-policy and app passwords are
+    // refused there (libris-5ng.28).
+    const res = await fetch(`${API_BASE}/api/jobs/status`, { headers: sessionHeaders() });
     if (res.ok) {
       const data = (await res.json()) as {
         queues: Record<
@@ -189,7 +207,7 @@ export async function seedOpdsCredentials(
 ): Promise<{ username: string; password: string }> {
   const res = await fetch(`${API_BASE}/api/credentials/opds`, {
     method: "PUT",
-    headers: { ...authHeaders(), "Content-Type": "application/json" },
+    headers: { ...sessionHeaders(), "Content-Type": "application/json" },
     body: JSON.stringify({ username, password }),
   });
   if (!res.ok) {

@@ -102,6 +102,10 @@ beforeAll(async () => {
   app.get("/api/jobs", probe); // admin
   app.get("/api/health", probe); // optional
   app.get("/opds", probe); // opds
+  // api-key policy, but on the app-password deny list (libris-5ng.28). Present
+  // so the scoping tests below can tell "refused" apart from "no such route".
+  app.get("/api/app-passwords", probe);
+  app.get("/api/credentials/kosync", probe);
   app.on(["GET", "POST"], "/api/auth/*", (c) => auth.handler(c.req.raw));
 });
 
@@ -242,15 +246,123 @@ describe("authMiddleware admin gating", () => {
     expect(body.isAdmin).toBe(true);
   });
 
-  it("carries the owner's role onto their app password", async () => {
-    // A key acts as the person who minted it, so an admin's key is admin.
-    // That is exactly the blast radius libris-5ng.28 exists to narrow.
+  it("refuses an admin route to an admin's app password", async () => {
+    // The scoping libris-5ng.28 added. A key acts as the person who minted it,
+    // so before this an admin's key WAS admin — and that key lives in plaintext
+    // in a KOReader config on a device that leaves the house.
     const { userId } = await signUp("boss2@example.test", "admin");
     const key = await createAppPassword(userId);
 
     const { status, body } = await get("/api/jobs", { "x-api-key": key });
+    expect(status).toBe(403);
+    expect(body.error).toBe("App passwords cannot be used here — sign in for this");
+  });
+
+  it("still admits the same admin's cookie session to the same route", async () => {
+    // The other half of the pair: scoping the credential must not touch the
+    // person. If this ever fails together with the test above, the fix has
+    // become "admins cannot use /api/jobs", which is not the fix.
+    const { userId, cookie } = await signUp("boss3@example.test", "admin");
+    await createAppPassword(userId);
+
+    const { status, body } = await get("/api/jobs", { cookie });
     expect(status).toBe(200);
     expect(body.isAdmin).toBe(true);
+  });
+});
+
+// ── app-password scoping (libris-5ng.28) ────────────────────────────
+
+describe("authMiddleware app-password scoping", () => {
+  /**
+   * The routes an app password exists to serve. Every one of these must keep
+   * working, or the credential is pointless: this is OPDS browsing, and the
+   * /api surface Bruno, curl and cron already drive with a Bearer token.
+   */
+  it("still serves the routes app passwords exist for", async () => {
+    const { userId } = await signUp("reader@example.test", "admin");
+    const key = await createAppPassword(userId);
+
+    expect((await get("/api/books", { "x-api-key": key })).status).toBe(200);
+    expect((await get("/api/books", { authorization: `Bearer ${key}` })).status).toBe(200);
+    expect((await get("/opds", { authorization: basic("reader", key) })).status).toBe(200);
+  });
+
+  it("refuses account mutation, whichever header carries the key", async () => {
+    // /api/auth/ is policy "skip" — the middleware normally stands aside for
+    // the whole prefix and lets Better Auth authenticate its own endpoints.
+    //
+    // Measured, with the guard disabled: Better Auth answers 401 here of its
+    // own accord, so this is defence in depth rather than a hole being closed.
+    // It is worth keeping regardless — that 401 is upstream's current
+    // behaviour, not a documented guarantee, and it is the kind of thing a
+    // version bump changes quietly. The deny list makes it OUR invariant.
+    const { userId } = await signUp("mutate@example.test");
+    const key = await createAppPassword(userId);
+
+    // A body Better Auth would otherwise accept, so this pins "the mutation is
+    // refused" rather than "the request was malformed" — the difference between
+    // a real regression test and one that passes for the wrong reason.
+    const carriers: Record<string, string>[] = [
+      { "x-api-key": key },
+      { authorization: `Bearer ${key}` },
+      { authorization: basic("mutate", key) },
+    ];
+    for (const headers of carriers) {
+      const res = await app.request("/api/auth/change-password", {
+        method: "POST",
+        headers: { ...headers, "content-type": "application/json" },
+        body: JSON.stringify({ currentPassword: PASSWORD, newPassword: "a-brand-new-password" }),
+      });
+      expect(res.status).toBe(403);
+    }
+
+    // And the password really is unchanged: the original still signs in.
+    await expect(signIn("mutate@example.test")).resolves.toBeTruthy();
+  });
+
+  it("refuses the admin plugin's user management", async () => {
+    // Same as above: 401 from Better Auth without the guard, 403 with it. The
+    // cookie half of this pair ("leaves cookie sessions alone") is what shows
+    // the endpoint is genuinely reachable and it is the credential being
+    // refused, not the route being broken.
+    const { userId } = await signUp("adminplugin@example.test", "admin");
+    const key = await createAppPassword(userId);
+
+    const res = await app.request("/api/auth/admin/list-users?limit=10", {
+      headers: { "x-api-key": key },
+    });
+    expect(res.status).toBe(403);
+  });
+
+  it("refuses minting or revoking credentials with a credential", async () => {
+    // A key that can mint keys survives its own revocation.
+    const { userId } = await signUp("mint@example.test");
+    const key = await createAppPassword(userId);
+
+    expect((await get("/api/app-passwords", { "x-api-key": key })).status).toBe(403);
+    expect((await get("/api/credentials/kosync", { "x-api-key": key })).status).toBe(403);
+  });
+
+  it("refuses a denied path before it verifies the key", async () => {
+    // A 401 here would tell an attacker probing /api/auth/ which of their
+    // guessed keys is real. The route does not take app passwords at all, and
+    // that answer is the same for a valid key and a fabricated one.
+    const res = await app.request("/api/auth/change-password", {
+      method: "POST",
+      headers: { "x-api-key": "not-a-real-key" },
+    });
+    expect(res.status).toBe(403);
+  });
+
+  it("leaves cookie sessions alone on every denied path", async () => {
+    const { cookie } = await signUp("browser@example.test", "admin");
+
+    const changed = await app.request("/api/auth/admin/list-users?limit=10", {
+      headers: { cookie },
+    });
+    expect(changed.status).toBe(200);
+    expect((await get("/api/app-passwords", { cookie })).status).toBe(200);
   });
 });
 

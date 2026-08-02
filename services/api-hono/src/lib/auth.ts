@@ -79,8 +79,14 @@ export interface CreateAuthDeps {
  *
  * Anything unparseable returns null, which reads as "no credential presented"
  * and produces a 401 rather than a 500.
+ *
+ * Exported because authMiddleware needs the same answer this getter gives, to
+ * decide whether the session it just resolved came from an app password or from
+ * a browser cookie (libris-5ng.28). Two independent parsers would be two things
+ * to keep in agreement; the scoping check would silently stop firing the moment
+ * they drifted.
  */
-function apiKeyFromHeaders(headers: Headers | undefined): string | null {
+export function apiKeyFromHeaders(headers: Headers | undefined): string | null {
   if (!headers) return null;
 
   const direct = headers.get("x-api-key");
@@ -201,9 +207,22 @@ export function createAuth({ db, secondaryStorage, env, secret, baseURL }: Creat
         //
         // Upstream flags this as "not recommended for production" because a
         // leaked key then carries full session authority. Libris accepts that
-        // for OPDS/e-reader clients, which genuinely need to act as the user;
-        // the mitigation is scoping enforced at the middleware layer, tracked
-        // separately.
+        // for OPDS/e-reader clients, which genuinely need to act as the user —
+        // but only for the routes those clients need.
+        //
+        // THE MITIGATION IS NOT HERE. It is APP_PASSWORD_DENIED plus the admin
+        // policy in shared/route-policy.ts, enforced by authMiddleware before
+        // the session is even resolved (libris-5ng.28). Scoping in the
+        // middleware rather than through this plugin's `permissions` was
+        // deliberate: permissions are stamped onto each key at creation time,
+        // so a key minted before a rule changed keeps the old authority, and
+        // the rule itself is then spread across every row of api_keys instead
+        // of sitting in one readable table. The middleware evaluates the
+        // current rule on every request.
+        //
+        // Turning this off is not a safe simplification either: it does not
+        // narrow the key, it stops OPDS and Bearer clients authenticating at
+        // all and brings back the five-branch switch.
         enableSessionForAPIKeys: true,
         // One configuration rather than a separate `opds` configId: the same
         // app password should work in a reader, in Bruno and in curl. Splitting
