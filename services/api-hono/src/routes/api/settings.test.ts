@@ -3,6 +3,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vite-
 import type { PGlite } from "@electric-sql/pglite";
 import { createApp } from "../../app.js";
 import { createTestAuth, createTestDb, seedAppPassword, type TestDb } from "../../db/test-utils.js";
+import * as schema from "../../db/schema.js";
 import type { Env } from "../../env.js";
 
 // Mock Redis-dependent modules so admin health/queue checks don't need a real connection
@@ -238,6 +239,38 @@ describe("GET /api/settings/status", () => {
     expect(body.credentials.kosync).toBeDefined();
     expect(body.credentials.kosync.service).toBe("kosync");
     expect(body.credentials.hardcover).toBeDefined();
+    expect(body.credentials.hardcover.service).toBe("hardcover");
+  });
+
+  it("reports a configured KoSync credential, which lives in its own table", async () => {
+    // KoSync is keyed by user in kosync_credentials, while opds and hardcover
+    // are rows in service_credentials keyed by (user, service). Reading KoSync
+    // from the wrong one answers "not configured" no matter what the user has
+    // saved, and the settings form then renders permanently blank.
+    const { userId, rawKey } = await seedApiKey({ label: "KoSync Owner", isAdmin: false });
+    await db.insert(schema.kosyncCredentials).values({
+      userId,
+      username: "reader-on-the-kobo",
+      secretHash: "sha256-of-the-wire-secret",
+    });
+
+    const { app } = createTestApp();
+    const response = await app.request("/api/settings/status", {
+      method: "GET",
+      headers: { Authorization: `Bearer ${rawKey}` },
+    });
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.credentials.kosync).toMatchObject({
+      service: "kosync",
+      configured: true,
+      username: "reader-on-the-kobo",
+    });
+
+    // And the other two still come back under their own names — they are read
+    // from a different table, so nothing here may be positional.
+    expect(body.credentials.opds.service).toBe("opds");
     expect(body.credentials.hardcover.service).toBe("hardcover");
   });
 });

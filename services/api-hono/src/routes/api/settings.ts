@@ -1,7 +1,7 @@
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import { and, eq, sql } from "drizzle-orm";
 import { HTTPException } from "hono/http-exception";
-import { serviceCredentials } from "#db";
+import { kosyncCredentials, serviceCredentials } from "#db";
 import type { AppVariables } from "../../context.js";
 import { getUserId, isAdmin, requireAdmin } from "../../shared/auth.js";
 import { invalidateRouteCache } from "../../services/cache.js";
@@ -193,11 +193,37 @@ export const settingsRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
     const userId = getUserId(c);
     const admin = isAdmin(c);
 
-    // Non-admin users only need their credential connection status
+    // Non-admin users only need their credential connection status.
+    //
+    // KoSync lives in its own table, keyed by user rather than by (user,
+    // service), so it cannot be folded into the service_credentials loop below.
+    // Reading it from the wrong table leaves the settings form permanently
+    // blank while GET /api/credentials/kosync happily reports it configured.
     const credentialsPromise = (async () => {
-      const services = ["opds", "kosync", "hardcover"] as const;
-      const results = await Promise.all(
-        services.map(async (service) => {
+      const kosyncPromise = db
+        .select({
+          username: kosyncCredentials.username,
+          createdAt: kosyncCredentials.createdAt,
+          updatedAt: kosyncCredentials.updatedAt,
+        })
+        .from(kosyncCredentials)
+        .where(eq(kosyncCredentials.userId, userId))
+        .limit(1)
+        .then(([row]) =>
+          row
+            ? {
+                configured: true as const,
+                service: "kosync" as const,
+                username: row.username,
+                createdAt: row.createdAt,
+                updatedAt: row.updatedAt,
+              }
+            : { configured: false as const, service: "kosync" as const },
+        );
+
+      const services = ["opds", "hardcover"] as const;
+      const results = await Promise.all([
+        ...services.map(async (service) => {
           const [row] = await db
             .select({
               username: serviceCredentials.username,
@@ -221,12 +247,17 @@ export const settingsRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
             updatedAt: row.updatedAt,
           };
         }),
-      );
+        kosyncPromise,
+      ]);
 
+      // Keyed by service rather than by position: the three come from two
+      // different tables, so the array order is an implementation detail and a
+      // positional read silently mislabels them the moment it changes.
+      const byService = Object.fromEntries(results.map((r) => [r.service, r]));
       return {
-        opds: results[0]!,
-        kosync: results[1]!,
-        hardcover: results[2]!,
+        opds: byService.opds!,
+        kosync: byService.kosync!,
+        hardcover: byService.hardcover!,
       };
     })();
 
@@ -353,9 +384,9 @@ export const settingsRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
     const userId = getUserId(c);
 
     const [kosyncCred] = await db
-      .select({ id: serviceCredentials.id })
-      .from(serviceCredentials)
-      .where(and(eq(serviceCredentials.service, "kosync"), eq(serviceCredentials.userId, userId)))
+      .select({ userId: kosyncCredentials.userId })
+      .from(kosyncCredentials)
+      .where(eq(kosyncCredentials.userId, userId))
       .limit(1);
 
     const kosyncConfigured = !!kosyncCred;
