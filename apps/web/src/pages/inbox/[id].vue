@@ -43,14 +43,14 @@ defineShortcuts({
 const route = useRoute("/inbox/[id]");
 const toast = useToast();
 const queryCache = useQueryCache();
-const { isAdmin, apiKeyId: currentApiKeyId } = useAuth();
+const { isAdmin, userId: currentUserId } = useAuth();
 
 const id = route.params.id;
 
 const { data: book, status, refetch } = useInboxDetailLoader();
 
 const canEditBook = computed(
-  () => isAdmin.value || (book.value?.createdBy && book.value.createdBy === currentApiKeyId.value),
+  () => isAdmin.value || (book.value?.createdBy && book.value.createdBy === currentUserId.value),
 );
 
 const selections = ref<Record<string, { source: ApprovedFieldSource; value: unknown }>>({});

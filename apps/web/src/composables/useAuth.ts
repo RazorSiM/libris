@@ -1,24 +1,42 @@
 import { computed } from "vue";
 import { storeToRefs } from "pinia";
-import { useMutation, useQueryCache } from "@pinia/colada";
+import { useQueryCache } from "@pinia/colada";
 import { useAuthStore } from "~/stores/auth";
-import { useApiClient } from "~/composables/useApiClient";
+import { authClient } from "~/lib/auth-client";
 
+/**
+ * The app's view of who is signed in.
+ *
+ * The surface is unchanged from the API-key era on purpose — a dozen call
+ * sites depend on it — but everything underneath now goes through the Better
+ * Auth client. `login` is the one exception: it takes an email and password
+ * instead of a key, because there is no key to paste any more.
+ *
+ * No call site outside this file should touch authClient. Keeping the boundary
+ * here is what let the transport change without the app noticing.
+ */
 export function useAuth() {
   const queryCache = useQueryCache();
   const store = useAuthStore();
-  const { authenticated, checked, admin, label, keyId } = storeToRefs(store);
+  const { authenticated, checked, admin, label, userId: storedUserId } = storeToRefs(store);
 
   const isAuthenticated = computed(() => authenticated.value);
   const isAdmin = computed(() => admin.value);
   const userLabel = computed(() => label.value);
-  const apiKeyId = computed(() => keyId.value);
+  const userId = computed(() => storedUserId.value);
 
   function clearFrontendQueryCache() {
     queryCache.cancelQueries({});
     for (const entry of queryCache.getEntries()) {
       queryCache.remove(entry);
     }
+  }
+
+  function clearAuthState() {
+    authenticated.value = false;
+    admin.value = false;
+    label.value = null;
+    storedUserId.value = null;
   }
 
   // Generation counter to prevent stale check() responses from overwriting
@@ -33,21 +51,20 @@ export function useAuth() {
     const gen = authGeneration;
     pending = (async () => {
       try {
-        const client = useApiClient();
-        const res = await client.api.auth.session.$get();
-        const data = await res.json();
+        const { data } = await authClient.getSession();
         // If auth state changed while we were waiting (e.g. logout), discard
         if (gen !== authGeneration) return;
-        authenticated.value = data.authenticated;
-        admin.value = data.isAdmin ?? false;
-        label.value = data.label ?? null;
-        keyId.value = data.apiKeyId ?? null;
+        if (data?.user) {
+          authenticated.value = true;
+          admin.value = data.user.role === "admin";
+          label.value = data.user.name ?? data.user.email ?? null;
+          storedUserId.value = data.user.id;
+        } else {
+          clearAuthState();
+        }
       } catch {
         if (gen !== authGeneration) return;
-        authenticated.value = false;
-        admin.value = false;
-        label.value = null;
-        keyId.value = null;
+        clearAuthState();
       }
       checked.value = true;
       pending = null;
@@ -55,48 +72,51 @@ export function useAuth() {
     return pending;
   }
 
-  const loginMutation = useMutation({
-    mutation: async (apiKey: string) => {
-      const client = useApiClient();
-      const res = await client.api.auth.login.$post({ json: { apiKey } });
-      if (!res.ok) {
-        throw new Error("Invalid API key");
-      }
-      return res.json();
-    },
-    onSuccess: () => {
-      clearFrontendQueryCache();
-      authenticated.value = true;
-      checked.value = false;
-      admin.value = false;
-      label.value = null;
-      keyId.value = null;
-    },
-  });
-
-  async function login(apiKey: string) {
+  /**
+   * Sign in with email and password.
+   *
+   * Throws two distinguishable errors on purpose: the login page tells the
+   * user to check their password in one case and to try again in the other,
+   * and collapsing them sends people chasing the wrong problem.
+   */
+  async function login(email: string, password: string) {
+    let result: Awaited<ReturnType<typeof authClient.signIn.email>>;
     try {
-      await loginMutation.mutateAsync(apiKey);
-      // Fetch session details (isAdmin, label) after successful login
-      await check();
-    } catch (error) {
-      if (error instanceof Error && error.message === "Invalid API key") {
-        throw error;
-      }
+      result = await authClient.signIn.email({ email, password });
+    } catch {
       throw new Error("Network error, please try again");
     }
+    if (result.error) {
+      // A throttled attempt is NOT a wrong password, and saying so sends the
+      // user to reset a password that was fine. Generic text is the right
+      // answer for a rejected credential; it is the wrong answer for a 429.
+      if (result.error.status === 429) {
+        throw new Error("Too many sign-in attempts. Please wait a moment and try again.");
+      }
+      throw new Error(result.error.message ?? "Invalid email or password");
+    }
+
+    clearFrontendQueryCache();
+    clearAuthState();
+    authenticated.value = true;
+    // Force check() to run: the sign-in response does not carry the role.
+    checked.value = false;
+    await check();
   }
 
   async function logout() {
     // Bump generation to invalidate any in-flight check() that might
     // re-authenticate after we clear state.
     authGeneration++;
-    const client = useApiClient();
-    await client.api.auth.logout.$post();
-    authenticated.value = false;
-    admin.value = false;
-    label.value = null;
-    keyId.value = null;
+    pending = null;
+    try {
+      await authClient.signOut();
+    } catch {
+      // A failed sign-out request must not strand the user in a signed-in UI.
+      // The cookie may survive, but the next check() will discover that.
+    }
+    clearAuthState();
+    checked.value = true;
     clearFrontendQueryCache();
   }
 
@@ -104,7 +124,7 @@ export function useAuth() {
     authenticated.value = value;
     checked.value = true;
     if (value) {
-      // Re-fetch session details (isAdmin, label) after auth state change
+      // Re-fetch session details (role, name) after auth state change
       checked.value = false;
       await check();
     }
@@ -114,7 +134,7 @@ export function useAuth() {
     isAuthenticated,
     isAdmin,
     userLabel,
-    apiKeyId,
+    userId,
     checked,
     check,
     login,

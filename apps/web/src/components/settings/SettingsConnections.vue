@@ -29,6 +29,9 @@ const settingsStatus = computed(() => settingsState.value.status);
     </template>
 
     <template v-else>
+      <!-- App passwords first: OPDS and KoSync both send you here for the
+           credential, so the thing you need is above the things that need it. -->
+      <SettingsAppPasswords />
       <SettingsOpds />
       <SettingsKosync />
       <SettingsHardcover />

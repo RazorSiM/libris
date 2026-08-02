@@ -6,7 +6,7 @@ export const useAuthStore = defineStore("auth", () => {
   const checked = ref(false);
   const admin = ref(false);
   const label = ref<string | null>(null);
-  const keyId = ref<string | null>(null);
+  const userId = ref<string | null>(null);
 
-  return { authenticated, checked, admin, label, keyId };
+  return { authenticated, checked, admin, label, userId };
 });

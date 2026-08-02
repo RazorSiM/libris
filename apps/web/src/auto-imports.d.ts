@@ -124,6 +124,7 @@ declare global {
   const refThrottled: typeof import("@vueuse/core").refThrottled;
   const refWithControl: typeof import("@vueuse/core").refWithControl;
   const resolveComponent: typeof import("vue").resolveComponent;
+  const resolveRedirect: typeof import("./utils/redirect").resolveRedirect;
   const resolveRef: typeof import("@vueuse/core").resolveRef;
   const shallowReactive: typeof import("vue").shallowReactive;
   const shallowReadonly: typeof import("vue").shallowReadonly;
@@ -173,6 +174,7 @@ declare global {
   const useAttrs: typeof import("vue").useAttrs;
   const useAuth: typeof import("./composables/useAuth").useAuth;
   const useAvatarGroup: typeof import("../../../node_modules/.pnpm/@nuxt+ui@4.5.1_@azure+identity@4.13.1_@tiptap+extensions@3.20.4_@tiptap+core@3.20.4_@ti_6f01dc82bfdf8523036fdb8ead6c47ba/node_modules/@nuxt/ui/dist/runtime/composables/useAvatarGroup.js").useAvatarGroup;
+  const useBanUser: typeof import("./composables/mutations/useUserMutations").useBanUser;
   const useBase64: typeof import("@vueuse/core").useBase64;
   const useBattery: typeof import("@vueuse/core").useBattery;
   const useBluetooth: typeof import("@vueuse/core").useBluetooth;
@@ -196,6 +198,7 @@ declare global {
   const useCountdown: typeof import("@vueuse/core").useCountdown;
   const useCounter: typeof import("@vueuse/core").useCounter;
   const useCreateApiKey: typeof import("./composables/mutations/useApiKeyMutations").useCreateApiKey;
+  const useCreateUser: typeof import("./composables/mutations/useUserMutations").useCreateUser;
   const useCssModule: typeof import("vue").useCssModule;
   const useCssSupports: typeof import("@vueuse/core").useCssSupports;
   const useCssVar: typeof import("@vueuse/core").useCssVar;
@@ -318,6 +321,7 @@ declare global {
   const useReadingQuery: typeof import("./composables/queries/useReadingQuery").useReadingQuery;
   const useRefHistory: typeof import("@vueuse/core").useRefHistory;
   const useRefetchMetadata: typeof import("./composables/mutations/useBookMutations").useRefetchMetadata;
+  const useRemoveUser: typeof import("./composables/mutations/useUserMutations").useRemoveUser;
   const useReorganizeBook: typeof import("./composables/mutations/useBookMutations").useReorganizeBook;
   const useRescanBook: typeof import("./composables/mutations/useBookMutations").useRescanBook;
   const useResizable: typeof import("../../../node_modules/.pnpm/@nuxt+ui@4.8.1_@azure+identity@4.13.1_@internationalized+date@3.12.2_@internationalized_c290ff1effd5693eb1e051e07b348ac7/node_modules/@nuxt/ui/dist/runtime/composables/useResizable").useResizable;
@@ -339,6 +343,8 @@ declare global {
   const useServerEvents: typeof import("./composables/useServerEvents").useServerEvents;
   const useSessionStorage: typeof import("@vueuse/core").useSessionStorage;
   const useSetReadingStatus: typeof import("./composables/mutations/useBookMutations").useSetReadingStatus;
+  const useSetUserPassword: typeof import("./composables/mutations/useUserMutations").useSetUserPassword;
+  const useSetUserRole: typeof import("./composables/mutations/useUserMutations").useSetUserRole;
   const useSettingsStatusQuery: typeof import("./composables/queries/useSettingsStatusQuery").useSettingsStatusQuery;
   const useSetup: typeof import("./composables/mutations/useApiKeyMutations").useSetup;
   const useShare: typeof import("@vueuse/core").useShare;
@@ -378,6 +384,7 @@ declare global {
   const useUpload: typeof import("./composables/useUpload").useUpload;
   const useUrlSearchParams: typeof import("@vueuse/core").useUrlSearchParams;
   const useUserMedia: typeof import("@vueuse/core").useUserMedia;
+  const useUsersQuery: typeof import("./composables/mutations/useUserMutations").useUsersQuery;
   const useVModel: typeof import("@vueuse/core").useVModel;
   const useVModels: typeof import("@vueuse/core").useVModels;
   const useVibrate: typeof import("@vueuse/core").useVibrate;
@@ -431,6 +438,9 @@ declare global {
     WritableComputedRef,
   } from "vue";
   import("vue");
+  // @ts-ignore
+  export type { ManagedUser } from "./composables/mutations/useUserMutations";
+  import("./composables/mutations/useUserMutations");
   // @ts-ignore
   export type { JobFilters } from "./composables/queries/useJobsQuery";
   import("./composables/queries/useJobsQuery");
@@ -593,6 +603,7 @@ declare module "vue" {
     readonly refThrottled: UnwrapRef<(typeof import("@vueuse/core"))["refThrottled"]>;
     readonly refWithControl: UnwrapRef<(typeof import("@vueuse/core"))["refWithControl"]>;
     readonly resolveComponent: UnwrapRef<(typeof import("vue"))["resolveComponent"]>;
+    readonly resolveRedirect: UnwrapRef<(typeof import("./utils/redirect"))["resolveRedirect"]>;
     readonly shallowReactive: UnwrapRef<(typeof import("vue"))["shallowReactive"]>;
     readonly shallowReadonly: UnwrapRef<(typeof import("vue"))["shallowReadonly"]>;
     readonly shallowRef: UnwrapRef<(typeof import("vue"))["shallowRef"]>;
@@ -647,6 +658,9 @@ declare module "vue" {
     readonly useAsyncState: UnwrapRef<(typeof import("@vueuse/core"))["useAsyncState"]>;
     readonly useAttrs: UnwrapRef<(typeof import("vue"))["useAttrs"]>;
     readonly useAuth: UnwrapRef<(typeof import("./composables/useAuth"))["useAuth"]>;
+    readonly useBanUser: UnwrapRef<
+      (typeof import("./composables/mutations/useUserMutations"))["useBanUser"]
+    >;
     readonly useBase64: UnwrapRef<(typeof import("@vueuse/core"))["useBase64"]>;
     readonly useBattery: UnwrapRef<(typeof import("@vueuse/core"))["useBattery"]>;
     readonly useBluetooth: UnwrapRef<(typeof import("@vueuse/core"))["useBluetooth"]>;
@@ -681,6 +695,9 @@ declare module "vue" {
     readonly useCounter: UnwrapRef<(typeof import("@vueuse/core"))["useCounter"]>;
     readonly useCreateApiKey: UnwrapRef<
       (typeof import("./composables/mutations/useApiKeyMutations"))["useCreateApiKey"]
+    >;
+    readonly useCreateUser: UnwrapRef<
+      (typeof import("./composables/mutations/useUserMutations"))["useCreateUser"]
     >;
     readonly useCssModule: UnwrapRef<(typeof import("vue"))["useCssModule"]>;
     readonly useCssSupports: UnwrapRef<(typeof import("@vueuse/core"))["useCssSupports"]>;
@@ -882,6 +899,9 @@ declare module "vue" {
     readonly useRefetchMetadata: UnwrapRef<
       (typeof import("./composables/mutations/useBookMutations"))["useRefetchMetadata"]
     >;
+    readonly useRemoveUser: UnwrapRef<
+      (typeof import("./composables/mutations/useUserMutations"))["useRemoveUser"]
+    >;
     readonly useReorganizeBook: UnwrapRef<
       (typeof import("./composables/mutations/useBookMutations"))["useReorganizeBook"]
     >;
@@ -926,6 +946,12 @@ declare module "vue" {
     readonly useSessionStorage: UnwrapRef<(typeof import("@vueuse/core"))["useSessionStorage"]>;
     readonly useSetReadingStatus: UnwrapRef<
       (typeof import("./composables/mutations/useBookMutations"))["useSetReadingStatus"]
+    >;
+    readonly useSetUserPassword: UnwrapRef<
+      (typeof import("./composables/mutations/useUserMutations"))["useSetUserPassword"]
+    >;
+    readonly useSetUserRole: UnwrapRef<
+      (typeof import("./composables/mutations/useUserMutations"))["useSetUserRole"]
     >;
     readonly useSettingsStatusQuery: UnwrapRef<
       (typeof import("./composables/queries/useSettingsStatusQuery"))["useSettingsStatusQuery"]
@@ -980,6 +1006,9 @@ declare module "vue" {
     readonly useUpload: UnwrapRef<(typeof import("./composables/useUpload"))["useUpload"]>;
     readonly useUrlSearchParams: UnwrapRef<(typeof import("@vueuse/core"))["useUrlSearchParams"]>;
     readonly useUserMedia: UnwrapRef<(typeof import("@vueuse/core"))["useUserMedia"]>;
+    readonly useUsersQuery: UnwrapRef<
+      (typeof import("./composables/mutations/useUserMutations"))["useUsersQuery"]
+    >;
     readonly useVModel: UnwrapRef<(typeof import("@vueuse/core"))["useVModel"]>;
     readonly useVModels: UnwrapRef<(typeof import("@vueuse/core"))["useVModels"]>;
     readonly useVibrate: UnwrapRef<(typeof import("@vueuse/core"))["useVibrate"]>;
