@@ -61,14 +61,14 @@ async function seedFinishedBookProgress(
     const lastDate = dates[dates.length - 1];
     const ownerId = getAdminUserId();
     await sql`
-      INSERT INTO reading_progress (api_key_id, book_id, document, device, progress, percentage, timestamp, updated_at)
+      INSERT INTO reading_progress (user_id, book_id, document, device, progress, percentage, timestamp, updated_at)
       VALUES (${ownerId}, ${bookId}, ${contentHash}, ${device}, ${String(opts.percentage)}, ${opts.percentage}, ${timestampEpoch}, ${lastDate.toISOString()})
     `;
 
     // Create reading_progress_history entries
     for (const date of dates) {
       await sql`
-        INSERT INTO reading_progress_history (api_key_id, book_id, document, device, progress, percentage, created_at)
+        INSERT INTO reading_progress_history (user_id, book_id, document, device, progress, percentage, created_at)
         VALUES (${ownerId}, ${bookId}, ${contentHash}, ${device}, ${String(opts.percentage)}, ${opts.percentage}, ${date.toISOString()})
       `;
     }

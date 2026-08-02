@@ -29,9 +29,9 @@ async function seedProgress(contentHash: string, device: string, percentage: num
   const ownerId = getAdminUserId();
   try {
     await sql`
-      INSERT INTO reading_progress (api_key_id, document, device, progress, percentage, timestamp)
+      INSERT INTO reading_progress (user_id, document, device, progress, percentage, timestamp)
       VALUES (${ownerId}, ${contentHash}, ${device}, ${"pos"}, ${percentage.toFixed(4)}, ${ts})
-      ON CONFLICT (api_key_id, document, device) DO UPDATE SET percentage = ${percentage.toFixed(4)}, timestamp = ${ts}, updated_at = NOW()
+      ON CONFLICT (user_id, document, device) DO UPDATE SET percentage = ${percentage.toFixed(4)}, timestamp = ${ts}, updated_at = NOW()
     `;
   } finally {
     await sql.end();

@@ -14,6 +14,7 @@ import { test, expect } from "./fixtures";
 import {
   API_BASE,
   authHeaders,
+  getAdminUserId,
   getSql,
   deleteAllBooks,
   waitForBookInInbox,
@@ -33,8 +34,8 @@ async function seedReviewBookWithCandidates(
     const title = overrides.title ?? "Error Test Book";
     const author = overrides.author ?? "Test Author";
     const [row] = await sql`
-      INSERT INTO books (status, title, author, genres)
-      VALUES ('review', ${title}, ${author}, '{}'::text[])
+      INSERT INTO books (status, title, author, genres, created_by)
+      VALUES ('review', ${title}, ${author}, '{}'::text[], ${getAdminUserId()})
       RETURNING id
     `;
     const bookId = row.id as string;
@@ -71,8 +72,8 @@ async function seedInboxBook(overrides: { title?: string } = {}): Promise<string
   const sql = getSql();
   try {
     const [row] = await sql`
-      INSERT INTO books (status, title, genres)
-      VALUES ('inbox', ${overrides.title ?? "Inbox Test Book"}, '{}'::text[])
+      INSERT INTO books (status, title, genres, created_by)
+      VALUES ('inbox', ${overrides.title ?? "Inbox Test Book"}, '{}'::text[], ${getAdminUserId()})
       RETURNING id
     `;
     const bookId = row.id as string;

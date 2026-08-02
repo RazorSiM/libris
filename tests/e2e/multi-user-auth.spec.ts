@@ -12,6 +12,7 @@ import type { Page } from "@playwright/test";
 import { test, expect } from "./fixtures";
 import {
   getAdminUserId,
+  getRegularUserId,
   API_BASE,
   authHeaders,
   userAuthHeaders,
@@ -487,24 +488,19 @@ test.describe("Upload Attribution", () => {
     });
     expect(uploadRes.status).toBe(200);
 
-    // Check the upload_registry was created with the user's API key
+    // The registry attributes the upload to a PERSON, not to the credential it
+    // arrived with — which is why this reads the user id directly rather than
+    // fetching the uploader's key, as it used to.
     const sql = getSql();
     try {
-      // Get the regular user's key ID
-      const keysRes = await fetch(`${API_BASE}/api/auth/keys`, {
-        headers: userAuthHeaders(),
-      });
-      const keysData = (await keysRes.json()) as { keys: Array<{ id: string }> };
-      const userKeyId = keysData.keys[0].id;
-
       const [registry] = await sql`
-        SELECT api_key_id, filename FROM upload_registry
+        SELECT user_id, filename FROM upload_registry
         WHERE filename = 'attribution-test.epub'
         ORDER BY created_at DESC LIMIT 1
       `;
 
       expect(registry).toBeDefined();
-      expect(registry.api_key_id).toBe(userKeyId);
+      expect(registry.user_id).toBe(getRegularUserId());
     } finally {
       await sql.end();
     }

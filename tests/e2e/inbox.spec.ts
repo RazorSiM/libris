@@ -14,12 +14,14 @@ import { test, expect } from "./fixtures";
 import {
   API_BASE,
   authHeaders,
+  getAdminUserId,
   getSql,
   deleteAllBooks,
   seedBookFile,
   goPath,
   waitForAllQueuesIdle,
 } from "./helpers";
+import { ADMIN } from "./helpers/accounts.js";
 
 /** Insert a book in review status with metadata candidates. Returns the book id. */
 async function seedReviewBook(
@@ -36,14 +38,15 @@ async function seedReviewBook(
     const genresLiteral = `{${genres.map((g) => `"${g}"`).join(",")}}`;
     const [row] = await sql`
       INSERT INTO books (
-        status, title, author, description, genres
+        status, title, author, description, genres, created_by
       )
       VALUES (
         'review',
         ${overrides.title ?? "Test Review Book"},
         ${overrides.author ?? "Test Author"},
         ${overrides.description ?? null},
-        ${genresLiteral}::text[]
+        ${genresLiteral}::text[],
+        ${getAdminUserId()}
       )
       RETURNING id
     `;
@@ -58,12 +61,13 @@ async function seedInboxBook(overrides: { title?: string; author?: string } = {}
   const sql = getSql();
   try {
     const [row] = await sql`
-      INSERT INTO books (status, title, author, genres)
+      INSERT INTO books (status, title, author, genres, created_by)
       VALUES (
         'inbox',
         ${overrides.title ?? "Inbox Book"},
         ${overrides.author ?? null},
-        '{}'::text[]
+        '{}'::text[],
+        ${getAdminUserId()}
       )
       RETURNING id
     `;
@@ -140,13 +144,10 @@ test.describe("Inbox List", { tag: "@smoke" }, () => {
     test.beforeAll(async () => {
       await deleteAllBooks();
 
-      const keyRes = await fetch(`${API_BASE}/api/auth/keys`, { headers: authHeaders() });
-      const keyData = (await keyRes.json()) as {
-        keys: Array<{ id: string; label: string; isAdmin: boolean }>;
-      };
-      const adminKey = keyData.keys.find((key) => key.isAdmin);
-      if (!adminKey) throw new Error("Expected admin API key to exist");
-      uploaderLabel = adminKey.label;
+      // Was the label of the isAdmin key from /api/auth/keys, back when a key
+      // was a person. The byline shows the USER's name now, and app passwords
+      // carry no role at all — so there is nothing to look up.
+      uploaderLabel = ADMIN.name;
 
       // Review books with files (for status badges, format column, search)
       const reviewId = await seedReviewBook({ title: "Review Alpha", author: "Author A" });
@@ -179,7 +180,7 @@ test.describe("Inbox List", { tag: "@smoke" }, () => {
       try {
         await sql`
           UPDATE books
-          SET created_by = ${adminKey.id}
+          SET created_by = ${getAdminUserId()}
           WHERE id = ${uploaderBookId}
         `;
       } finally {

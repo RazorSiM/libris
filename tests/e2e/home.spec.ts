@@ -41,8 +41,8 @@ async function seedInboxBook(title?: string): Promise<string> {
   const sql = getSql();
   try {
     const [row] = await sql`
-      INSERT INTO books (status, title, author)
-      VALUES ('inbox', ${title ?? "Inbox Book"}, 'Some Author')
+      INSERT INTO books (status, title, author, created_by)
+      VALUES ('inbox', ${title ?? "Inbox Book"}, 'Some Author', ${getAdminUserId()})
       RETURNING id
     `;
     return row.id;
@@ -74,7 +74,7 @@ async function seedReadingProgress(
     // Create reading progress linked via content_hash
     const ownerId = getAdminUserId();
     await sql`
-      INSERT INTO reading_progress (api_key_id, document, device, progress, percentage, timestamp)
+      INSERT INTO reading_progress (user_id, document, device, progress, percentage, timestamp)
       VALUES (${ownerId}, ${contentHash}, ${opts.device}, ${String(opts.percentage)}, ${opts.percentage}, ${opts.timestampEpoch})
     `;
   } finally {

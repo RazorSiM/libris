@@ -2,7 +2,7 @@ import { copyFile, mkdir, readdir, unlink } from "node:fs/promises";
 import { basename, join } from "node:path";
 import type { Page } from "@playwright/test";
 import postgres from "postgres";
-import { getAdminCookie, getUserCookie } from "./accounts.js";
+import { getAdminCookie, getAdminUserId, getUserCookie } from "./accounts.js";
 import { requireDatabaseUrl } from "./resolve-urls.js";
 
 export const API_BASE = "http://localhost:3000";
@@ -273,17 +273,23 @@ export async function seedOrganizedBook(
     isbn10?: string;
     isbn13?: string;
     coverPath?: string;
+    /** Whose book this is. Defaults to the admin — see the INSERT below. */
+    createdBy?: string;
   } = {},
 ): Promise<string> {
   const sql = getSql();
   try {
     const genres = overrides.genres ?? [];
     const genresLiteral = `{${genres.map((g) => `"${g}"`).join(",")}}`;
+    // created_by is NOT NULL since the cutover migration, so a seeded book must
+    // name an owner. Defaulting to the admin mirrors what the server does with
+    // an unattributed file, and keeps every caller that does not care about
+    // ownership working unchanged.
     const [row] = await sql`
       INSERT INTO books (
         status, title, author, description, genres,
         publisher, published_year, language, page_count,
-        isbn_10, isbn_13, cover_path, approved_at
+        isbn_10, isbn_13, cover_path, created_by, approved_at
       )
       VALUES (
         'organized',
@@ -298,6 +304,7 @@ export async function seedOrganizedBook(
         ${overrides.isbn10 ?? null},
         ${overrides.isbn13 ?? null},
         ${overrides.coverPath ?? null},
+        ${overrides.createdBy ?? getAdminUserId()},
         NOW()
       )
       RETURNING id

@@ -14,8 +14,8 @@ import type { Page } from "@playwright/test";
 import { test, expect } from "./fixtures";
 import {
   getAdminUserId,
+  getRegularUserId,
   API_BASE,
-  userAuthHeaders,
   sessionHeaders,
   userSessionHeaders,
   getSql,
@@ -48,20 +48,12 @@ async function goStats(page: Page): Promise<void> {
 }
 
 /**
- * Get the admin's ownerId from the session endpoint.
+ * Was getUserKeyId(): a fetch of /api/auth/keys to find the regular user's key
+ * id, which doubled as their owner id because a key WAS a person. Ownership
+ * hangs off the person now, so a credential id is not an identity — seeding
+ * progress against one would produce rows no query can find. global-setup
+ * exposes the user id directly.
  */
-
-/**
- * Get the regular user's ownerId from the keys list (user sees only own key).
- */
-async function getUserKeyId(): Promise<string> {
-  const keysRes = await fetch(`${API_BASE}/api/auth/keys`, {
-    headers: userAuthHeaders(),
-  });
-  const data = (await keysRes.json()) as { keys: Array<{ id: string }> };
-  if (data.keys.length === 0) throw new Error("No user key found");
-  return data.keys[0].id;
-}
 
 /**
  * Seed reading progress for a book, linked to a specific ownerId.
@@ -76,9 +68,9 @@ async function seedProgressForUser(
   const ts = Math.floor(Date.now() / 1000);
   try {
     await sql`
-      INSERT INTO reading_progress (book_id, api_key_id, document, device, progress, percentage, timestamp)
+      INSERT INTO reading_progress (book_id, user_id, document, device, progress, percentage, timestamp)
       VALUES (${bookId}, ${ownerId}, ${contentHash}, 'e2e-device', 'pos', ${percentage.toFixed(4)}, ${ts})
-      ON CONFLICT (api_key_id, document, device) DO UPDATE
+      ON CONFLICT (user_id, document, device) DO UPDATE
         SET percentage = ${percentage.toFixed(4)}, timestamp = ${ts}, updated_at = NOW()
     `;
   } finally {
@@ -98,7 +90,7 @@ async function seedProgressHistory(
   const sql = getSql();
   try {
     await sql`
-      INSERT INTO reading_progress_history (book_id, api_key_id, document, device, progress, percentage)
+      INSERT INTO reading_progress_history (book_id, user_id, document, device, progress, percentage)
       VALUES (${bookId}, ${ownerId}, ${contentHash}, 'e2e-device', 'pos', ${percentage.toFixed(4)})
     `;
   } finally {
@@ -337,7 +329,7 @@ test.describe("Multi-User: Reading Progress Isolation", () => {
 
     // Get key IDs
     const adminUserId = getAdminUserId();
-    const userKeyId = await getUserKeyId();
+    const userKeyId = getRegularUserId();
 
     // Admin at 75% on the book
     await seedProgressForUser(sharedBookId, contentHash, adminUserId, 0.75);
@@ -379,7 +371,7 @@ test.describe("Multi-User: Stats Isolation", () => {
     await deleteAllBooks();
 
     const adminUserId = getAdminUserId();
-    const userKeyId = await getUserKeyId();
+    const userKeyId = getRegularUserId();
 
     // Admin finishes 3 books
     for (let i = 0; i < 3; i++) {
