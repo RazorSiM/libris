@@ -253,7 +253,7 @@ describe("credential isolation", () => {
     expect(adminCred.configured).toBe(true);
     expect(adminCred.username).toBe("admin-opds");
 
-    // Regular user sees unconfigured (no credentials for their apiKeyId)
+    // Regular user sees unconfigured (no credentials for their userId)
     const { data: userCred, status: userStatus } = await $fetchRaw("/api/credentials/opds", {
       headers: userAuth(),
     });
@@ -404,7 +404,7 @@ describe("KoSync progress isolation", () => {
 // data layer here; the full endpoint is tested in E2E against real Postgres.
 
 describe("reading stats isolation", () => {
-  it("reading progress rows are scoped per user via apiKeyId", async () => {
+  it("reading progress rows are scoped per user via userId", async () => {
     // Seed books
     const { data: booksData } = await $fetchRaw("/__test/seed-books", {
       method: "POST",
@@ -441,7 +441,7 @@ describe("reading stats isolation", () => {
     ] as const) {
       await testDb.insert(readingProgress).values({
         bookId,
-        apiKeyId: adminKeyId,
+        userId: adminKeyId,
         document: hash,
         device: "kindle",
         progress: "end",
@@ -453,7 +453,7 @@ describe("reading stats isolation", () => {
     // User finishes 1 book
     await testDb.insert(readingProgress).values({
       bookId: ub1.id,
-      apiKeyId: userKeyId,
+      userId: userKeyId,
       document: "hash-u1",
       device: "kindle",
       progress: "end",
@@ -465,13 +465,13 @@ describe("reading stats isolation", () => {
     const adminRows = await testDb
       .select()
       .from(readingProgress)
-      .where(eq(readingProgress.apiKeyId, adminKeyId));
+      .where(eq(readingProgress.userId, adminKeyId));
     expect(adminRows).toHaveLength(3);
 
     const userRows = await testDb
       .select()
       .from(readingProgress)
-      .where(eq(readingProgress.apiKeyId, userKeyId));
+      .where(eq(readingProgress.userId, userKeyId));
     expect(userRows).toHaveLength(1);
 
     // Verify all admin rows have >= 95% (finished threshold)
@@ -498,7 +498,7 @@ describe("hardcover sync log isolation", () => {
     // Insert sync log entries for both users directly
     await testDb.insert(hardcoverSyncLog).values({
       bookId,
-      apiKeyId: adminKeyId,
+      userId: adminKeyId,
       lastStatus: "currently_reading",
       lastProgress: "0.5000",
       lastSyncedAt: new Date(),
@@ -506,7 +506,7 @@ describe("hardcover sync log isolation", () => {
 
     await testDb.insert(hardcoverSyncLog).values({
       bookId,
-      apiKeyId: userKeyId,
+      userId: userKeyId,
       lastStatus: "want_to_read",
       lastProgress: "0.0000",
       lastSyncedAt: new Date(),
@@ -516,14 +516,14 @@ describe("hardcover sync log isolation", () => {
     const adminLogs = await testDb
       .select()
       .from(hardcoverSyncLog)
-      .where(eq(hardcoverSyncLog.apiKeyId, adminKeyId));
+      .where(eq(hardcoverSyncLog.userId, adminKeyId));
     expect(adminLogs).toHaveLength(1);
     expect(adminLogs[0]!.lastStatus).toBe("currently_reading");
 
     const userLogs = await testDb
       .select()
       .from(hardcoverSyncLog)
-      .where(eq(hardcoverSyncLog.apiKeyId, userKeyId));
+      .where(eq(hardcoverSyncLog.userId, userKeyId));
     expect(userLogs).toHaveLength(1);
     expect(userLogs[0]!.lastStatus).toBe("want_to_read");
   });

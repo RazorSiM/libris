@@ -2,10 +2,10 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vite-
 import type { PGlite } from "@electric-sql/pglite";
 import { createMemoryKVStore } from "../../services/kv-store.js";
 import { createApp } from "../../app.js";
-import { createTestAuth, createTestDb, type TestDb } from "../../db/test-utils.js";
+import { createTestAuth, createTestDb, seedAppPassword, type TestDb } from "../../db/test-utils.js";
 import * as schema from "../../db/schema.js";
 import type { Env } from "../../env.js";
-import { generateApiKey, sealToken } from "../../shared/auth.js";
+import { sealToken } from "../../shared/auth.js";
 
 // Stub the metadata client so the route handler is the unit under test —
 // searchHardcover itself is covered by metadata-clients.test.ts.
@@ -58,25 +58,17 @@ let pglite: PGlite;
 let db: TestDb;
 
 async function seedApiKey() {
-  const key = await generateApiKey();
-  const [row] = await db
-    .insert(schema.apiKeys)
-    .values({
-      keyPrefix: key.keyPrefix,
-      keyHash: key.keyHash,
-      label: "Hardcover Test Key",
-      isAdmin: false,
-    })
-    .returning({ id: schema.apiKeys.id });
-  return { apiKeyId: row.id, rawKey: key.rawKey };
+  // A real Better Auth app password: the key column holds a hash the plugin
+  // computes, so a hand-written api_keys row cannot authenticate.
+  return await seedAppPassword(createTestAuth(db, TEST_ENV), db, { name: "Hardcover Test Key" });
 }
 
-async function seedHardcoverCredential(apiKeyId: string) {
+async function seedHardcoverCredential(userId: string) {
   const sealed = await sealToken("test-token", TEST_ENV.API_SECRET_KEY);
   await db.insert(schema.serviceCredentials).values({
     service: "hardcover",
-    apiKeyId,
-    username: `hc-user-${apiKeyId}`,
+    userId,
+    username: `hc-user-${userId}`,
     passwordHash: sealed,
   });
 }
@@ -122,8 +114,8 @@ beforeEach(async () => {
 
 describe("GET /api/hardcover/search", () => {
   it("returns search results when credential is configured and metadata is enabled", async () => {
-    const { apiKeyId, rawKey } = await seedApiKey();
-    await seedHardcoverCredential(apiKeyId);
+    const { userId, rawKey } = await seedApiKey();
+    await seedHardcoverCredential(userId);
 
     searchHardcoverMock.mockResolvedValueOnce([
       {
@@ -163,8 +155,8 @@ describe("GET /api/hardcover/search", () => {
   });
 
   it("returns 503 when hardcover.metadataEnabled is false", async () => {
-    const { apiKeyId, rawKey } = await seedApiKey();
-    await seedHardcoverCredential(apiKeyId);
+    const { userId, rawKey } = await seedApiKey();
+    await seedHardcoverCredential(userId);
     await db.insert(schema.appSettings).values({
       key: "hardcover.metadataEnabled",
       value: false,
@@ -180,8 +172,8 @@ describe("GET /api/hardcover/search", () => {
   });
 
   it("rejects queries shorter than 2 characters", async () => {
-    const { apiKeyId, rawKey } = await seedApiKey();
-    await seedHardcoverCredential(apiKeyId);
+    const { userId, rawKey } = await seedApiKey();
+    await seedHardcoverCredential(userId);
 
     const { app } = createTestApp();
     const response = await app.request("/api/hardcover/search?q=a", {

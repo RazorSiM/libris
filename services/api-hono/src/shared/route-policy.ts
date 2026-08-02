@@ -11,15 +11,6 @@ interface RouteRule {
  * First match wins; default is "api-key".
  */
 const ROUTE_TABLE: RouteRule[] = [
-  // TRANSITIONAL — must stay above the /api/auth/ rule below.
-  //
-  // The legacy bespoke key-management routes still sit inside the prefix Better
-  // Auth now owns. Without this rule the skip below would strip their
-  // authentication entirely and expose key creation and deletion to anonymous
-  // callers. Delete this line together with the routes themselves in
-  // libris-5ng.15.
-  { pattern: "/api/auth/keys", match: "prefix", policy: "api-key" },
-
   // Better Auth owns this whole prefix and authenticates its own endpoints, so
   // this middleware must stand aside for all of it. It has to be a prefix, not
   // a set of exact paths: plugins nest their routes (/api/auth/admin/*,
@@ -29,6 +20,10 @@ const ROUTE_TABLE: RouteRule[] = [
   // The trailing slash is deliberate — it keeps sibling routes such as
   // /api/authors from being swallowed by the rule.
   { pattern: "/api/auth/", match: "prefix", policy: "skip" },
+
+  // First-run bootstrap. Public by design, and self-guarding: it 409s once
+  // any user exists (routes/api/setup.ts).
+  { pattern: "/api/setup", match: "exact", policy: "public" },
 
   // Optional auth (enriched response if authed)
   { pattern: "/api/health", match: "exact", policy: "optional" },

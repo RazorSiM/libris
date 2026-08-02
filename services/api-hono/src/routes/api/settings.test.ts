@@ -2,10 +2,8 @@ import { createMemoryKVStore } from "../../services/kv-store.js";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import type { PGlite } from "@electric-sql/pglite";
 import { createApp } from "../../app.js";
-import { createTestAuth, createTestDb, type TestDb } from "../../db/test-utils.js";
-import * as schema from "../../db/schema.js";
+import { createTestAuth, createTestDb, seedAppPassword, type TestDb } from "../../db/test-utils.js";
 import type { Env } from "../../env.js";
-import { generateApiKey } from "../../shared/auth.js";
 
 // Mock Redis-dependent modules so admin health/queue checks don't need a real connection
 vi.mock("../../services/redis.js", () => ({
@@ -58,18 +56,11 @@ let pglite: PGlite;
 let db: TestDb;
 
 async function seedApiKey(options: { label: string; isAdmin: boolean }) {
-  const key = await generateApiKey();
-  const [row] = await db
-    .insert(schema.apiKeys)
-    .values({
-      keyPrefix: key.keyPrefix,
-      keyHash: key.keyHash,
-      label: options.label,
-      isAdmin: options.isAdmin,
-    })
-    .returning({ id: schema.apiKeys.id });
-
-  return { apiKeyId: row.id, rawKey: key.rawKey };
+  // isAdmin is a role on the USER now, not a flag on the credential.
+  return await seedAppPassword(createTestAuth(db, TEST_ENV), db, {
+    name: options.label,
+    role: options.isAdmin ? "admin" : "user",
+  });
 }
 
 function createTestApp() {

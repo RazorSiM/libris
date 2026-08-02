@@ -69,7 +69,9 @@ function createTestApp() {
     baseURL: "http://localhost:3000",
   });
 
-  return createApp({
+  // The auth instance is returned alongside the app: accounts are created
+  // server-side through it now, since there is no HTTP sign-up.
+  const { app } = createApp({
     services: {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       db: db as any,
@@ -88,6 +90,7 @@ function createTestApp() {
     },
     env: TEST_ENV,
   });
+  return { app, auth };
 }
 
 beforeAll(async () => {
@@ -119,9 +122,12 @@ describe("GET /api/auth/ok", () => {
 });
 
 describe("the auth middleware stands aside for /api/auth/", () => {
-  it("lets an unauthenticated sign-up through", async () => {
+  it("reaches Better Auth rather than being 401'd by the middleware", async () => {
     const { app } = createTestApp();
 
+    // sign-up is disabled outright (disableSignUp), so the interesting thing is
+    // WHICH refusal comes back: 400 from Better Auth means the request reached
+    // it, where 401 would mean the middleware blocked the prefix.
     const res = await app.request("/api/auth/sign-up/email", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -132,36 +138,30 @@ describe("the auth middleware stands aside for /api/auth/", () => {
       }),
     });
 
-    expect(res.status).toBe(200);
-    expect(await db.select().from(schema.users)).toHaveLength(1);
+    expect(res.status).toBe(400);
+    expect(await db.select().from(schema.users)).toHaveLength(0);
   });
 
   it("reaches nested plugin endpoints, not just the first path segment", async () => {
-    const { app } = createTestApp();
+    const { app, auth } = createTestApp();
 
     // The admin plugin nests its routes under /api/auth/admin/*. Asserting on
     // the status alone cannot distinguish "middleware blocked it" from "Better
     // Auth refused an anonymous caller" — both are 401 — so this signs in as a
     // real admin and expects the endpoint to actually answer.
-    await app.request("/api/auth/sign-up/email", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
+    // createUser, not sign-up: self-registration is disabled, and the admin
+    // plugin permits a bare server-side call. It also sets the role directly,
+    // which matters — a session carries a snapshot of the user from
+    // secondaryStorage, so promoting afterwards would be invisible to it.
+    await auth.api.createUser({
+      body: {
         email: "boss@example.com",
         password: "correct-horse-battery",
         name: "Boss",
-      }),
+        role: "admin",
+      },
     });
 
-    // The admin plugin's endpoints require an existing admin, and sign-up
-    // deliberately yields the "user" role, so promote out of band.
-    await db.update(schema.users).set({ role: "admin" });
-
-    // Then sign in AFRESH. The session Better Auth wrote at sign-up carries a
-    // snapshot of the user, and it is served from secondary storage, so the
-    // promotion above is invisible to that older session. (Same root cause as
-    // the deleted-row test in lib/auth.integration.test.ts — see libris-5ng.20:
-    // changing a role has to revoke the user's sessions to take effect.)
     const signedIn = await app.request("/api/auth/sign-in/email", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -194,22 +194,29 @@ describe("the auth middleware stands aside for /api/auth/", () => {
 });
 
 describe("sign-in over HTTP", () => {
-  async function signUp(app: ReturnType<typeof createTestApp>["app"]) {
-    return await app.request("/api/auth/sign-up/email", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
+  /** Accounts are admin-created; there is no HTTP sign-up to drive. */
+  async function createAccount(auth: ReturnType<typeof createTestApp>["auth"]) {
+    return await auth.api.createUser({
+      body: {
         email: "reader@example.com",
         password: "correct-horse-battery",
         name: "Reader",
-      }),
+      },
     });
   }
 
   it("issues a session cookie that /api/auth/get-session accepts", async () => {
-    const { app } = createTestApp();
-    const created = await signUp(app);
-    const cookie = created.headers.get("set-cookie")?.split(";")[0] ?? "";
+    const { app, auth } = createTestApp();
+    await createAccount(auth);
+
+    // The cookie has to come from a real sign-in over the mounted handler —
+    // that is the path this suite exists to cover.
+    const signedIn = await app.request("/api/auth/sign-in/email", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: "reader@example.com", password: "correct-horse-battery" }),
+    });
+    const cookie = signedIn.headers.get("set-cookie")?.split(";")[0] ?? "";
     expect(cookie).toBeTruthy();
 
     const res = await app.request("/api/auth/get-session", { headers: { cookie } });
@@ -219,8 +226,8 @@ describe("sign-in over HTTP", () => {
   });
 
   it("rejects a bad password through the mounted handler", async () => {
-    const { app } = createTestApp();
-    await signUp(app);
+    const { app, auth } = createTestApp();
+    await createAccount(auth);
 
     const res = await app.request("/api/auth/sign-in/email", {
       method: "POST",

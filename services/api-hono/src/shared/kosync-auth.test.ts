@@ -1,23 +1,21 @@
 /**
- * Integration tests: KoSync authentication.
+ * Integration tests: KoSync authentication (libris-5ng.14).
  *
- * Uses a PGlite in-memory database and the Hono test client (app.request())
- * so no live server or external dependencies are required.
- *
- * Covers:
- * - Timing-normalized rejection for invalid usernames (no side-channel)
- * - Raw header-password fallback path in compareWithMd5Fallback
- * - Standard auth flows for POST body auth and KOReader header auth
+ * KOReader sends md5(password) as x-auth-key, so the md5 digest IS the bearer
+ * secret — the plaintext never reaches the server. The old implementation
+ * stored bcrypt(md5(password)) and accepted EITHER the digest or the plaintext,
+ * which is two valid secrets where there should be one. The suite now asserts
+ * the plaintext is rejected, which is the point of the change.
  */
 
-import { hash } from "bcryptjs";
 import { afterAll, beforeAll, describe, expect, it } from "vite-plus/test";
 import type { PGlite } from "@electric-sql/pglite";
 import { createApp } from "../app.js";
-import { createTestAuth, createTestDb, type TestDb } from "../db/test-utils.js";
+import { createTestAuth, createTestDb, seedUser, type TestDb } from "../db/test-utils.js";
 import * as schema from "../db/schema.js";
 import { createMemoryKVStore } from "../services/kv-store.js";
 import { md5 } from "./auth.js";
+import { hashKosyncSecret } from "./kosync-auth.js";
 import type { Env } from "../env.js";
 
 // ---------------------------------------------------------------------------
@@ -77,24 +75,13 @@ beforeAll(async () => {
 
   ({ app } = createApp({ services, env: TEST_ENV }));
 
-  // Seed an API key so we can associate KoSync credentials
-  const [testKey] = await db
-    .insert(schema.apiKeys)
-    .values({
-      keyPrefix: "test____",
-      keyHash: "test-kosync-key-hash-unique",
-      label: "KoSync Test Key",
-      isAdmin: false,
-    })
-    .returning();
+  const owner = await seedUser(db, { name: "KoSync Reader" });
 
-  // Seed KoSync credentials — DB stores bcrypt(md5(password)) to match KOReader behavior
-  const passwordHash = await hash(md5(KOSYNC_PASS), 10);
-  await db.insert(schema.serviceCredentials).values({
-    service: "kosync",
+  // The stored value is sha256 of exactly what KOReader puts on the wire.
+  await db.insert(schema.kosyncCredentials).values({
+    userId: owner,
     username: KOSYNC_USER,
-    passwordHash,
-    apiKeyId: testKey.id,
+    secretHash: hashKosyncSecret(md5(KOSYNC_PASS)),
   });
 });
 
@@ -136,21 +123,35 @@ describe("KoSync Auth (integration)", () => {
     expect(body.authorized).toBe("OK");
   });
 
-  it("authenticates with raw password sent via x-auth-key header — exercises fallback path", async () => {
-    // KOReader normally sends md5(password) via x-auth-key, but a direct API
-    // user might send the raw password. The md5 fallback in compareWithMd5Fallback
-    // should handle this.
+  it("rejects the raw plaintext sent via x-auth-key", async () => {
+    // The old compareWithMd5Fallback accepted this, which meant the account had
+    // two valid secrets: the digest AND the plaintext it was derived from. Only
+    // the value KOReader actually sends authenticates now.
     const res = await app.request("/kosync/users/auth", {
       headers: {
         "x-auth-user": KOSYNC_USER,
-        // Send raw password instead of md5(password)
         "x-auth-key": KOSYNC_PASS,
       },
     });
 
-    expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(body.authorized).toBe("OK");
+    expect(res.status).toBe(401);
+  });
+
+  it("rejects a digest that belongs to a different username", async () => {
+    // Guards against a lookup that verifies the secret without binding it to
+    // the username it was issued for.
+    const other = await seedUser(db, { name: "Other Reader" });
+    await db.insert(schema.kosyncCredentials).values({
+      userId: other,
+      username: "other-kosync-user",
+      secretHash: hashKosyncSecret(md5("other-pass")),
+    });
+
+    const res = await app.request("/kosync/users/auth", {
+      headers: { "x-auth-user": KOSYNC_USER, "x-auth-key": md5("other-pass") },
+    });
+
+    expect(res.status).toBe(401);
   });
 
   it("rejects wrong password with 401", async () => {

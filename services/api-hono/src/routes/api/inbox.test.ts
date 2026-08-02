@@ -6,27 +6,30 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vite-plus/test";
 import type { PGlite } from "@electric-sql/pglite";
 import { eq } from "drizzle-orm";
 import { createApp } from "../../app.js";
-import { createTestAuth, createTestDb, type TestDb } from "../../db/test-utils.js";
+import { createTestAuth, createTestDb, seedAppPassword, type TestDb } from "../../db/test-utils.js";
 import * as schema from "../../db/schema.js";
 import type { Env } from "../../env.js";
-import { generateApiKey } from "../../shared/auth.js";
 
 let pglite: PGlite;
 let db: TestDb;
 
-async function seedApiKey() {
-  const key = await generateApiKey();
-  const [row] = await db
-    .insert(schema.apiKeys)
-    .values({
-      keyPrefix: key.keyPrefix,
-      keyHash: key.keyHash,
-      label: "Inbox Test Key",
-      isAdmin: false,
-    })
-    .returning({ id: schema.apiKeys.id });
+/**
+ * Each test builds its own Env around a fresh tmpdir, but none of those paths
+ * matter to auth — createTestAuth only reads the secret, NODE_ENV and the
+ * cookie/proxy settings. A fixed env here lets the credential be seeded before
+ * the per-test one exists.
+ */
+const AUTH_ENV = {
+  NODE_ENV: "test",
+  BETTER_AUTH_SECRET: "test-better-auth-secret-at-least-32-chars!!",
+  TRUST_PROXY_HEADERS: "0",
+  COOKIE_DOMAIN: "",
+} as unknown as Env;
 
-  return { apiKeyId: row.id, rawKey: key.rawKey };
+async function seedApiKey() {
+  // A real Better Auth app password: the key column holds a hash the plugin
+  // computes, so a hand-written api_keys row cannot authenticate.
+  return await seedAppPassword(createTestAuth(db, AUTH_ENV), db, { name: "Inbox Test Key" });
 }
 
 beforeAll(async () => {
@@ -41,7 +44,7 @@ afterAll(async () => {
 
 describe("POST /api/inbox/upload", () => {
   it("keeps the existing file and writes a collision-safe unique name", async () => {
-    const { apiKeyId, rawKey } = await seedApiKey();
+    const { userId, rawKey } = await seedApiKey();
     const inboxPath = await mkdtemp(join(tmpdir(), "libris-inbox-upload-"));
     const originalPath = join(inboxPath, "same.epub");
 
@@ -118,12 +121,12 @@ describe("POST /api/inbox/upload", () => {
     const [registryRow] = await db
       .select({
         filename: schema.uploadRegistry.filename,
-        apiKeyId: schema.uploadRegistry.apiKeyId,
+        userId: schema.uploadRegistry.userId,
       })
       .from(schema.uploadRegistry)
-      .where(eq(schema.uploadRegistry.apiKeyId, apiKeyId));
+      .where(eq(schema.uploadRegistry.userId, userId));
 
-    expect(registryRow).toEqual({ filename: "same.epub", apiKeyId });
+    expect(registryRow).toEqual({ filename: "same.epub", userId });
 
     await rm(inboxPath, { recursive: true, force: true });
   });
@@ -131,12 +134,12 @@ describe("POST /api/inbox/upload", () => {
 
 describe("PATCH /api/inbox/:id/rescan", () => {
   it("deletes candidates and resets status atomically in a transaction", async () => {
-    const { apiKeyId, rawKey } = await seedApiKey();
+    const { userId, rawKey } = await seedApiKey();
 
     // Create a book in "review" status owned by our API key
     const [book] = await db
       .insert(schema.books)
-      .values({ status: "review", title: "Test Book", author: "Author", createdBy: apiKeyId })
+      .values({ status: "review", title: "Test Book", author: "Author", createdBy: userId })
       .returning({ id: schema.books.id });
 
     // Insert a "file" candidate (should be preserved) and a "google" candidate (should be deleted)
@@ -231,14 +234,14 @@ describe("PATCH /api/inbox/:id/rescan", () => {
 
 describe("GET /api/inbox", () => {
   it("returns uploader labels in list and detail responses without exposing api key fields", async () => {
-    const { apiKeyId, rawKey } = await seedApiKey();
+    const { userId, rawKey } = await seedApiKey();
     const [book] = await db
       .insert(schema.books)
       .values({
         status: "review",
         title: "Inbox Book",
         author: "Inbox Author",
-        createdBy: apiKeyId,
+        createdBy: userId,
       })
       .returning({ id: schema.books.id });
 
@@ -300,7 +303,7 @@ describe("GET /api/inbox", () => {
     const listBody = await listResponse.json();
     const listedBook = listBody.data.find((item: { id: string }) => item.id === book.id);
     expect(listedBook).toBeDefined();
-    expect(listedBook.uploader).toEqual({ id: apiKeyId, label: "Inbox Test Key" });
+    expect(listedBook.uploader).toEqual({ id: userId, label: "Inbox Test Key" });
     expect(listedBook.uploader).not.toHaveProperty("key");
     expect(listedBook.uploader).not.toHaveProperty("keyPrefix");
     expect(listedBook.uploader).not.toHaveProperty("keyHash");
@@ -313,7 +316,7 @@ describe("GET /api/inbox", () => {
 
     expect(detailResponse.status).toBe(200);
     const detailBody = await detailResponse.json();
-    expect(detailBody.uploader).toEqual({ id: apiKeyId, label: "Inbox Test Key" });
+    expect(detailBody.uploader).toEqual({ id: userId, label: "Inbox Test Key" });
     expect(detailBody.uploader).not.toHaveProperty("key");
     expect(detailBody.uploader).not.toHaveProperty("keyPrefix");
     expect(detailBody.uploader).not.toHaveProperty("keyHash");

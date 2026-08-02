@@ -2,7 +2,7 @@ import { OpenAPIHono } from "@hono/zod-openapi";
 import { Scalar } from "@scalar/hono-api-reference";
 import type { AppVariables } from "../context.js";
 import pkg from "../../package.json" with { type: "json" };
-import { authRoutes } from "./api/auth.js";
+import { setupRoutes } from "./api/setup.js";
 import { healthRoutes } from "./api/health.js";
 import { settingsRoutes } from "./api/settings.js";
 import { libraryRoutes } from "./api/library.js";
@@ -14,6 +14,7 @@ import { dashboardRoutes } from "./api/dashboard.js";
 import { statsRoutes } from "./api/stats.js";
 import { readingStatusRoutes } from "./api/reading-status.js";
 import { credentialsRoutes } from "./api/credentials.js";
+import { appPasswordRoutes } from "./api/app-passwords.js";
 import { jobsRoutes } from "./api/jobs.js";
 import { hardcoverRoutes } from "./api/hardcover.js";
 import { createEventsRoutes } from "./api/events.js";
@@ -34,7 +35,7 @@ import { testRoutes } from "./__test/index.js";
 export function createRouter(upgradeWebSocket: UpgradeWebSocket) {
   const router = new OpenAPIHono<{ Variables: AppVariables }>()
     // API routes
-    .route("/api/auth", authRoutes)
+    .route("/api/setup", setupRoutes)
     .route("/api/health", healthRoutes)
     .route("/api/settings", settingsRoutes)
     .route("/api/library", libraryRoutes)
@@ -46,6 +47,7 @@ export function createRouter(upgradeWebSocket: UpgradeWebSocket) {
     .route("/api/stats", statsRoutes)
     .route("/api/reading-status", readingStatusRoutes)
     .route("/api/credentials", credentialsRoutes)
+    .route("/api/app-passwords", appPasswordRoutes)
     .route("/api/jobs", jobsRoutes)
     .route("/api/hardcover", hardcoverRoutes)
     .route("/api/events", createEventsRoutes(upgradeWebSocket))

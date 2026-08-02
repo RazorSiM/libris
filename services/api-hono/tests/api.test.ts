@@ -17,7 +17,7 @@ let testDb: Db;
 // ── Per-test state ───────────────────────────────────────────────
 
 let apiKey: string;
-let apiKeyId: string;
+let userId: string;
 
 function auth() {
   return { authorization: `Bearer ${apiKey}` };
@@ -44,7 +44,7 @@ beforeEach(async () => {
   });
   expect(status).toBe(201);
   apiKey = data.key;
-  apiKeyId = data.id;
+  userId = data.id;
 });
 
 afterEach(async () => {
@@ -158,7 +158,7 @@ describe("auth key management", () => {
   });
 
   it("DELETE /api/auth/keys/:id — cannot delete active key", async () => {
-    const { status } = await $fetchRaw(`/api/auth/keys/${apiKeyId}`, {
+    const { status } = await $fetchRaw(`/api/auth/keys/${userId}`, {
       method: "DELETE",
       headers: auth(),
     });
@@ -1347,7 +1347,7 @@ describe("GET /api/stats", () => {
     const finishedAt = new Date();
     const startedAt = new Date(finishedAt.getTime() - 10 * 86400 * 1000);
     await testDb.insert(readingAggregate).values({
-      apiKeyId,
+      userId,
       bookId: book!.id,
       manualStatus: "finished",
       manualStartedAt: startedAt,
@@ -1390,7 +1390,7 @@ describe("GET /api/stats", () => {
     expect(book).toBeDefined();
 
     await testDb.insert(readingAggregate).values({
-      apiKeyId,
+      userId,
       bookId: book!.id,
       externalStatus: "finished",
       externalStatusSyncedAt: new Date(),

@@ -7,7 +7,6 @@ import { eq } from "drizzle-orm";
 import { createTestDb, type TestDb } from "../db/test-utils.js";
 import * as schema from "../db/schema.js";
 import { computeChecksumFromBuffer } from "../shared/checksum.js";
-import { generateApiKey } from "../shared/auth.js";
 import { __setTestDb } from "../services/db.js";
 import { createBookDetectedProcessor } from "./book-detected.js";
 
@@ -27,7 +26,7 @@ afterEach(async () => {
   await db.delete(schema.bookFiles);
   await db.delete(schema.uploadRegistry);
   await db.delete(schema.books);
-  await db.delete(schema.apiKeys);
+  await db.delete(schema.users);
 });
 
 afterAll(async () => {
@@ -54,19 +53,24 @@ function createMockJob(data: Record<string, unknown>) {
   } as never;
 }
 
-/** Helper to create an API key and return its DB id. */
-async function createApiKey(label: string) {
-  const key = await generateApiKey();
-  const [apiKey] = await db
-    .insert(schema.apiKeys)
-    .values({
-      keyPrefix: key.keyPrefix,
-      keyHash: key.keyHash,
-      label,
-      isAdmin: false,
-    })
-    .returning({ id: schema.apiKeys.id });
-  return apiKey;
+/**
+ * Create a user and return its id.
+ *
+ * Ownership is a property of the person now, not of the credential they
+ * uploaded with, so these fixtures are users rather than api keys.
+ */
+let userSeq = 0;
+async function createUser(name: string, role: "user" | "admin" = "user") {
+  userSeq += 1;
+  const id = `usr_worker_${userSeq}`;
+  await db.insert(schema.users).values({
+    id,
+    name,
+    email: `${id}@example.test`,
+    emailVerified: true,
+    role,
+  });
+  return { id };
 }
 
 describe("createBookDetectedProcessor", () => {
@@ -77,12 +81,12 @@ describe("createBookDetectedProcessor", () => {
 
     await writeFile(filePath, fileContent);
 
-    const apiKey = await createApiKey("Worker Test Key");
+    const uploader = await createUser("Worker Test Key");
 
     const checksum = computeChecksumFromBuffer(fileContent);
     await db.insert(schema.uploadRegistry).values({
       checksum,
-      apiKeyId: apiKey.id,
+      userId: uploader.id,
       filename: "same.epub",
     });
 
@@ -103,7 +107,7 @@ describe("createBookDetectedProcessor", () => {
       .from(schema.bookFiles)
       .where(eq(schema.bookFiles.bookId, book.id));
 
-    expect(book.createdBy).toBe(apiKey.id);
+    expect(book.createdBy).toBe(uploader.id);
     expect(bookFile).toEqual({
       originalName: "same.epub",
       inboxPath: filePath,
@@ -124,15 +128,15 @@ describe("createBookDetectedProcessor", () => {
 
     await writeFile(filePath, fileContent);
 
-    const firstUploader = await createApiKey("First Uploader");
-    const secondUploader = await createApiKey("Second Uploader");
+    const firstUploader = await createUser("First Uploader");
+    const secondUploader = await createUser("Second Uploader");
 
     const checksum = computeChecksumFromBuffer(fileContent);
 
     // Insert the first uploader with an earlier timestamp
     await db.insert(schema.uploadRegistry).values({
       checksum,
-      apiKeyId: firstUploader.id,
+      userId: firstUploader.id,
       filename: "first-upload.epub",
       createdAt: new Date("2025-01-01T00:00:00Z"),
     });
@@ -140,7 +144,7 @@ describe("createBookDetectedProcessor", () => {
     // Insert the second uploader with a later timestamp
     await db.insert(schema.uploadRegistry).values({
       checksum,
-      apiKeyId: secondUploader.id,
+      userId: secondUploader.id,
       filename: "second-upload.epub",
       createdAt: new Date("2025-01-02T00:00:00Z"),
     });
@@ -181,9 +185,9 @@ describe("createBookDetectedProcessor", () => {
 
     await writeFile(filePath, fileContent);
 
-    const userA = await createApiKey("User A");
-    const userB = await createApiKey("User B");
-    const userC = await createApiKey("User C");
+    const userA = await createUser("User A");
+    const userB = await createUser("User B");
+    const userC = await createUser("User C");
 
     const checksum = computeChecksumFromBuffer(fileContent);
 
@@ -191,19 +195,19 @@ describe("createBookDetectedProcessor", () => {
     await db.insert(schema.uploadRegistry).values([
       {
         checksum,
-        apiKeyId: userA.id,
+        userId: userA.id,
         filename: "a.epub",
         createdAt: new Date("2025-01-01T00:00:00Z"),
       },
       {
         checksum,
-        apiKeyId: userB.id,
+        userId: userB.id,
         filename: "b.epub",
         createdAt: new Date("2025-01-02T00:00:00Z"),
       },
       {
         checksum,
-        apiKeyId: userC.id,
+        userId: userC.id,
         filename: "c.epub",
         createdAt: new Date("2025-01-03T00:00:00Z"),
       },
@@ -220,6 +224,62 @@ describe("createBookDetectedProcessor", () => {
     // ALL registry rows for this checksum must be deleted
     const registryAfter = await db.select().from(schema.uploadRegistry);
     expect(registryAfter).toHaveLength(0);
+
+    await rm(tempDir, { recursive: true, force: true });
+  });
+  it("falls back to the oldest admin when a file arrives with no upload registry row", async () => {
+    // Files dropped straight into the inbox directory are found by the watcher,
+    // not uploaded through the API, so nothing recorded who they belong to.
+    // books.created_by is NOT NULL since the cutover, so "nobody" is no longer
+    // an option — the oldest admin owns them, matching the rule the cutover
+    // migration used for the books it found unowned.
+    const tempDir = await mkdtemp(join(tmpdir(), "libris-book-detected-"));
+    const filePath = join(tempDir, "dropped.epub");
+    await writeFile(filePath, Buffer.from("watcher-detected file"));
+
+    const firstAdmin = await createUser("First Admin", "admin");
+    await createUser("Second Admin", "admin");
+    await createUser("Plain User");
+
+    const { queuedJobs, queue } = createMockQueue();
+    await createBookDetectedProcessor(queue)(
+      createMockJob({ filePath, detectedAt: new Date().toISOString() }),
+    );
+
+    const [book] = await db
+      .select({ id: schema.books.id, createdBy: schema.books.createdBy })
+      .from(schema.books);
+    expect(book.createdBy).toBe(firstAdmin.id);
+    expect(queuedJobs).toHaveLength(1);
+
+    // The filename still comes from the file on disk, as before.
+    const [bookFile] = await db
+      .select({ originalName: schema.bookFiles.originalName })
+      .from(schema.bookFiles)
+      .where(eq(schema.bookFiles.bookId, book.id));
+    expect(bookFile.originalName).toBe("dropped.epub");
+
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("refuses to ingest an unattributed file when the install has no admin", async () => {
+    // Better to leave the file in the inbox and fail the job loudly than to
+    // invent an owner or write a half-book the NOT NULL constraint rejects
+    // deeper in the transaction.
+    const tempDir = await mkdtemp(join(tmpdir(), "libris-book-detected-"));
+    const filePath = join(tempDir, "no-admin.epub");
+    await writeFile(filePath, Buffer.from("no admin anywhere"));
+
+    await createUser("Plain User");
+
+    const { queue } = createMockQueue();
+    await expect(
+      createBookDetectedProcessor(queue)(
+        createMockJob({ filePath, detectedAt: new Date().toISOString() }),
+      ),
+    ).rejects.toThrow(/admin/i);
+
+    expect(await db.select().from(schema.books)).toHaveLength(0);
 
     await rm(tempDir, { recursive: true, force: true });
   });

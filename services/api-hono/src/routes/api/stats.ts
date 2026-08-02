@@ -2,7 +2,7 @@ import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import { sql } from "drizzle-orm";
 import { books, readingAggregate, readingProgress, readingProgressHistory } from "#db";
 import type { AppVariables } from "../../context.js";
-import { getApiKeyId } from "../../shared/auth.js";
+import { getUserId } from "../../shared/auth.js";
 import { FINISHED_THRESHOLD, PAUSED_DAYS } from "../../lib/reading-status.js";
 import { cachedRoute } from "../../middleware/cache.js";
 
@@ -154,14 +154,14 @@ function rowsOf<T>(result: unknown): T[] {
  * totals but are excluded from date-bucketed metrics, which is the right
  * default until/unless we start syncing read entries from Hardcover.
  */
-function bookStateCte(apiKeyId: string) {
+function bookStateCte(userId: string) {
   return sql`
     user_progress AS (
       SELECT
         rp.book_id,
         MAX(CAST(rp.percentage AS numeric)) AS max_percentage
       FROM ${readingProgress} rp
-      WHERE rp.api_key_id = ${apiKeyId} AND rp.book_id IS NOT NULL
+      WHERE rp.user_id = ${userId} AND rp.book_id IS NOT NULL
       GROUP BY rp.book_id
     ),
     user_history AS (
@@ -170,7 +170,7 @@ function bookStateCte(apiKeyId: string) {
         MIN(rph.created_at) AS first_activity,
         MAX(rph.created_at) AS last_activity
       FROM ${readingProgressHistory} rph
-      WHERE rph.api_key_id = ${apiKeyId} AND rph.book_id IS NOT NULL
+      WHERE rph.user_id = ${userId} AND rph.book_id IS NOT NULL
       GROUP BY rph.book_id
     ),
     book_state AS (
@@ -202,7 +202,7 @@ function bookStateCte(apiKeyId: string) {
       LEFT JOIN user_progress up ON up.book_id = b.id
       LEFT JOIN user_history uh ON uh.book_id = b.id
       LEFT JOIN ${readingAggregate} ra
-        ON ra.book_id = b.id AND ra.api_key_id = ${apiKeyId}
+        ON ra.book_id = b.id AND ra.user_id = ${userId}
       WHERE b.status = 'organized'
     )
   `;
@@ -210,7 +210,7 @@ function bookStateCte(apiKeyId: string) {
 
 export const statsRoutes = router.openapi(statsRoute, async (c) => {
   const db = c.get("db");
-  const apiKeyId = getApiKeyId(c);
+  const userId = getUserId(c);
 
   const { year: yearParam } = c.req.valid("query");
   const now = new Date();
@@ -237,7 +237,7 @@ export const statsRoutes = router.openapi(statsRoute, async (c) => {
     // known finish date so external-only (no kosync, no manual date) is
     // excluded from those buckets.
     db.execute<{ all_time: string; this_year: string; this_month: string }>(sql`
-      WITH ${bookStateCte(apiKeyId)}
+      WITH ${bookStateCte(userId)}
       SELECT
         COUNT(*) FILTER (WHERE effective_status = 'finished')::text AS all_time,
         COUNT(*) FILTER (
@@ -251,7 +251,7 @@ export const statsRoutes = router.openapi(statsRoute, async (c) => {
 
     // Genre distribution of finished books (top 10). Includes manual + Hardcover.
     db.execute<{ genre: string; count: string }>(sql`
-      WITH ${bookStateCte(apiKeyId)}
+      WITH ${bookStateCte(userId)}
       SELECT g AS genre, COUNT(*)::text AS count
       FROM book_state, unnest(book_state.genres) AS g
       WHERE effective_status = 'finished' AND array_length(book_state.genres, 1) > 0
@@ -265,7 +265,7 @@ export const statsRoutes = router.openapi(statsRoute, async (c) => {
       WITH active_days AS (
         SELECT DISTINCT DATE(created_at) AS day
         FROM ${readingProgressHistory}
-        WHERE api_key_id = ${apiKeyId}
+        WHERE user_id = ${userId}
         ORDER BY day
       ),
       day_groups AS (
@@ -292,7 +292,7 @@ export const statsRoutes = router.openapi(statsRoute, async (c) => {
     // book with both a started_at and finished_at — kosync-derived or manual.
     // External-only books contribute neither and are skipped.
     db.execute<{ avg_days: string }>(sql`
-      WITH ${bookStateCte(apiKeyId)}
+      WITH ${bookStateCte(userId)}
       SELECT COALESCE(
         ROUND(AVG(EXTRACT(EPOCH FROM (finished_at - started_at)) / 86400))::text,
         '0'
@@ -321,7 +321,7 @@ export const statsRoutes = router.openapi(statsRoute, async (c) => {
           ) * COALESCE(b.page_count, 0) AS page_delta
         FROM ${readingProgressHistory} rph
         INNER JOIN ${books} b ON b.id = rph.book_id
-        WHERE rph.api_key_id = ${apiKeyId}
+        WHERE rph.user_id = ${userId}
           AND rph.created_at >= ${heatmapYearStart}::date
           AND rph.created_at < ${heatmapYearEnd}::date
       )
@@ -335,7 +335,7 @@ export const statsRoutes = router.openapi(statsRoute, async (c) => {
     // Books finished per month for the current calendar year (all 12 months).
     // External-only books are excluded — we have no Hardcover finish date.
     db.execute<{ month: string; count: string }>(sql`
-      WITH ${bookStateCte(apiKeyId)},
+      WITH ${bookStateCte(userId)},
       months AS (
         SELECT generate_series(
           DATE_TRUNC('year', CURRENT_DATE),
@@ -376,7 +376,7 @@ export const statsRoutes = router.openapi(statsRoute, async (c) => {
           ) * COALESCE(b.page_count, 0) AS page_delta
         FROM ${readingProgressHistory} rph
         INNER JOIN ${books} b ON b.id = rph.book_id
-        WHERE rph.api_key_id = ${apiKeyId}
+        WHERE rph.user_id = ${userId}
           AND rph.created_at >= NOW() - INTERVAL '97 days'
       ),
       daily AS (
@@ -415,7 +415,7 @@ export const statsRoutes = router.openapi(statsRoute, async (c) => {
     // finished book with a known span — kosync-derived or manual. External-only
     // books are skipped (no known dates).
     db.execute<{ bucket: string; sort_order: string; count: string }>(sql`
-      WITH ${bookStateCte(apiKeyId)},
+      WITH ${bookStateCte(userId)},
       bucket_defs AS (
         SELECT 1 AS sort_order, '0-7' AS bucket
         UNION ALL SELECT 2, '8-14'

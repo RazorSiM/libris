@@ -10,7 +10,6 @@ import {
   BookSelectSchema,
   BookFileSelectSchema,
   BookMetadataCandidateSelectSchema,
-  ApiKeySelectSchema,
   BookUpdateSchema,
 } from "#db";
 
@@ -27,7 +26,6 @@ const wrap = <T extends z.ZodRawShape>(schema: z.ZodObject<T>) => z.object(schem
 const BookBase = wrap(BookSelectSchema).omit({ searchVector: true });
 const BookFileBase = wrap(BookFileSelectSchema);
 const CandidateBase = wrap(BookMetadataCandidateSelectSchema);
-const ApiKeyBase = wrap(ApiKeySelectSchema);
 
 // ── Book file schemas ────────────────────────────────────────────────
 
@@ -233,30 +231,12 @@ export const LibraryPatchBodySchema = wrap(BookUpdateSchema)
   .openapi("LibraryPatchBody");
 
 // ── Auth schemas ─────────────────────────────────────────────────────
-
-export const ApiKeyCreatedSchema = ApiKeyBase.pick({
-  id: true,
-  label: true,
-  createdAt: true,
-})
-  .extend({
-    key: z.string().openapi({ description: "Raw API key (shown only once)" }),
-  })
-  .openapi("ApiKeyCreated");
-
-export const ApiKeyListItemSchema = ApiKeyBase.pick({
-  id: true,
-  label: true,
-  isAdmin: true,
-  createdAt: true,
-  lastUsedAt: true,
-}).openapi("ApiKeyListItem");
-
-export const ApiKeyListSchema = z
-  .object({
-    keys: z.array(ApiKeyListItemSchema),
-  })
-  .openapi("ApiKeyList");
+//
+// The api key response schemas that lived here described the legacy table
+// (label, isAdmin, lastUsedAt) and served the removed /api/auth/keys routes.
+// The app-password endpoints in libris-5ng.15 need schemas shaped to the
+// Better Auth apikey model instead, so they are written there rather than
+// guessed at here.
 
 export const ApiKeyDeletedSchema = z
   .object({

@@ -98,3 +98,45 @@ export function createFetchHelper(app: ReturnType<typeof createApp>["app"]) {
     return { data, status: res.status, headers: res.headers };
   };
 }
+
+/**
+ * Bootstrap the first admin and mint an app password for it.
+ *
+ * Replaces `POST /api/auth/setup`, which returned a raw key and doubled as
+ * both account creation and credential minting. Those are two separate things
+ * now: `/api/setup` creates the admin (and only while no user exists), and app
+ * passwords come from Better Auth.
+ *
+ * The returned key works as `Authorization: Bearer`, as Basic's password and as
+ * `x-api-key`.
+ */
+export async function bootstrapAdmin(
+  services: AppServices,
+  $fetchRaw: ReturnType<typeof createFetchHelper>,
+  options: { email?: string; name?: string } = {},
+): Promise<{ userId: string; rawKey: string }> {
+  const email = options.email ?? "integration-test@example.test";
+  const password = "correct-horse-battery-staple";
+  const { data, status } = await $fetchRaw("/api/setup", {
+    method: "POST",
+    body: { email, password, name: options.name ?? "Integration Admin" },
+  });
+
+  // 409 means the admin already exists. /__test/cleanup preserves accounts by
+  // default — wiping them would sign an E2E run out mid-suite — so a per-test
+  // beforeEach hits this on every run after the first. Sign in rather than
+  // treating it as a failure.
+  let userId: string;
+  if (status === 201) {
+    userId = (data as { id: string }).id;
+  } else if (status === 409) {
+    const signedIn = await services.auth.api.signInEmail({ body: { email, password } });
+    userId = signedIn.user.id;
+  } else {
+    throw new Error(`Bootstrap failed with ${status}: ${JSON.stringify(data)}`);
+  }
+  const created = await services.auth.api.createApiKey({
+    body: { userId, name: "integration-test-key" },
+  });
+  return { userId, rawKey: created.key };
+}

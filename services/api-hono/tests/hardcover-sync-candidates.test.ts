@@ -1,5 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vite-plus/test";
-import { createTestApp, createFetchHelper } from "./setup.js";
+import { bootstrapAdmin, createTestApp, createFetchHelper } from "./setup.js";
 import type { Db } from "../src/db/client.js";
 import {
   books,
@@ -12,22 +12,19 @@ import { findBooksToSyncToHardcover } from "../src/lib/hardcover/sync-candidates
 
 let $fetchRaw: ReturnType<typeof createFetchHelper>;
 let testDb: Db;
-let apiKeyId: string;
+let services: Awaited<ReturnType<typeof createTestApp>>["services"];
+let userId: string;
 
 beforeAll(async () => {
   const testApp = await createTestApp();
   $fetchRaw = createFetchHelper(testApp.app);
   testDb = testApp.db;
+  services = testApp.services;
 });
 
 beforeEach(async () => {
   await $fetchRaw("/__test/cleanup", { method: "POST" });
-  const { data, status } = await $fetchRaw("/api/auth/setup", {
-    method: "POST",
-    body: { label: "integration-test-key" },
-  });
-  expect(status).toBe(201);
-  apiKeyId = data.id;
+  ({ userId } = await bootstrapAdmin(services, $fetchRaw));
 });
 
 afterEach(async () => {
@@ -42,6 +39,7 @@ async function seedBook(opts: {
   const [row] = await testDb
     .insert(books)
     .values({
+      createdBy: userId,
       title: opts.title ?? "Test Book",
       author: "Author",
       status: opts.status ?? "organized",
@@ -55,7 +53,7 @@ async function seedProgress(bookId: string, percentage: string, daysAgo = 0) {
   const ts = Math.floor(Date.now() / 1000) - daysAgo * 86400;
   await testDb.insert(readingProgress).values({
     bookId,
-    apiKeyId,
+    userId,
     document: `doc-${bookId}`,
     device: "test-device",
     progress: "0",
@@ -64,7 +62,7 @@ async function seedProgress(bookId: string, percentage: string, daysAgo = 0) {
   });
   await testDb.insert(readingProgressHistory).values({
     bookId,
-    apiKeyId,
+    userId,
     document: `doc-${bookId}`,
     device: "test-device",
     progress: "0",
@@ -79,7 +77,7 @@ async function seedManualStatus(
   manualStatus: "unread" | "reading" | "finished" | "paused",
 ) {
   await testDb.insert(readingAggregate).values({
-    apiKeyId,
+    userId,
     bookId,
     manualStatus,
     manualSetAt: new Date(),
@@ -91,7 +89,7 @@ describe("findBooksToSyncToHardcover", () => {
     const bookId = await seedBook({ hardcoverBookId: null });
     await seedProgress(bookId, "0.5000");
 
-    const rows = await findBooksToSyncToHardcover(testDb, apiKeyId);
+    const rows = await findBooksToSyncToHardcover(testDb, userId);
     expect(rows).toHaveLength(0);
   });
 
@@ -99,7 +97,7 @@ describe("findBooksToSyncToHardcover", () => {
     const bookId = await seedBook({ hardcoverBookId: 100 });
     await seedProgress(bookId, "0.5000");
 
-    const rows = await findBooksToSyncToHardcover(testDb, apiKeyId);
+    const rows = await findBooksToSyncToHardcover(testDb, userId);
     expect(rows).toHaveLength(1);
     expect(rows[0]!.book_id).toBe(bookId);
     expect(rows[0]!.manual_status).toBeNull();
@@ -109,7 +107,7 @@ describe("findBooksToSyncToHardcover", () => {
     const bookId = await seedBook({ hardcoverBookId: 200 });
     await seedManualStatus(bookId, "finished");
 
-    const rows = await findBooksToSyncToHardcover(testDb, apiKeyId);
+    const rows = await findBooksToSyncToHardcover(testDb, userId);
     expect(rows).toHaveLength(1);
     expect(rows[0]!.book_id).toBe(bookId);
     expect(rows[0]!.manual_status).toBe("finished");
@@ -120,7 +118,7 @@ describe("findBooksToSyncToHardcover", () => {
     const bookId = await seedBook({ hardcoverBookId: 200 });
     await seedManualStatus(bookId, "finished");
     await testDb.insert(hardcoverSyncLog).values({
-      apiKeyId,
+      userId,
       bookId,
       hardcoverUserBookId: 999,
       lastStatus: "finished",
@@ -128,7 +126,7 @@ describe("findBooksToSyncToHardcover", () => {
       lastSyncedAt: new Date(),
     });
 
-    const rows = await findBooksToSyncToHardcover(testDb, apiKeyId);
+    const rows = await findBooksToSyncToHardcover(testDb, userId);
     expect(rows).toHaveLength(0);
   });
 
@@ -136,7 +134,7 @@ describe("findBooksToSyncToHardcover", () => {
     const bookId = await seedBook({ hardcoverBookId: 200 });
     await seedManualStatus(bookId, "paused");
     await testDb.insert(hardcoverSyncLog).values({
-      apiKeyId,
+      userId,
       bookId,
       hardcoverUserBookId: 999,
       lastStatus: "reading",
@@ -144,7 +142,7 @@ describe("findBooksToSyncToHardcover", () => {
       lastSyncedAt: new Date(),
     });
 
-    const rows = await findBooksToSyncToHardcover(testDb, apiKeyId);
+    const rows = await findBooksToSyncToHardcover(testDb, userId);
     expect(rows).toHaveLength(1);
     expect(rows[0]!.manual_status).toBe("paused");
     expect(rows[0]!.last_status).toBe("reading");
@@ -157,7 +155,7 @@ describe("findBooksToSyncToHardcover", () => {
     // Sync log already says 'finished' — effective is 'finished' (from manual),
     // so even though computed would be 'reading', no diff.
     await testDb.insert(hardcoverSyncLog).values({
-      apiKeyId,
+      userId,
       bookId,
       hardcoverUserBookId: 999,
       lastStatus: "finished",
@@ -165,7 +163,7 @@ describe("findBooksToSyncToHardcover", () => {
       lastSyncedAt: new Date(),
     });
 
-    const rows = await findBooksToSyncToHardcover(testDb, apiKeyId);
+    const rows = await findBooksToSyncToHardcover(testDb, userId);
     expect(rows).toHaveLength(0);
   });
 
@@ -173,13 +171,13 @@ describe("findBooksToSyncToHardcover", () => {
     const bookId = await seedBook({ hardcoverBookId: 200 });
     await seedManualStatus(bookId, "finished");
 
-    // Same DB, unknown apiKeyId — should see no candidates because the
+    // Same DB, unknown userId — should see no candidates because the
     // manual-status row is scoped to a different api_key_id.
     const otherApiKeyId = "00000000-0000-0000-0000-000000000000";
     const rowsOther = await findBooksToSyncToHardcover(testDb, otherApiKeyId);
     expect(rowsOther).toHaveLength(0);
 
-    const rowsSelf = await findBooksToSyncToHardcover(testDb, apiKeyId);
+    const rowsSelf = await findBooksToSyncToHardcover(testDb, userId);
     expect(rowsSelf).toHaveLength(1);
   });
 });

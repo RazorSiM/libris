@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { asc, eq } from "drizzle-orm";
-import { bookFiles, books, uploadRegistry } from "#db";
+import { bookFiles, books, uploadRegistry, users } from "#db";
 import { BookDetectedPayloadSchema } from "../types/index.js";
 import type { BookDetectedPayload, BookFormat } from "../types/index.js";
 import type { Job, Queue } from "bullmq";
@@ -19,6 +19,28 @@ const SUPPORTED_FORMATS = new Set<BookFormat>(["epub"]);
 function detectFormat(filePath: string): BookFormat | null {
   const ext = path.extname(filePath).toLowerCase().slice(1);
   return SUPPORTED_FORMATS.has(ext as BookFormat) ? (ext as BookFormat) : null;
+}
+
+/**
+ * The oldest admin, who owns anything that arrives without an uploader.
+ *
+ * Oldest rather than any admin so the choice is deterministic: two files
+ * dropped in the same directory end up with the same owner, and re-running
+ * ingestion does not shuffle ownership around.
+ */
+async function oldestAdminId(db: ReturnType<typeof getDb>): Promise<string> {
+  const [admin] = await db
+    .select({ id: users.id })
+    .from(users)
+    .where(eq(users.role, "admin"))
+    .orderBy(asc(users.createdAt))
+    .limit(1);
+  if (!admin) {
+    throw new Error(
+      "Cannot ingest an unattributed file: no admin exists to own it. Complete first-run setup first.",
+    );
+  }
+  return admin.id;
 }
 
 /**
@@ -85,9 +107,23 @@ export function createBookDetectedProcessor(parseQueue: Queue) {
 
     if (registry) {
       logger.info(
-        `Found upload registry entry for checksum ${checksum}, owner: ${registry.apiKeyId}`,
+        `Found upload registry entry for checksum ${checksum}, owner: ${registry.userId}`,
       );
-      await job.log(`Upload registry match — owner apiKeyId: ${registry.apiKeyId}`);
+      await job.log(`Upload registry match — owner userId: ${registry.userId}`);
+    }
+
+    // 5b. Files the watcher picks up straight from the inbox directory were
+    // never uploaded through the API, so nothing recorded who they belong to.
+    // books.created_by is NOT NULL since the cutover, so they go to the oldest
+    // admin — the same rule the cutover migration applied to the books it found
+    // unowned. Failing here leaves the file in the inbox to be retried, which
+    // beats inventing an owner.
+    const ownerId = registry?.userId ?? (await oldestAdminId(db));
+    if (!registry) {
+      logger.info(
+        `No upload registry entry for checksum ${checksum}, assigning to admin ${ownerId}`,
+      );
+      await job.log(`Unattributed file — assigned to admin ${ownerId}`);
     }
 
     // 6. Create books and book_files records atomically
@@ -98,7 +134,7 @@ export function createBookDetectedProcessor(parseQueue: Queue) {
         .insert(books)
         .values({
           status: "inbox",
-          ...(registry ? { createdBy: registry.apiKeyId } : {}),
+          createdBy: ownerId,
         })
         .returning({ id: books.id });
 

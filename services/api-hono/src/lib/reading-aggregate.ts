@@ -5,7 +5,7 @@ import { FINISHED_THRESHOLD } from "./reading-status.js";
 
 /**
  * Recompute the per-(user, book) lifecycle aggregate from current
- * reading_progress rows for `(apiKeyId, document)` and upsert it.
+ * reading_progress rows for `(userId, document)` and upsert it.
  *
  * `startedAt` is the earliest timestamp where percentage > 0 across all
  * devices; `finishedAt` is the earliest timestamp where percentage crossed
@@ -17,7 +17,7 @@ import { FINISHED_THRESHOLD } from "./reading-status.js";
  */
 export async function upsertReadingAggregate(
   db: Db,
-  apiKeyId: string,
+  userId: string,
   bookId: string,
   document: string,
 ): Promise<void> {
@@ -27,7 +27,7 @@ export async function upsertReadingAggregate(
       timestamp: readingProgress.timestamp,
     })
     .from(readingProgress)
-    .where(and(eq(readingProgress.apiKeyId, apiKeyId), eq(readingProgress.document, document)));
+    .where(and(eq(readingProgress.userId, userId), eq(readingProgress.document, document)));
 
   let startedTs: bigint | null = null;
   let finishedTs: bigint | null = null;
@@ -49,9 +49,9 @@ export async function upsertReadingAggregate(
 
   await db
     .insert(readingAggregate)
-    .values({ apiKeyId, bookId, startedAt, finishedAt })
+    .values({ userId, bookId, startedAt, finishedAt })
     .onConflictDoUpdate({
-      target: [readingAggregate.apiKeyId, readingAggregate.bookId],
+      target: [readingAggregate.userId, readingAggregate.bookId],
       set: {
         startedAt: sql`COALESCE(${readingAggregate.startedAt}, EXCLUDED.started_at)`,
         finishedAt: sql`COALESCE(${readingAggregate.finishedAt}, EXCLUDED.finished_at)`,

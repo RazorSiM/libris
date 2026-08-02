@@ -61,8 +61,24 @@ describe("createAuth", () => {
   it("rate limits through secondary storage rather than memory or the database", () => {
     const { options } = build();
 
-    expect(options.rateLimit?.enabled).toBe(true);
     expect(options.rateLimit?.storage).toBe("secondary-storage");
+  });
+
+  it("rate limits in production but not under test", () => {
+    // Off under test on purpose: Better Auth throttles /sign-in/email hard, and
+    // a suite that signs in a few times in seconds gets rejected in a way the
+    // UI can only report as a wrong password. Production must keep it — this is
+    // the assertion that notices if the condition is ever widened.
+    expect(build({ env: { ...BASE_ENV, NODE_ENV: "production" } }).options.rateLimit?.enabled).toBe(
+      true,
+    );
+    expect(build({ env: { ...BASE_ENV, NODE_ENV: "test" } }).options.rateLimit?.enabled).toBe(
+      false,
+    );
+    expect(
+      build({ env: { ...BASE_ENV, NODE_ENV: "development", E2E_TEST: "1" } }).options.rateLimit
+        ?.enabled,
+    ).toBe(false);
   });
 
   it("uses the secondary storage instance it was given, opening no second connection", () => {
@@ -91,15 +107,21 @@ describe("createAuth", () => {
       expect(options.plugins?.map((p) => p.id).sort()).toEqual(["admin", "api-key"]);
     });
 
-    it("maps the apiKey plugin's table onto api_keys", () => {
+    it("maps the apiKey plugin's model onto the apiKeys export", () => {
       const { options } = build();
       const plugin = options.plugins?.find((p) => p.id === "api-key");
 
       // The plugin's schema is what the Drizzle adapter resolves against, so
       // this is the assertion that catches a rename upstream. modelName is
       // present at runtime but absent from the published type.
+      //
+      // "apiKeys", not "api_keys": the adapter looks the model up as
+      // schema[modelName], i.e. against the Drizzle EXPORT name. The SQL table
+      // is api_keys, which comes from pgTable() in auth-schema.ts — getting
+      // this wrong resolves to undefined and fails only on the first request
+      // that touches an api key.
       const apikey = plugin?.schema?.apikey as { modelName?: string } | undefined;
-      expect(apikey?.modelName).toBe("api_keys");
+      expect(apikey?.modelName).toBe("apiKeys");
     });
 
     // enableSessionForAPIKeys and storage:"database" cannot be asserted here —

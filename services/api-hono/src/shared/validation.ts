@@ -172,7 +172,9 @@ export const SettingsPatchBodySchema = z.object({
 // === Credential schemas ===
 
 export const CredentialServiceParamSchema = z.object({
-  service: z.enum(["opds", "kosync", "hardcover"]).openapi({
+  // No "opds": OPDS clients authenticate with app passwords now
+  // (/api/app-passwords), not with a row in service_credentials.
+  service: z.enum(["kosync", "hardcover"]).openapi({
     description: "Service name",
   }),
 });

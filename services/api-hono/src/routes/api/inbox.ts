@@ -4,14 +4,7 @@ import { and, count, eq, inArray, ne, sql } from "drizzle-orm";
 import { access } from "node:fs/promises";
 import { writeFile } from "node:fs/promises";
 import { basename, join, extname, resolve } from "node:path";
-import {
-  apiKeys,
-  books,
-  bookColumns,
-  bookFiles,
-  bookMetadataCandidates,
-  uploadRegistry,
-} from "#db";
+import { users, books, bookColumns, bookFiles, bookMetadataCandidates, uploadRegistry } from "#db";
 import type { AppVariables } from "../../context.js";
 import { requireBookOwnership } from "../../shared/auth.js";
 import { extractEpubCoverImage } from "../../lib/metadata/index.js";
@@ -299,11 +292,11 @@ export const inboxRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
       db
         .select({
           ...bookColumns,
-          uploaderId: apiKeys.id,
-          uploaderLabel: apiKeys.label,
+          uploaderId: users.id,
+          uploaderLabel: users.name,
         })
         .from(books)
-        .leftJoin(apiKeys, eq(apiKeys.id, books.createdBy))
+        .leftJoin(users, eq(users.id, books.createdBy))
         .where(where)
         .orderBy(orderBy)
         .limit(limit)
@@ -403,11 +396,11 @@ export const inboxRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
     const [book] = await db
       .select({
         ...bookColumns,
-        uploaderId: apiKeys.id,
-        uploaderLabel: apiKeys.label,
+        uploaderId: users.id,
+        uploaderLabel: users.name,
       })
       .from(books)
-      .leftJoin(apiKeys, eq(apiKeys.id, books.createdBy))
+      .leftJoin(users, eq(users.id, books.createdBy))
       .where(and(eq(books.id, id), inArray(books.status, ["inbox", "review"])));
 
     if (!book) {
@@ -665,15 +658,15 @@ export const inboxRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
 
       // Register the upload with its checksum so the book-detected worker
       // can attribute ownership to the uploading API key.
-      const apiKeyId = c.get("apiKeyId");
-      if (apiKeyId) {
+      const userId = c.get("userId");
+      if (userId) {
         const checksum = computeChecksumFromBuffer(buffer);
         const db = c.get("db");
         await db
           .insert(uploadRegistry)
           .values({
             checksum,
-            apiKeyId,
+            userId,
             filename: safeName,
           })
           .onConflictDoNothing();

@@ -6,7 +6,7 @@ import type { AppVariables } from "../../context.js";
 import { verifyToken } from "../../lib/hardcover/client.js";
 import { searchHardcover } from "../../lib/metadata/clients/hardcover.js";
 import { isHardcoverMetadataEnabled } from "../../services/settings.js";
-import { unsealToken, getApiKeyId } from "../../shared/auth.js";
+import { unsealToken, getUserId } from "../../shared/auth.js";
 import { HardcoverSearchResponseSchema } from "../../shared/schemas.js";
 import { getQueues } from "../../services/queue.js";
 import { parseRedisUrl } from "../../env.js";
@@ -139,14 +139,14 @@ export const hardcoverRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
   .openapi(statusRoute, async (c) => {
     const db = c.get("db");
     const env = c.get("env");
-    const apiKeyId = getApiKeyId(c);
+    const userId = getUserId(c);
 
     // Check if credential exists
     const [cred] = await db
       .select({ passwordHash: serviceCredentials.passwordHash })
       .from(serviceCredentials)
       .where(
-        and(eq(serviceCredentials.service, "hardcover"), eq(serviceCredentials.apiKeyId, apiKeyId)),
+        and(eq(serviceCredentials.service, "hardcover"), eq(serviceCredentials.userId, userId)),
       )
       .limit(1);
 
@@ -173,7 +173,7 @@ export const hardcoverRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
     const [lastSync] = await db
       .select({ lastSyncedAt: hardcoverSyncLog.lastSyncedAt })
       .from(hardcoverSyncLog)
-      .where(eq(hardcoverSyncLog.apiKeyId, apiKeyId))
+      .where(eq(hardcoverSyncLog.userId, userId))
       .orderBy(desc(hardcoverSyncLog.lastSyncedAt))
       .limit(1);
 
@@ -186,13 +186,13 @@ export const hardcoverRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
   .openapi(syncRoute, async (c) => {
     const db = c.get("db");
     const env = c.get("env");
-    const apiKeyId = getApiKeyId(c);
+    const userId = getUserId(c);
 
     const [cred] = await db
       .select({ id: serviceCredentials.id })
       .from(serviceCredentials)
       .where(
-        and(eq(serviceCredentials.service, "hardcover"), eq(serviceCredentials.apiKeyId, apiKeyId)),
+        and(eq(serviceCredentials.service, "hardcover"), eq(serviceCredentials.userId, userId)),
       )
       .limit(1);
 
@@ -205,7 +205,7 @@ export const hardcoverRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
       (q): q is Queue => q instanceof Queue && q.name === QUEUE_HARDCOVER_SYNC,
     );
 
-    const jobPayload = { manual: true, apiKeyId };
+    const jobPayload = { manual: true, userId };
 
     if (!syncQueue) {
       // Fallback: create a one-off queue connection
@@ -222,7 +222,7 @@ export const hardcoverRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
   .openapi(syncLogRoute, async (c) => {
     const { limit } = c.req.valid("query");
     const db = c.get("db");
-    const apiKeyId = getApiKeyId(c);
+    const userId = getUserId(c);
 
     const rows = await db
       .select({
@@ -235,7 +235,7 @@ export const hardcoverRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
       })
       .from(hardcoverSyncLog)
       .innerJoin(books, eq(hardcoverSyncLog.bookId, books.id))
-      .where(eq(hardcoverSyncLog.apiKeyId, apiKeyId))
+      .where(eq(hardcoverSyncLog.userId, userId))
       .orderBy(desc(hardcoverSyncLog.lastSyncedAt))
       .limit(limit);
 

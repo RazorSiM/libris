@@ -12,19 +12,23 @@ import {
   vi,
 } from "vite-plus/test";
 import type { PGlite } from "@electric-sql/pglite";
-import { createTestDb, type TestDb } from "../db/test-utils.js";
+import { createTestDb, seedUser, type TestDb } from "../db/test-utils.js";
 import * as schema from "../db/schema.js";
 import { __setTestDb } from "../services/db.js";
 import { createCleanupOrphanedFilesProcessor } from "./cleanup-orphaned-files.js";
 
 let pglite: PGlite;
 let db: TestDb;
+// books.created_by is NOT NULL since the cutover, so every seeded book needs an
+// owner even in suites that have nothing to do with ownership.
+let ownerId: string;
 let libraryRoot: string;
 
 beforeAll(async () => {
   const testDb = await createTestDb();
   pglite = testDb.pglite;
   db = testDb.db;
+  ownerId = await seedUser(db);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   __setTestDb(db as any);
 });
@@ -50,7 +54,12 @@ function createMockJob() {
 async function seedBook() {
   const [book] = await db
     .insert(schema.books)
-    .values({ status: "organized", createdAt: new Date(), updatedAt: new Date() })
+    .values({
+      status: "organized",
+      createdBy: ownerId,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    })
     .returning({ id: schema.books.id });
   return book.id;
 }

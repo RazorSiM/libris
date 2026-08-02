@@ -2,7 +2,7 @@ import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import { and, eq, or, sql, count, countDistinct, desc, sum, inArray } from "drizzle-orm";
 import { books, bookFiles, readingProgress } from "#db";
 import type { AppVariables } from "../../context.js";
-import { getApiKeyId } from "../../shared/auth.js";
+import { getUserId } from "../../shared/auth.js";
 import { FINISHED_THRESHOLD, PAUSED_DAYS } from "../../lib/reading-status.js";
 import {
   collectQueueCounts,
@@ -76,7 +76,7 @@ export const dashboardRoutes = new OpenAPIHono<{ Variables: AppVariables }>().op
   dashboardRoute,
   async (c) => {
     const db = c.get("db");
-    const apiKeyId = getApiKeyId(c);
+    const userId = getUserId(c);
 
     const [
       currentlyReadingRaw,
@@ -108,7 +108,7 @@ export const dashboardRoutes = new OpenAPIHono<{ Variables: AppVariables }>().op
         .innerJoin(books, eq(bookFiles.bookId, books.id))
         .where(
           and(
-            eq(readingProgress.apiKeyId, apiKeyId),
+            eq(readingProgress.userId, userId),
             sql`${books.status} = 'organized'
               AND cast(${readingProgress.percentage} as numeric) > 0
               AND cast(${readingProgress.percentage} as numeric) < ${FINISHED_THRESHOLD}

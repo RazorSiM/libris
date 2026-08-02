@@ -82,12 +82,12 @@ describe("pullHardcoverStatusesForUser", () => {
 
     expect(upserts).toHaveLength(2);
     expect(upserts[0]).toMatchObject({
-      apiKeyId: "api-key-1",
+      userId: "api-key-1",
       bookId: "uuid-100",
       externalStatus: "finished",
     });
     expect(upserts[1]).toMatchObject({
-      apiKeyId: "api-key-1",
+      userId: "api-key-1",
       bookId: "uuid-200",
       externalStatus: "reading",
     });

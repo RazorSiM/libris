@@ -156,7 +156,6 @@ describe("admin vs non-admin access control", () => {
 describe("book ownership (requireBookOwnership)", () => {
   let adminBookId: string;
   let userBookId: string;
-  let unownedBookId: string;
 
   beforeEach(async () => {
     // Insert a book owned by admin
@@ -182,18 +181,6 @@ describe("book ownership (requireBookOwnership)", () => {
       })
       .returning({ id: books.id });
     userBookId = userBook!.id;
-
-    // Insert an unowned book (createdBy = null)
-    const [unownedBook] = await testDb
-      .insert(books)
-      .values({
-        title: "Unowned Book",
-        author: "Unknown",
-        status: "review",
-        createdBy: null,
-      })
-      .returning({ id: books.id });
-    unownedBookId = unownedBook!.id;
   });
 
   it("admin can delete any book (even ones they did not create)", async () => {
@@ -222,21 +209,16 @@ describe("book ownership (requireBookOwnership)", () => {
     expect(status).toBe(403);
   });
 
-  it("unowned books (createdBy=null) are admin-only", async () => {
-    // Non-admin should get 403
-    const { status: userStatus } = await $fetchRaw(`/api/books/${unownedBookId}`, {
-      method: "DELETE",
-      headers: userAuth(),
-    });
-    expect(userStatus).toBe(403);
-
-    // Admin should succeed
-    const { status: adminStatus } = await $fetchRaw(`/api/books/${unownedBookId}`, {
-      method: "DELETE",
-      headers: adminAuth(),
-      responseType: "text",
-    });
-    expect(adminStatus).toBe(204);
+  it("cannot create an unowned book at all", async () => {
+    // There used to be a whole authorization branch for books with
+    // createdBy = null, and a test asserting they were admin-only. The cutover
+    // made created_by NOT NULL, which deletes the case rather than handling it —
+    // so the assertion worth keeping is that the database refuses.
+    await expect(
+      testDb
+        .insert(books)
+        .values({ title: "Unowned Book", author: "Unknown", status: "review" } as never),
+    ).rejects.toThrow();
   });
 
   it("admin can approve any book", async () => {
@@ -487,7 +469,7 @@ describe("credential isolation", () => {
 // Note: /api/stats and /api/reading-status/counts use raw SQL that
 // returns differently under PGlite vs PostgreSQL (db.execute shape).
 // We test isolation at the DB layer and via the unique constraint
-// to verify the schema correctly partitions progress by apiKeyId.
+// to verify the schema correctly partitions progress by userId.
 
 describe("reading progress isolation", () => {
   let bookId: string;
@@ -512,7 +494,7 @@ describe("reading progress isolation", () => {
     // Insert reading progress for admin (80%)
     await testDb.insert(readingProgress).values({
       bookId,
-      apiKeyId: adminKeyId,
+      userId: adminKeyId,
       document: "shared-book.epub",
       device: "admin-device",
       progress: "/body/chapter[8]",
@@ -523,7 +505,7 @@ describe("reading progress isolation", () => {
     // Insert reading progress for user (30%) - same document, different device/user
     await testDb.insert(readingProgress).values({
       bookId,
-      apiKeyId: userKeyId,
+      userId: userKeyId,
       document: "shared-book.epub",
       device: "user-device",
       progress: "/body/chapter[3]",
@@ -535,7 +517,7 @@ describe("reading progress isolation", () => {
     const adminRows = await testDb
       .select({ percentage: readingProgress.percentage })
       .from(readingProgress)
-      .where(and(eq(readingProgress.bookId, bookId), eq(readingProgress.apiKeyId, adminKeyId)));
+      .where(and(eq(readingProgress.bookId, bookId), eq(readingProgress.userId, adminKeyId)));
     expect(adminRows).toHaveLength(1);
     expect(Number(adminRows[0]!.percentage)).toBeCloseTo(0.8, 2);
 
@@ -543,7 +525,7 @@ describe("reading progress isolation", () => {
     const userRows = await testDb
       .select({ percentage: readingProgress.percentage })
       .from(readingProgress)
-      .where(and(eq(readingProgress.bookId, bookId), eq(readingProgress.apiKeyId, userKeyId)));
+      .where(and(eq(readingProgress.bookId, bookId), eq(readingProgress.userId, userKeyId)));
     expect(userRows).toHaveLength(1);
     expect(Number(userRows[0]!.percentage)).toBeCloseTo(0.3, 2);
   });
@@ -552,7 +534,7 @@ describe("reading progress isolation", () => {
     // Both users reading the same document on same-named device
     await testDb.insert(readingProgress).values({
       bookId,
-      apiKeyId: adminKeyId,
+      userId: adminKeyId,
       document: "shared-book.epub",
       device: "shared-device",
       progress: "/body/chapter[8]",
@@ -560,10 +542,10 @@ describe("reading progress isolation", () => {
       timestamp: BigInt(Date.now()),
     });
 
-    // Should NOT violate unique constraint because apiKeyId is different
+    // Should NOT violate unique constraint because userId is different
     await testDb.insert(readingProgress).values({
       bookId,
-      apiKeyId: userKeyId,
+      userId: userKeyId,
       document: "shared-book.epub",
       device: "shared-device",
       progress: "/body/chapter[3]",
@@ -583,7 +565,7 @@ describe("reading progress isolation", () => {
     // Insert initial progress for both users
     await testDb.insert(readingProgress).values({
       bookId,
-      apiKeyId: adminKeyId,
+      userId: adminKeyId,
       document: "shared-book.epub",
       device: "admin-device",
       progress: "/body/chapter[5]",
@@ -592,7 +574,7 @@ describe("reading progress isolation", () => {
     });
     await testDb.insert(readingProgress).values({
       bookId,
-      apiKeyId: userKeyId,
+      userId: userKeyId,
       document: "shared-book.epub",
       device: "user-device",
       progress: "/body/chapter[2]",
@@ -604,20 +586,20 @@ describe("reading progress isolation", () => {
     await testDb
       .update(readingProgress)
       .set({ percentage: "0.9900", progress: "/body/chapter[10]" })
-      .where(and(eq(readingProgress.bookId, bookId), eq(readingProgress.apiKeyId, adminKeyId)));
+      .where(and(eq(readingProgress.bookId, bookId), eq(readingProgress.userId, adminKeyId)));
 
     // User's progress should be unchanged
     const [userRow] = await testDb
       .select({ percentage: readingProgress.percentage })
       .from(readingProgress)
-      .where(and(eq(readingProgress.bookId, bookId), eq(readingProgress.apiKeyId, userKeyId)));
+      .where(and(eq(readingProgress.bookId, bookId), eq(readingProgress.userId, userKeyId)));
     expect(Number(userRow!.percentage)).toBeCloseTo(0.2, 2);
 
     // Admin's progress should be updated
     const [adminRow] = await testDb
       .select({ percentage: readingProgress.percentage })
       .from(readingProgress)
-      .where(and(eq(readingProgress.bookId, bookId), eq(readingProgress.apiKeyId, adminKeyId)));
+      .where(and(eq(readingProgress.bookId, bookId), eq(readingProgress.userId, adminKeyId)));
     expect(Number(adminRow!.percentage)).toBeCloseTo(0.99, 2);
   });
 });

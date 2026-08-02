@@ -8,7 +8,6 @@
  * and are covered by the E2E suite (tests/e2e/opds.spec.ts).
  */
 
-import { hash } from "bcryptjs";
 import { createMemoryKVStore } from "../services/kv-store.js";
 import { afterAll, beforeAll, describe, expect, it } from "vite-plus/test";
 import type { PGlite } from "@electric-sql/pglite";
@@ -22,10 +21,14 @@ import type { Env } from "../env.js";
 // ---------------------------------------------------------------------------
 
 const OPDS_USER = "opds-int-test";
-const OPDS_PASS = "opds-int-test-pass";
 
-function opdsAuthHeader(): string {
-  const encoded = Buffer.from(`${OPDS_USER}:${OPDS_PASS}`).toString("base64");
+/**
+ * What an OPDS reader sends: Basic, with the app password in the PASSWORD
+ * field. The username is informational — the middleware ignores it — but real
+ * readers always send one, so the fixture does too.
+ */
+function opdsAuthHeader(password = opdsAppPassword): string {
+  const encoded = Buffer.from(`${OPDS_USER}:${password}`).toString("base64");
   return `Basic ${encoded}`;
 }
 
@@ -55,6 +58,9 @@ const TEST_ENV: Env = {
 let pglite: PGlite;
 let db: TestDb;
 let app: ReturnType<typeof createApp>["app"];
+let auth: ReturnType<typeof createTestAuth>;
+let opdsAppPassword: string;
+let opdsUserId: string;
 
 // IDs set during seeding
 let prideBookId: string;
@@ -78,36 +84,32 @@ beforeAll(async () => {
     },
     redisStorage: createMemoryKVStore(),
     cacheStorage: createMemoryKVStore(),
-    auth: createTestAuth(db, TEST_ENV),
+    auth: (auth = createTestAuth(db, TEST_ENV)),
     shutdown: async () => {},
   };
 
   ({ app } = createApp({ services, env: TEST_ENV }));
 
-  // 3. Seed OPDS credentials (with API key for multi-user auth)
-  const [testKey] = await db
-    .insert(schema.apiKeys)
-    .values({
-      keyPrefix: "test____",
-      keyHash: "test-opds-key-hash-unique",
-      label: "OPDS Test Key",
-      isAdmin: false,
-    })
-    .returning();
-
-  const passwordHash = await hash(OPDS_PASS, 10);
-  await db.insert(schema.serviceCredentials).values({
-    service: "opds",
-    username: OPDS_USER,
-    passwordHash,
-    apiKeyId: testKey.id,
+  // 3. A user and an app password — OPDS credentials are Better Auth api keys
+  // now, not rows in service_credentials (libris-5ng.12).
+  const created = await auth.api.createUser({
+    body: {
+      email: "opds-int-test@example.test",
+      password: "correct-horse-battery-staple",
+      name: "OPDS Reader",
+    },
   });
+  opdsUserId = created.user.id;
+  opdsAppPassword = (
+    await auth.api.createApiKey({ body: { userId: opdsUserId, name: "KOReader" } })
+  ).key;
 
   // 4. Seed test books
   const [prideRow] = await db
     .insert(schema.books)
     .values({
       status: "organized",
+      createdBy: opdsUserId,
       title: "Pride and Prejudice",
       author: "Jane Austen",
       genres: ["Romance", "Classic"],
@@ -127,6 +129,7 @@ beforeAll(async () => {
   // 1984 — no files (used for search exclusion tests)
   await db.insert(schema.books).values({
     status: "organized",
+    createdBy: opdsUserId,
     title: "1984",
     author: "George Orwell",
   });
@@ -242,45 +245,45 @@ describe("OPDS Feed (integration)", () => {
   });
 
   it("Content-Type headers are correct for each endpoint", async () => {
-    const auth = opdsAuthHeader();
+    const authHeader = opdsAuthHeader();
 
     const indexRes = await app.request("/opds", {
-      headers: { Authorization: auth },
+      headers: { Authorization: authHeader },
     });
     expect(indexRes.headers.get("content-type")).toContain(
       "application/atom+xml;profile=opds-catalog;kind=navigation",
     );
 
     const booksRes = await app.request("/opds/books", {
-      headers: { Authorization: auth },
+      headers: { Authorization: authHeader },
     });
     expect(booksRes.headers.get("content-type")).toContain(
       "application/atom+xml;profile=opds-catalog;kind=acquisition",
     );
 
     const newRes = await app.request("/opds/new", {
-      headers: { Authorization: auth },
+      headers: { Authorization: authHeader },
     });
     expect(newRes.headers.get("content-type")).toContain(
       "application/atom+xml;profile=opds-catalog;kind=acquisition",
     );
 
     const entryRes = await app.request(`/opds/books/${prideBookId}`, {
-      headers: { Authorization: auth },
+      headers: { Authorization: authHeader },
     });
     expect(entryRes.headers.get("content-type")).toContain(
       "application/atom+xml;type=entry;profile=opds-catalog",
     );
 
     const searchDescRes = await app.request("/opds/search", {
-      headers: { Authorization: auth },
+      headers: { Authorization: authHeader },
     });
     expect(searchDescRes.headers.get("content-type")).toContain(
       "application/opensearchdescription+xml",
     );
 
     const searchRes = await app.request("/opds/search?q=test", {
-      headers: { Authorization: auth },
+      headers: { Authorization: authHeader },
     });
     expect(searchRes.headers.get("content-type")).toContain(
       "application/atom+xml;profile=opds-catalog;kind=acquisition",

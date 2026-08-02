@@ -5,14 +5,14 @@ import type { AppVariables } from "../context.js";
  * Route-level caching middleware backed by KVStore.
  * Replaces Nitro's `defineCachedHandler`.
  *
- * Cache keys include the authenticated user's apiKeyId (when present)
+ * Cache keys include the authenticated user's userId (when present)
  * to prevent cross-user data leakage.
  */
 export function cachedRoute(opts: { maxAge: number }) {
   return createMiddleware<{ Variables: AppVariables }>(async (c, next) => {
-    // Skip caching when apiKeyId is missing to prevent cross-user cache sharing
-    const apiKeyId = c.get("apiKeyId");
-    if (!apiKeyId) {
+    // Skip caching when userId is missing to prevent cross-user cache sharing
+    const userId = c.get("userId");
+    if (!userId) {
       await next();
       return;
     }
@@ -21,8 +21,8 @@ export function cachedRoute(opts: { maxAge: number }) {
     const url = new URL(c.req.url);
     // Encode query params as a path segment to preserve them in cache keys
     const search = url.search ? `:${url.search.slice(1)}` : "";
-    // Include apiKeyId in cache key to scope per-user
-    const userScope = c.get("apiKeyId") ? `:user:${c.get("apiKeyId")}` : "";
+    // Include userId in cache key to scope per-user
+    const userScope = c.get("userId") ? `:user:${c.get("userId")}` : "";
     const cacheKey = `routes:${url.pathname}${search}${userScope}`;
 
     try {

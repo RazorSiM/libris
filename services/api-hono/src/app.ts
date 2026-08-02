@@ -37,6 +37,7 @@ export function createApp({ services, env }: CreateAppOptions) {
     c.set("db", services.db);
     c.set("queues", services.queues);
     c.set("env", env);
+    c.set("auth", services.auth);
     c.set("redisStorage", services.redisStorage);
     c.set("cacheStorage", services.cacheStorage);
     await next();
@@ -80,27 +81,24 @@ export function createApp({ services, env }: CreateAppOptions) {
     return c.json({ error: "Internal server error" }, 500);
   });
 
-  // Mount routes
-  const router = createRouter(upgradeWebSocket);
-  app.route("/", router);
-
   // Better Auth's own endpoints, as a catch-all so every current and future
   // endpoint it exposes — including nested plugin routes like
   // /api/auth/admin/* — is reachable without being enumerated here.
   // route-policy.ts gives the same prefix the "skip" policy so authMiddleware
   // does not try to authenticate them first.
   //
-  // Registered AFTER the app router on purpose. The legacy bespoke auth routes
-  // (/api/auth/keys, /login, /logout, /session, /setup) still live inside this
-  // prefix until libris-5ng.15 replaces them with app-password endpoints, and
-  // earlier registration wins in Hono, so they keep answering while this
-  // catch-all picks up everything else. Once they are gone this can move back
-  // above the router, where it belongs.
+  // Registered BEFORE the app router now that the bespoke /api/auth/* routes are
+  // gone (libris-5ng.11/.15); it used to sit after them so their exact paths
+  // could win over the catch-all.
   //
   // Consequence: a catch-all contributes nothing to Hono's RPC type graph, so
   // there is no typed client for these paths. The frontend talks to them
   // through the Better Auth client instead (libris-5ng.17).
   app.on(["GET", "POST"], "/api/auth/*", (c) => services.auth.handler(c.req.raw));
+
+  // Mount routes
+  const router = createRouter(upgradeWebSocket);
+  app.route("/", router);
 
   // Serve static SPA files (production only — dev uses Nuxt devServer)
   app.use("*", serveStatic({ root: "./public" }));

@@ -8,7 +8,7 @@ import { assertPathWithinRoot } from "../../lib/assert-path-within-root.js";
 import { normalizeLanguage } from "../../lib/languages.js";
 import { Readable } from "node:stream";
 import {
-  apiKeys,
+  users,
   books,
   bookColumns,
   bookFiles,
@@ -17,7 +17,7 @@ import {
   readingProgress,
 } from "#db";
 import type { AppVariables } from "../../context.js";
-import { getApiKeyId, requireBookOwnership } from "../../shared/auth.js";
+import { getUserId, requireBookOwnership } from "../../shared/auth.js";
 import { invalidateRouteCache } from "../../services/cache.js";
 import { isUniqueViolation, uniqueViolationMessage } from "../../shared/db-errors.js";
 import { escapeIlike } from "../../shared/escape-ilike.js";
@@ -486,11 +486,11 @@ export const libraryRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
       db
         .select({
           ...bookColumns,
-          uploaderId: apiKeys.id,
-          uploaderLabel: apiKeys.label,
+          uploaderId: users.id,
+          uploaderLabel: users.name,
         })
         .from(books)
-        .leftJoin(apiKeys, eq(apiKeys.id, books.createdBy))
+        .leftJoin(users, eq(users.id, books.createdBy))
         .where(where)
         .orderBy(orderBy)
         .limit(limit)
@@ -563,11 +563,11 @@ export const libraryRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
       db
         .select({
           ...bookColumns,
-          uploaderId: apiKeys.id,
-          uploaderLabel: apiKeys.label,
+          uploaderId: users.id,
+          uploaderLabel: users.name,
         })
         .from(books)
-        .leftJoin(apiKeys, eq(apiKeys.id, books.createdBy))
+        .leftJoin(users, eq(users.id, books.createdBy))
         .where(where)
         // Ascending by updatedAt gives clients a stable, resumable cursor.
         .orderBy(asc(books.updatedAt), asc(books.id))
@@ -675,11 +675,11 @@ export const libraryRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
           .where(and(eq(books.status, "organized"), isNotNull(books.series)))
           .orderBy(books.series),
         db
-          .selectDistinct({ id: apiKeys.id, label: apiKeys.label })
+          .selectDistinct({ id: users.id, label: users.name })
           .from(books)
-          .innerJoin(apiKeys, eq(apiKeys.id, books.createdBy))
+          .innerJoin(users, eq(users.id, books.createdBy))
           .where(eq(books.status, "organized"))
-          .orderBy(apiKeys.label),
+          .orderBy(users.name),
       ]);
 
     return c.json(
@@ -698,16 +698,16 @@ export const libraryRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
   .openapi(getRoute, async (c) => {
     const { id } = c.req.valid("param");
     const db = c.get("db");
-    const apiKeyId = getApiKeyId(c);
+    const userId = getUserId(c);
 
     const [book] = await db
       .select({
         ...bookColumns,
-        uploaderId: apiKeys.id,
-        uploaderLabel: apiKeys.label,
+        uploaderId: users.id,
+        uploaderLabel: users.name,
       })
       .from(books)
-      .leftJoin(apiKeys, eq(apiKeys.id, books.createdBy))
+      .leftJoin(users, eq(users.id, books.createdBy))
       .where(and(eq(books.id, id), eq(books.status, "organized")));
 
     if (!book) {
@@ -716,7 +716,7 @@ export const libraryRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
 
     const [files, progress] = await Promise.all([
       db.select().from(bookFiles).where(eq(bookFiles.bookId, id)),
-      buildProgressAggregateForBook(db, id, apiKeyId),
+      buildProgressAggregateForBook(db, id, userId),
     ]);
 
     return c.json(
@@ -826,7 +826,7 @@ export const libraryRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
     }
 
     // Join reading_progress via content hash match
-    const apiKeyId = getApiKeyId(c);
+    const userId = getUserId(c);
     const progress = await db
       .select({
         document: readingProgress.document,
@@ -844,7 +844,7 @@ export const libraryRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
           eq(readingProgress.document, bookFiles.originalContentHash),
         ),
       )
-      .where(and(eq(bookFiles.bookId, id), eq(readingProgress.apiKeyId, apiKeyId)))
+      .where(and(eq(bookFiles.bookId, id), eq(readingProgress.userId, userId)))
       .orderBy(desc(readingProgress.timestamp));
 
     return c.json(
@@ -1046,7 +1046,7 @@ export const libraryRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
     const body = c.req.valid("json");
     const db = c.get("db");
     const cacheStorage = c.get("cacheStorage");
-    const apiKeyId = getApiKeyId(c);
+    const userId = getUserId(c);
 
     const now = new Date();
     const startedAt = body.startedAt ? new Date(body.startedAt) : null;
@@ -1091,7 +1091,7 @@ export const libraryRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
     await db
       .insert(readingAggregate)
       .values({
-        apiKeyId,
+        userId,
         bookId: id,
         manualStatus: body.status,
         manualStartedAt,
@@ -1100,7 +1100,7 @@ export const libraryRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
         manualSetAt: now,
       })
       .onConflictDoUpdate({
-        target: [readingAggregate.apiKeyId, readingAggregate.bookId],
+        target: [readingAggregate.userId, readingAggregate.bookId],
         set: {
           manualStatus: body.status,
           manualStartedAt,
@@ -1111,7 +1111,7 @@ export const libraryRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
         },
       });
 
-    const aggregate = await buildProgressAggregateForBook(db, id, apiKeyId);
+    const aggregate = await buildProgressAggregateForBook(db, id, userId);
 
     await invalidateRouteCache(cacheStorage, "/api/library", "/api/reading-status");
 
@@ -1123,7 +1123,7 @@ export const libraryRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
     const { id } = c.req.valid("param");
     const db = c.get("db");
     const cacheStorage = c.get("cacheStorage");
-    const apiKeyId = getApiKeyId(c);
+    const userId = getUserId(c);
 
     const [book] = await db
       .select({ id: books.id })
@@ -1141,9 +1141,9 @@ export const libraryRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
         manualSetAt: null,
         updatedAt: new Date(),
       })
-      .where(and(eq(readingAggregate.apiKeyId, apiKeyId), eq(readingAggregate.bookId, id)));
+      .where(and(eq(readingAggregate.userId, userId), eq(readingAggregate.bookId, id)));
 
-    const aggregate = await buildProgressAggregateForBook(db, id, apiKeyId);
+    const aggregate = await buildProgressAggregateForBook(db, id, userId);
 
     await invalidateRouteCache(cacheStorage, "/api/library", "/api/reading-status");
 

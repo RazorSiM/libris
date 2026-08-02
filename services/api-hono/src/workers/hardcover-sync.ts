@@ -28,7 +28,7 @@ const MAX_RATE_LIMIT_RETRIES = 5;
 const INTER_USER_DELAY_MS = 5_000;
 
 interface ValidatedUser {
-  apiKeyId: string;
+  userId: string;
   token: string;
   username: string;
 }
@@ -36,12 +36,12 @@ interface ValidatedUser {
 export async function processHardcoverSync(job: Job): Promise<void> {
   const db = getDb();
   const env = getEnv();
-  const targetApiKeyId: string | undefined = job.data?.apiKeyId;
+  const targetApiKeyId: string | undefined = job.data?.userId;
 
   // 1. Load all hardcover credentials (or just one if manually triggered for a specific user)
   const credQuery = db
     .select({
-      apiKeyId: serviceCredentials.apiKeyId,
+      userId: serviceCredentials.userId,
       passwordHash: serviceCredentials.passwordHash,
     })
     .from(serviceCredentials)
@@ -49,9 +49,9 @@ export async function processHardcoverSync(job: Job): Promise<void> {
       targetApiKeyId
         ? and(
             eq(serviceCredentials.service, "hardcover"),
-            eq(serviceCredentials.apiKeyId, targetApiKeyId),
+            eq(serviceCredentials.userId, targetApiKeyId),
           )
-        : and(eq(serviceCredentials.service, "hardcover"), isNotNull(serviceCredentials.apiKeyId)),
+        : and(eq(serviceCredentials.service, "hardcover"), isNotNull(serviceCredentials.userId)),
     );
 
   const creds = await credQuery;
@@ -64,24 +64,22 @@ export async function processHardcoverSync(job: Job): Promise<void> {
   // 2. Validate all tokens upfront, collect valid users
   const validUsers: ValidatedUser[] = [];
   for (const cred of creds) {
-    if (!cred.apiKeyId) continue;
+    if (!cred.userId) continue;
 
     const token = await unsealToken(cred.passwordHash, env.API_SECRET_KEY);
     if (!token) {
-      log.warn(`Failed to decrypt Hardcover token for apiKeyId=${cred.apiKeyId}, skipping`);
+      log.warn(`Failed to decrypt Hardcover token for userId=${cred.userId}, skipping`);
       continue;
     }
 
     const verify = await verifyToken(token);
     if (!verify.ok) {
-      log.warn(
-        `Hardcover token invalid for apiKeyId=${cred.apiKeyId}: ${verify.error.type}, skipping`,
-      );
+      log.warn(`Hardcover token invalid for userId=${cred.userId}: ${verify.error.type}, skipping`);
       continue;
     }
 
-    log.info(`Authenticated apiKeyId=${cred.apiKeyId} as ${verify.data.username}`);
-    validUsers.push({ apiKeyId: cred.apiKeyId, token: token, username: verify.data.username });
+    log.info(`Authenticated userId=${cred.userId} as ${verify.data.username}`);
+    validUsers.push({ userId: cred.userId, token: token, username: verify.data.username });
   }
 
   if (validUsers.length === 0) {
@@ -140,12 +138,12 @@ export async function processHardcoverSync(job: Job): Promise<void> {
 
   for (let userIdx = 0; userIdx < validUsers.length; userIdx++) {
     const user = validUsers[userIdx];
-    log.info(`Syncing progress for user ${user.username} (apiKeyId=${user.apiKeyId})`);
+    log.info(`Syncing progress for user ${user.username} (userId=${user.userId})`);
 
     // Phase 2a: pull statuses from Hardcover into reading_aggregate.external_status.
     // Done before push so the local effective status is up-to-date when computing
     // what to push out — though pulled statuses never feed the push path themselves.
-    const pullResult = await pullHardcoverStatusesForUser(db, user.token, user.apiKeyId);
+    const pullResult = await pullHardcoverStatusesForUser(db, user.token, user.userId);
     if (pullResult.fetched > 0) {
       log.info(
         `[${user.username}] Pulled ${pullResult.fetched} Hardcover user_books, ` +
@@ -169,15 +167,15 @@ export async function processHardcoverSync(job: Job): Promise<void> {
   );
 }
 
-/** Sync reading progress for a single user, scoped by their apiKeyId */
+/** Sync reading progress for a single user, scoped by their userId */
 async function syncUserProgress(
   db: ReturnType<typeof getDb>,
   job: Job,
   user: ValidatedUser,
 ): Promise<{ synced: number; skipped: number }> {
-  const { apiKeyId, token } = user;
+  const { userId, token } = user;
 
-  const booksToSync = await findBooksToSyncToHardcover(db, apiKeyId);
+  const booksToSync = await findBooksToSyncToHardcover(db, userId);
 
   log.info(`[${user.username}] Found ${booksToSync.length} books to sync`);
 
@@ -327,7 +325,7 @@ async function syncUserProgress(
       const lastProgress =
         !progressNeeded || progressSynced ? (percentage?.toFixed(4) ?? null) : null;
 
-      // Upsert sync log — scoped to this user via composite unique (apiKeyId, bookId).
+      // Upsert sync log — scoped to this user via composite unique (userId, bookId).
       // Always written after a successful status push (even when page progress
       // couldn't be synced) so a book is never stuck as a perpetual candidate.
       const now = new Date();
@@ -335,7 +333,7 @@ async function syncUserProgress(
         .insert(hardcoverSyncLog)
         .values({
           bookId: row.book_id,
-          apiKeyId,
+          userId,
           hardcoverUserBookId: userBookId,
           hardcoverReadId: row.hardcover_read_id,
           lastStatus: status,
@@ -343,7 +341,7 @@ async function syncUserProgress(
           lastSyncedAt: now,
         })
         .onConflictDoUpdate({
-          target: [hardcoverSyncLog.apiKeyId, hardcoverSyncLog.bookId],
+          target: [hardcoverSyncLog.userId, hardcoverSyncLog.bookId],
           set: {
             hardcoverUserBookId: userBookId,
             hardcoverReadId: row.hardcover_read_id,

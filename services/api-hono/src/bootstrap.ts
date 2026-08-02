@@ -422,18 +422,18 @@ export async function bootstrap(env: Env): Promise<AppServices> {
             const result = await taskDb.execute<{ inserted: string }>(sql`
               WITH agg AS (
                 SELECT
-                  api_key_id,
+                  user_id,
                   book_id,
                   to_timestamp(MIN("timestamp") FILTER (WHERE percentage::numeric > 0)) AS started_at,
                   to_timestamp(MIN("timestamp") FILTER (WHERE percentage::numeric >= 0.95)) AS finished_at
                 FROM reading_progress_history
-                WHERE book_id IS NOT NULL AND api_key_id IS NOT NULL
-                GROUP BY api_key_id, book_id
+                WHERE book_id IS NOT NULL AND user_id IS NOT NULL
+                GROUP BY user_id, book_id
                 HAVING MIN("timestamp") FILTER (WHERE percentage::numeric > 0) IS NOT NULL
               )
-              INSERT INTO reading_aggregate (api_key_id, book_id, started_at, finished_at)
-              SELECT api_key_id, book_id, started_at, finished_at FROM agg
-              ON CONFLICT (api_key_id, book_id) DO NOTHING
+              INSERT INTO reading_aggregate (user_id, book_id, started_at, finished_at)
+              SELECT user_id, book_id, started_at, finished_at FROM agg
+              ON CONFLICT (user_id, book_id) DO NOTHING
               RETURNING id
             `);
             const rows = result as unknown as { id: string }[];

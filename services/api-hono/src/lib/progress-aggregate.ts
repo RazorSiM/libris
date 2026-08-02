@@ -171,7 +171,7 @@ export function buildProgressAggregate(
 export async function buildProgressAggregateForBook(
   db: Db,
   bookId: string,
-  apiKeyId: string,
+  userId: string,
 ): Promise<ProgressAggregate> {
   const [progressRows, aggregateRows] = await Promise.all([
     db
@@ -182,7 +182,7 @@ export async function buildProgressAggregateForBook(
         timestamp: readingProgress.timestamp,
       })
       .from(readingProgress)
-      .where(and(eq(readingProgress.bookId, bookId), eq(readingProgress.apiKeyId, apiKeyId))),
+      .where(and(eq(readingProgress.bookId, bookId), eq(readingProgress.userId, userId))),
     db
       .select({
         bookId: readingAggregate.bookId,
@@ -197,7 +197,7 @@ export async function buildProgressAggregateForBook(
         externalStatusSyncedAt: readingAggregate.externalStatusSyncedAt,
       })
       .from(readingAggregate)
-      .where(and(eq(readingAggregate.bookId, bookId), eq(readingAggregate.apiKeyId, apiKeyId))),
+      .where(and(eq(readingAggregate.bookId, bookId), eq(readingAggregate.userId, userId))),
   ]);
 
   return buildProgressAggregate(progressRows, aggregateRows);

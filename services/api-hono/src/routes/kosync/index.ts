@@ -3,7 +3,7 @@ import { HTTPException } from "hono/http-exception";
 import { readingProgress, readingProgressHistory } from "#db";
 import { and, eq, desc } from "drizzle-orm";
 import type { AppVariables } from "../../context.js";
-import { md5, getApiKeyId } from "../../shared/auth.js";
+import { md5, getUserId } from "../../shared/auth.js";
 import { validateKosyncCredentials } from "../../shared/kosync-auth.js";
 import type { KosyncAuthResponse, KosyncProgressResponse } from "../../types/kosync.js";
 
@@ -204,12 +204,16 @@ export const kosyncRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
     const body = c.req.valid("json");
     const db = c.get("db");
 
-    await validateKosyncCredentials(body.username, body.password, db);
+    // The body form carries the PLAINTEXT password — this is the one-time
+    // exchange where a client trades it for the userkey it will send from then
+    // on. The stored secret is the md5 digest, so hash here rather than in the
+    // validator: everywhere else the value arriving is already the digest, and
+    // a validator that accepted both would restore the two-valid-secrets bug
+    // this slice removed.
+    const userkey = md5(body.password);
+    await validateKosyncCredentials(body.username, userkey, db);
 
-    return c.json({
-      authorized: "OK",
-      userkey: md5(body.password),
-    } satisfies KosyncAuthResponse);
+    return c.json({ authorized: "OK", userkey } satisfies KosyncAuthResponse);
   })
 
   // POST /users/create — registration disabled, credentials are set via the dashboard
@@ -225,13 +229,13 @@ export const kosyncRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
   .openapi(getProgressRoute, async (c) => {
     const { document } = c.req.valid("param");
     const db = c.get("db");
-    const apiKeyId = c.get("apiKeyId");
-    if (!apiKeyId) throw new HTTPException(401, { message: "Unauthorized" });
+    const userId = c.get("userId");
+    if (!userId) throw new HTTPException(401, { message: "Unauthorized" });
 
     const result = await db
       .select()
       .from(readingProgress)
-      .where(and(eq(readingProgress.document, document), eq(readingProgress.apiKeyId, apiKeyId)))
+      .where(and(eq(readingProgress.document, document), eq(readingProgress.userId, userId)))
       .orderBy(desc(readingProgress.timestamp))
       .limit(1);
 
@@ -254,7 +258,7 @@ export const kosyncRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
   .openapi(putProgressRoute, async (c) => {
     const body = c.req.valid("json");
     const db = c.get("db");
-    const apiKeyId = getApiKeyId(c);
+    const userId = getUserId(c);
     const now = Math.floor(Date.now() / 1000);
 
     // Resolve book_id from document hash — enables direct joins without OR condition
@@ -264,7 +268,7 @@ export const kosyncRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
       .insert(readingProgress)
       .values({
         bookId,
-        apiKeyId,
+        userId,
         document: body.document,
         progress: body.progress,
         percentage: String(body.percentage ?? 0),
@@ -274,7 +278,7 @@ export const kosyncRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
         rawPayload: body,
       })
       .onConflictDoUpdate({
-        target: [readingProgress.apiKeyId, readingProgress.document, readingProgress.device],
+        target: [readingProgress.userId, readingProgress.document, readingProgress.device],
         set: {
           bookId,
           progress: body.progress,
@@ -292,7 +296,7 @@ export const kosyncRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
       .insert(readingProgressHistory)
       .values({
         bookId,
-        apiKeyId,
+        userId,
         document: body.document,
         device: body.device,
         progress: body.progress,
@@ -309,7 +313,7 @@ export const kosyncRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
     // aggregate write never blocks the kosync response. COALESCE semantics
     // inside upsertReadingAggregate ensure existing values are never clobbered.
     if (bookId !== null) {
-      void upsertReadingAggregate(db, apiKeyId, bookId, body.document).catch((err) =>
+      void upsertReadingAggregate(db, userId, bookId, body.document).catch((err) =>
         logger
           .withMetadata({ error: String(err), bookId, document: body.document })
           .warn("Failed to upsert reading aggregate"),

@@ -2,7 +2,7 @@
  * Upload registry flow tests.
  *
  * Tests the upload registry mechanism that tracks book ownership:
- * 1. Upload route creates a registry row with correct apiKeyId + checksum
+ * 1. Upload route creates a registry row with correct userId + checksum
  * 2. Book-detected worker looks up registry by checksum and sets createdBy
  * 3. Registry entry is cleaned up after ownership is recorded
  */
@@ -65,7 +65,7 @@ afterEach(async () => {
 // ── Upload registry insert via API ────────────────────────────────
 
 describe("upload route creates registry entry", () => {
-  it("POST /api/inbox/upload inserts a registry row with correct checksum and apiKeyId", async () => {
+  it("POST /api/inbox/upload inserts a registry row with correct checksum and userId", async () => {
     // Create a minimal valid EPUB (just needs .epub extension for the route)
     const epubContent = Buffer.from("PK\x03\x04fake-epub-content-for-testing");
     const expectedChecksum = computeChecksumFromBuffer(epubContent);
@@ -93,7 +93,7 @@ describe("upload route creates registry entry", () => {
     const registryRows = await testDb.select().from(uploadRegistry);
     expect(registryRows).toHaveLength(1);
     expect(registryRows[0].checksum).toBe(expectedChecksum);
-    expect(registryRows[0].apiKeyId).toBe(adminKeyId);
+    expect(registryRows[0].userId).toBe(adminKeyId);
     expect(registryRows[0].filename).toBe("test-book.epub");
   });
 
@@ -134,7 +134,7 @@ describe("upload route creates registry entry", () => {
 
     // Both should reference the admin key
     for (const row of registryRows) {
-      expect(row.apiKeyId).toBe(adminKeyId);
+      expect(row.userId).toBe(adminKeyId);
     }
   });
 
@@ -169,7 +169,7 @@ describe("upload route creates registry entry", () => {
     // Verify the registry entry belongs to the regular user, not admin
     const registryRows = await testDb.select().from(uploadRegistry);
     expect(registryRows).toHaveLength(1);
-    expect(registryRows[0].apiKeyId).toBe(userKeyId);
+    expect(registryRows[0].userId).toBe(userKeyId);
     expect(registryRows[0].checksum).toBe(expectedChecksum);
   });
 });
@@ -191,7 +191,7 @@ describe("book-detected worker uses registry for ownership", () => {
     // Insert a registry entry as if the upload route created it
     await testDb.insert(uploadRegistry).values({
       checksum: expectedChecksum,
-      apiKeyId: adminKeyId,
+      userId: adminKeyId,
       filename: "detected-book.epub",
     });
 
@@ -300,7 +300,7 @@ describe("book-detected worker uses registry for ownership", () => {
 
     await testDb.insert(uploadRegistry).values({
       checksum,
-      apiKeyId: adminKeyId,
+      userId: adminKeyId,
       filename: "duplicate.epub",
     });
 

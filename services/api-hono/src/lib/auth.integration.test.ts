@@ -52,11 +52,20 @@ beforeEach(async () => {
   await db.delete(schema.users);
 });
 
-async function signUp(email: string, password = "correct-horse-battery") {
-  return await auth.api.signUpEmail({
-    body: { email, password, name: "Test Person" },
-    asResponse: true,
-  });
+const PASSWORD = "correct-horse-battery";
+
+/**
+ * Create an account and sign in, returning the sign-in response.
+ *
+ * Two calls rather than one because self-registration is disabled
+ * (emailAndPassword.disableSignUp), which turns off auth.api.signUpEmail
+ * everywhere including server-side. Accounts come from the admin plugin's
+ * createUser, which permits a bare server-side call; the session then comes
+ * from a normal sign-in, so these tests still exercise the real cookie path.
+ */
+async function signUp(email: string, password = PASSWORD) {
+  await auth.api.createUser({ body: { email, password, name: "Test Person" } });
+  return await auth.api.signInEmail({ body: { email, password }, asResponse: true });
 }
 
 function cookieFrom(res: Response): string {
@@ -100,7 +109,7 @@ describe("better auth schema", () => {
   });
 });
 
-describe("email and password sign-up", () => {
+describe("account creation", () => {
   it("writes a user and a credential account row", async () => {
     const res = await signUp("reader@example.com");
     expect(res.status).toBe(200);
@@ -128,9 +137,14 @@ describe("email and password sign-up", () => {
     expect(users[0]?.role).toBe("user");
   });
 
-  it("rejects a second sign-up for the same email", async () => {
+  it("rejects a second account for the same email", async () => {
     await signUp("reader@example.com");
-    const second = await signUp("reader@example.com");
+    const second = await auth.api
+      .createUser({
+        body: { email: "reader@example.com", password: PASSWORD, name: "Impostor" },
+      })
+      .then(() => ({ status: 200 }))
+      .catch((err: { statusCode?: number }) => ({ status: err.statusCode ?? 500 }));
 
     expect(second.status).not.toBe(200);
     expect(await db.select().from(schema.users)).toHaveLength(1);

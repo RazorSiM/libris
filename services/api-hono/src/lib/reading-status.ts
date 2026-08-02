@@ -64,12 +64,12 @@ export function computeReadingStatus(
 
 export async function getReadingStatusCounts(
   db: Db,
-  apiKeyId?: string,
+  userId?: string,
 ): Promise<Record<ReadingStatus, number>> {
-  const rpFilter = apiKeyId ? sql`AND rp.api_key_id = ${apiKeyId}` : sql``;
-  const rphFilter = apiKeyId ? sql`AND rph.api_key_id = ${apiKeyId}` : sql``;
+  const rpFilter = userId ? sql`AND rp.user_id = ${userId}` : sql``;
+  const rphFilter = userId ? sql`AND rph.user_id = ${userId}` : sql``;
 
-  const aggregateFilter = apiKeyId ? sql`AND ra.api_key_id = ${apiKeyId}` : sql``;
+  const aggregateFilter = userId ? sql`AND ra.user_id = ${userId}` : sql``;
 
   const result = await db.execute<{
     reading_status: ReadingStatus;
@@ -143,7 +143,7 @@ export async function getBooksByReadingStatus(
     sort?: "title" | "author" | "percentage" | "lastRead";
     order?: "asc" | "desc";
     search?: string;
-    apiKeyId?: string;
+    userId?: string;
   } = {},
 ): Promise<{ books: BookWithProgress[]; total: number }> {
   const page = options.page ?? 1;
@@ -169,10 +169,10 @@ export async function getBooksByReadingStatus(
     ? sql`, ts_rank(b.search_vector, plainto_tsquery('english', ${options.search})) AS search_rank`
     : sql``;
 
-  const rpFilter = options.apiKeyId ? sql`AND rp.api_key_id = ${options.apiKeyId}` : sql``;
-  const rphFilter = options.apiKeyId ? sql`AND rph.api_key_id = ${options.apiKeyId}` : sql``;
-  const deviceFilter = options.apiKeyId ? sql`AND rp.api_key_id = ${options.apiKeyId}` : sql``;
-  const aggregateFilter = options.apiKeyId ? sql`AND ra.api_key_id = ${options.apiKeyId}` : sql``;
+  const rpFilter = options.userId ? sql`AND rp.user_id = ${options.userId}` : sql``;
+  const rphFilter = options.userId ? sql`AND rph.user_id = ${options.userId}` : sql``;
+  const deviceFilter = options.userId ? sql`AND rp.user_id = ${options.userId}` : sql``;
+  const aggregateFilter = options.userId ? sql`AND ra.user_id = ${options.userId}` : sql``;
 
   const result = await db.execute<{
     book_id: string;

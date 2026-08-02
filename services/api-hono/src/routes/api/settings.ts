@@ -3,7 +3,7 @@ import { and, eq, sql } from "drizzle-orm";
 import { HTTPException } from "hono/http-exception";
 import { serviceCredentials } from "#db";
 import type { AppVariables } from "../../context.js";
-import { getApiKeyId, requireAdmin } from "../../shared/auth.js";
+import { getUserId, isAdmin, requireAdmin } from "../../shared/auth.js";
 import { invalidateRouteCache } from "../../services/cache.js";
 import { isRedisHealthy } from "../../services/redis.js";
 import { isEventBusHealthy } from "../../services/event-bus.js";
@@ -190,8 +190,8 @@ export const settingsRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
   .openapi(settingsStatusRoute, async (c) => {
     const db = c.get("db");
     const env = c.get("env");
-    const apiKeyId = getApiKeyId(c);
-    const isAdmin = c.get("isAdmin");
+    const userId = getUserId(c);
+    const admin = isAdmin(c);
 
     // Non-admin users only need their credential connection status
     const credentialsPromise = (async () => {
@@ -206,10 +206,7 @@ export const settingsRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
             })
             .from(serviceCredentials)
             .where(
-              and(
-                eq(serviceCredentials.service, service),
-                eq(serviceCredentials.apiKeyId, apiKeyId),
-              ),
+              and(eq(serviceCredentials.service, service), eq(serviceCredentials.userId, userId)),
             )
             .limit(1);
 
@@ -234,7 +231,7 @@ export const settingsRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
     })();
 
     // Non-admin: return only credentials, null out diagnostics
-    if (!isAdmin) {
+    if (!admin) {
       const credentialsResult = await credentialsPromise;
       return c.json({
         health: null,
@@ -318,10 +315,7 @@ export const settingsRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
             .select({ id: serviceCredentials.id })
             .from(serviceCredentials)
             .where(
-              and(
-                eq(serviceCredentials.service, "kosync"),
-                eq(serviceCredentials.apiKeyId, apiKeyId),
-              ),
+              and(eq(serviceCredentials.service, "kosync"), eq(serviceCredentials.userId, userId)),
             )
             .limit(1);
 
@@ -356,14 +350,12 @@ export const settingsRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
   .openapi(getSettingsRoute, async (c) => {
     const db = c.get("db");
     const env = c.get("env");
-    const apiKeyId = getApiKeyId(c);
+    const userId = getUserId(c);
 
     const [kosyncCred] = await db
       .select({ id: serviceCredentials.id })
       .from(serviceCredentials)
-      .where(
-        and(eq(serviceCredentials.service, "kosync"), eq(serviceCredentials.apiKeyId, apiKeyId)),
-      )
+      .where(and(eq(serviceCredentials.service, "kosync"), eq(serviceCredentials.userId, userId)))
       .limit(1);
 
     const kosyncConfigured = !!kosyncCred;

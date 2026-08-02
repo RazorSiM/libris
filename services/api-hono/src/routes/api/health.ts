@@ -111,7 +111,7 @@ export const healthRoutes = new OpenAPIHono<{ Variables: AppVariables }>().opena
       : ("degraded" as const);
 
     // Authenticated requests get full detail; public requests get minimal status
-    if (c.get("apiKeyId")) {
+    if (c.get("userId")) {
       const status = overall === "ok" ? 200 : 503;
       return c.json(
         {

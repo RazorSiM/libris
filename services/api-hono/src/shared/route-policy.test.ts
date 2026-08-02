@@ -65,12 +65,12 @@ describe("resolvePolicy", () => {
       expect(resolvePolicy("/api/auth/a/b/c/d")).toBe("skip");
     });
 
-    it("keeps the legacy key routes authenticated despite the /api/auth/ skip", () => {
-      // TRANSITIONAL: the bespoke key routes still live inside Better Auth's
-      // prefix. If the skip rule won here, creating and deleting API keys would
-      // become anonymous. Remove with libris-5ng.15.
-      expect(resolvePolicy("/api/auth/keys")).toBe("api-key");
-      expect(resolvePolicy("/api/auth/keys/abc-123")).toBe("api-key");
+    it("hands the whole /api/auth/ prefix to Better Auth, key routes included", () => {
+      // The bespoke /api/auth/keys routes are gone (libris-5ng.11); the plugin's
+      // own endpoints live under this prefix and authenticate themselves, so the
+      // skip rule is now correct for everything beneath it.
+      expect(resolvePolicy("/api/auth/keys")).toBe("skip");
+      expect(resolvePolicy("/api/auth/api-key/create")).toBe("skip");
     });
 
     it("does not let the /api/auth/ rule leak onto sibling paths", () => {

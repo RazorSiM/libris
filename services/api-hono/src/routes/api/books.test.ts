@@ -3,10 +3,9 @@ import { afterAll, beforeAll, describe, expect, it } from "vite-plus/test";
 import type { PGlite } from "@electric-sql/pglite";
 import { eq } from "drizzle-orm";
 import { createApp } from "../../app.js";
-import { createTestAuth, createTestDb, type TestDb } from "../../db/test-utils.js";
+import { createTestAuth, createTestDb, seedAppPassword, type TestDb } from "../../db/test-utils.js";
 import * as schema from "../../db/schema.js";
 import type { Env } from "../../env.js";
-import { generateApiKey } from "../../shared/auth.js";
 
 const TEST_ENV: Env = {
   NODE_ENV: "test",
@@ -35,18 +34,9 @@ let pglite: PGlite;
 let db: TestDb;
 
 async function seedApiKey() {
-  const key = await generateApiKey();
-  const [row] = await db
-    .insert(schema.apiKeys)
-    .values({
-      keyPrefix: key.keyPrefix,
-      keyHash: key.keyHash,
-      label: "Books Test Key",
-      isAdmin: false,
-    })
-    .returning({ id: schema.apiKeys.id });
-
-  return { apiKeyId: row.id, rawKey: key.rawKey };
+  // A real Better Auth app password: the key column holds a hash the plugin
+  // computes, so a hand-written api_keys row cannot authenticate.
+  return await seedAppPassword(createTestAuth(db, TEST_ENV), db, { name: "Books Test Key" });
 }
 
 beforeAll(async () => {
@@ -61,13 +51,13 @@ afterAll(async () => {
 
 describe("POST /api/books/{id}/approve", () => {
   it("rejects a stale review-to-organized transition and does not enqueue organize", async () => {
-    const { apiKeyId, rawKey } = await seedApiKey();
+    const { userId, rawKey } = await seedApiKey();
     const [book] = await db
       .insert(schema.books)
       .values({
         status: "review",
         title: "Draft title",
-        createdBy: apiKeyId,
+        createdBy: userId,
       })
       .returning({ id: schema.books.id });
 
@@ -161,10 +151,10 @@ describe("POST /api/books/{id}/approve", () => {
   });
 
   it("normalizes the language when approving a reviewed book", async () => {
-    const { apiKeyId, rawKey } = await seedApiKey();
+    const { userId, rawKey } = await seedApiKey();
     const [book] = await db
       .insert(schema.books)
-      .values({ status: "review", title: "Draft", createdBy: apiKeyId })
+      .values({ status: "review", title: "Draft", createdBy: userId })
       .returning({ id: schema.books.id });
 
     const { app } = createApp({

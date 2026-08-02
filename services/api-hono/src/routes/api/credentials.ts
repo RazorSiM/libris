@@ -2,10 +2,10 @@ import { OpenAPIHono, createRoute } from "@hono/zod-openapi";
 import { HTTPException } from "hono/http-exception";
 import { and, eq } from "drizzle-orm";
 import { hash } from "bcryptjs";
-import { serviceCredentials } from "#db";
+import { kosyncCredentials, serviceCredentials } from "#db";
 import type { AppVariables } from "../../context.js";
-import { clearAuthCaches } from "../../middleware/auth.js";
-import { BCRYPT_ROUNDS, md5, sealToken, getApiKeyId } from "../../shared/auth.js";
+import { BCRYPT_ROUNDS, md5, sealToken, getUserId } from "../../shared/auth.js";
+import { hashKosyncSecret } from "../../shared/kosync-auth.js";
 import { CredentialServiceParamSchema, CredentialPutBodySchema } from "../../shared/validation.js";
 import {
   CredentialStatusSchema,
@@ -100,19 +100,32 @@ export const credentialsRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
   .openapi(getCredentialRoute, async (c) => {
     const { service } = c.req.valid("param");
     const db = c.get("db");
-    const apiKeyId = getApiKeyId(c);
+    const userId = getUserId(c);
 
-    const [row] = await db
-      .select({
-        username: serviceCredentials.username,
-        createdAt: serviceCredentials.createdAt,
-        updatedAt: serviceCredentials.updatedAt,
-      })
-      .from(serviceCredentials)
-      .where(
-        and(eq(serviceCredentials.service, service), eq(serviceCredentials.apiKeyId, apiKeyId)),
-      )
-      .limit(1);
+    // KoSync moved to its own table (libris-5ng.14); only Hardcover still lives
+    // in service_credentials.
+    const [row] =
+      service === "kosync"
+        ? await db
+            .select({
+              username: kosyncCredentials.username,
+              createdAt: kosyncCredentials.createdAt,
+              updatedAt: kosyncCredentials.updatedAt,
+            })
+            .from(kosyncCredentials)
+            .where(eq(kosyncCredentials.userId, userId))
+            .limit(1)
+        : await db
+            .select({
+              username: serviceCredentials.username,
+              createdAt: serviceCredentials.createdAt,
+              updatedAt: serviceCredentials.updatedAt,
+            })
+            .from(serviceCredentials)
+            .where(
+              and(eq(serviceCredentials.service, service), eq(serviceCredentials.userId, userId)),
+            )
+            .limit(1);
 
     if (!row) {
       return c.json({ configured: false, service });
@@ -131,82 +144,78 @@ export const credentialsRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
     const { username, password } = c.req.valid("json");
     const db = c.get("db");
     const env = c.get("env");
-    const apiKeyId = getApiKeyId(c);
+    const userId = getUserId(c);
 
-    // Prevent username collision: reject if another user already has this username for this service
-    if (service === "opds" || service === "kosync") {
+    if (service === "kosync") {
+      // One indexed lookup: username is unique across the whole table, so a
+      // row belonging to anyone else is a collision.
       const [existing] = await db
-        .select({ id: serviceCredentials.id })
-        .from(serviceCredentials)
-        .where(
-          and(eq(serviceCredentials.service, service), eq(serviceCredentials.username, username)),
-        )
+        .select({ userId: kosyncCredentials.userId })
+        .from(kosyncCredentials)
+        .where(eq(kosyncCredentials.username, username))
         .limit(1);
-      if (existing) {
-        // Check it's not the current user's own credential being updated
-        const [own] = await db
-          .select({ id: serviceCredentials.id })
-          .from(serviceCredentials)
-          .where(
-            and(
-              eq(serviceCredentials.service, service),
-              eq(serviceCredentials.username, username),
-              eq(serviceCredentials.apiKeyId, apiKeyId),
-            ),
-          )
-          .limit(1);
-        if (!own) {
-          throw new HTTPException(409, {
-            message: `Username "${username}" is already taken for ${service}`,
-          });
-        }
+      if (existing && existing.userId !== userId) {
+        throw new HTTPException(409, {
+          message: `Username "${username}" is already taken for kosync`,
+        });
       }
+
+      // sha256 of the value KOReader will put on the wire, which is
+      // md5(password) — not the plaintext. See shared/kosync-auth.ts.
+      await db
+        .insert(kosyncCredentials)
+        .values({ userId, username, secretHash: hashKosyncSecret(md5(password)) })
+        .onConflictDoUpdate({
+          target: kosyncCredentials.userId,
+          set: { username, secretHash: hashKosyncSecret(md5(password)), updatedAt: new Date() },
+        });
+
+      return c.json({ service, username, updated: true });
     }
 
-    // Services that need the original value back (API tokens) use reversible encryption.
-    // Services that only verify passwords (OPDS, KoSync) use bcrypt (one-way hash).
-    // KoSync: hash md5(password) because KOReader sends md5-hashed passwords.
-    const needsReversible = service === "hardcover";
-    const valueToHash = service === "kosync" ? md5(password) : password;
-    const passwordHash = needsReversible
-      ? await sealToken(password, env.API_SECRET_KEY)
-      : await hash(valueToHash, BCRYPT_ROUNDS);
+    // No collision check: only Hardcover reaches here, and its "username" is a
+    // label for the user's own token rather than an identity anyone else could
+    // claim. The OPDS branch that used to live here is gone with the service.
+    // Only Hardcover reaches here, and it needs the original value back to call
+    // the API — so it is sealed with reversible encryption, not hashed.
+    const passwordHash =
+      service === "hardcover"
+        ? await sealToken(password, env.API_SECRET_KEY)
+        : await hash(password, BCRYPT_ROUNDS);
 
     await db
       .insert(serviceCredentials)
-      .values({ service, apiKeyId, username, passwordHash })
+      .values({ service, userId, username, passwordHash })
       .onConflictDoUpdate({
-        target: [serviceCredentials.service, serviceCredentials.apiKeyId],
-        targetWhere: eq(serviceCredentials.apiKeyId, apiKeyId),
+        target: [serviceCredentials.service, serviceCredentials.userId],
+        targetWhere: eq(serviceCredentials.userId, userId),
         set: { username, passwordHash, updatedAt: new Date() },
       });
-
-    if (service === "opds") {
-      clearAuthCaches();
-    }
 
     return c.json({ service, username, updated: true });
   })
   .openapi(deleteCredentialRoute, async (c) => {
     const { service } = c.req.valid("param");
     const db = c.get("db");
-    const apiKeyId = getApiKeyId(c);
+    const userId = getUserId(c);
 
-    const deleted = await db
-      .delete(serviceCredentials)
-      .where(
-        and(eq(serviceCredentials.service, service), eq(serviceCredentials.apiKeyId, apiKeyId)),
-      )
-      .returning({ id: serviceCredentials.id });
+    const deleted =
+      service === "kosync"
+        ? await db
+            .delete(kosyncCredentials)
+            .where(eq(kosyncCredentials.userId, userId))
+            .returning({ id: kosyncCredentials.id })
+        : await db
+            .delete(serviceCredentials)
+            .where(
+              and(eq(serviceCredentials.service, service), eq(serviceCredentials.userId, userId)),
+            )
+            .returning({ id: serviceCredentials.id });
 
     if (deleted.length === 0) {
       throw new HTTPException(404, {
         message: `No credentials found for service: ${service}`,
       });
-    }
-
-    if (service === "opds") {
-      clearAuthCaches();
     }
 
     return c.json({ service, deleted: true });
