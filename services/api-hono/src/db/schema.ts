@@ -1,7 +1,6 @@
 import { getColumns, sql } from "drizzle-orm";
 import {
   bigint,
-  boolean,
   customType,
   foreignKey,
   index,
@@ -23,6 +22,9 @@ import type { NormalizedMetadata } from "../types/book.js";
 // but are re-exported here so `import * as schema` (and therefore drizzle-kit,
 // the Drizzle adapter and defineRelations) sees one complete schema.
 export * from "./auth-schema.js";
+// `export *` does not bind names locally, and the tables below reference
+// users.id directly, so it is also imported.
+import { users } from "./auth-schema.js";
 
 const tsvector = customType<{ data: string }>({
   dataType() {
@@ -38,22 +40,6 @@ export const readingStatusEnum = pgEnum("reading_status", [
   "finished",
   "paused",
 ]);
-
-// ── API keys (defined first — referenced by books.createdBy, serviceCredentials, etc.) ──
-
-export const apiKeys = pgTable(
-  "api_keys",
-  {
-    id: uuid("id").primaryKey().defaultRandom(),
-    keyPrefix: text("key_prefix").notNull(),
-    keyHash: text("key_hash").notNull().unique(),
-    label: text("label").notNull(),
-    isAdmin: boolean("is_admin").notNull().default(false),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-    lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
-  },
-  (t) => [index("api_keys_key_prefix_idx").on(t.keyPrefix)],
-);
 
 // ── Books ───────────────────────────────────────────────────────────
 
@@ -79,7 +65,14 @@ export const books = pgTable(
     tags: text("tags").array().notNull().default([]),
     hardcoverBookId: integer("hardcover_book_id"),
     hardcoverEditionId: integer("hardcover_edition_id"),
-    createdBy: uuid("created_by").references(() => apiKeys.id, { onDelete: "set null" }),
+    // NOT NULL since libris-5ng.7: every book has an owner, which is what lets
+    // authorization drop its "unowned book" branch. RESTRICT rather than
+    // CASCADE or SET NULL — deleting a user must not delete or orphan their
+    // books, so the admin delete path reassigns them first and a path that
+    // forgets fails loudly here.
+    createdBy: text("created_by")
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict" }),
     possibleDuplicateOf: uuid("possible_duplicate_of"),
     approvedAt: timestamp("approved_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -105,9 +98,8 @@ export const books = pgTable(
       columns: [t.possibleDuplicateOf],
       foreignColumns: [t.id],
     }).onDelete("set null"),
-    index("books_created_by_idx")
-      .on(t.createdBy)
-      .where(sql`created_by IS NOT NULL`),
+    // No longer partial: created_by is NOT NULL, so the predicate excluded nothing.
+    index("books_created_by_idx").on(t.createdBy),
     index("books_hardcover_book_id_idx")
       .on(t.hardcoverBookId)
       .where(sql`hardcover_book_id IS NOT NULL`),
@@ -179,9 +171,9 @@ export const readingProgress = pgTable(
     // Nullable: intentionally preserved when a book is deleted so reading
     // history is not lost. Set to NULL via onDelete cascade from books table.
     bookId: uuid("book_id").references(() => books.id, { onDelete: "set null" }),
-    apiKeyId: uuid("api_key_id")
+    userId: text("user_id")
       .notNull()
-      .references(() => apiKeys.id, { onDelete: "cascade" }),
+      .references(() => users.id, { onDelete: "cascade" }),
     document: text("document").notNull(),
     device: text("device").notNull(),
     deviceId: text("device_id"),
@@ -197,10 +189,10 @@ export const readingProgress = pgTable(
       .$onUpdate(() => new Date()),
   },
   (t) => [
-    unique("reading_progress_user_document_device_uniq").on(t.apiKeyId, t.document, t.device),
+    unique("reading_progress_user_document_device_uniq").on(t.userId, t.document, t.device),
     index("reading_progress_device_idx").on(t.device),
     index("reading_progress_book_id_idx").on(t.bookId),
-    index("reading_progress_api_key_id_idx").on(t.apiKeyId),
+    index("reading_progress_user_id_idx").on(t.userId),
   ],
 );
 
@@ -211,7 +203,7 @@ export const readingProgressHistory = pgTable(
     // Nullable: same intentional semantics as readingProgress.bookId — history
     // rows survive book deletion.
     bookId: uuid("book_id").references(() => books.id, { onDelete: "set null" }),
-    apiKeyId: uuid("api_key_id").references(() => apiKeys.id, { onDelete: "set null" }),
+    userId: text("user_id").references(() => users.id, { onDelete: "set null" }),
     document: text("document").notNull(),
     device: text("device").notNull(),
     progress: text("progress").notNull(),
@@ -225,7 +217,7 @@ export const readingProgressHistory = pgTable(
     index("reading_progress_history_document_created_at_idx").on(t.document, t.createdAt),
     index("reading_progress_history_created_at_idx").on(t.createdAt),
     index("reading_progress_history_book_id_idx").on(t.bookId),
-    index("reading_progress_history_api_key_id_idx").on(t.apiKeyId),
+    index("reading_progress_history_user_id_idx").on(t.userId),
   ],
 );
 
@@ -245,9 +237,9 @@ export const readingAggregate = pgTable(
   "reading_aggregate",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    apiKeyId: uuid("api_key_id")
+    userId: text("user_id")
       .notNull()
-      .references(() => apiKeys.id, { onDelete: "cascade" }),
+      .references(() => users.id, { onDelete: "cascade" }),
     // Nullable, mirroring readingProgress.bookId — aggregate survives book deletion.
     bookId: uuid("book_id").references(() => books.id, { onDelete: "set null" }),
     startedAt: timestamp("started_at", { withTimezone: true }),
@@ -265,9 +257,9 @@ export const readingAggregate = pgTable(
       .$onUpdate(() => new Date()),
   },
   (t) => [
-    unique("reading_aggregate_user_book_uniq").on(t.apiKeyId, t.bookId),
+    unique("reading_aggregate_user_book_uniq").on(t.userId, t.bookId),
     index("reading_aggregate_book_id_idx").on(t.bookId),
-    index("reading_aggregate_api_key_id_idx").on(t.apiKeyId),
+    index("reading_aggregate_user_id_idx").on(t.userId),
   ],
 );
 
@@ -276,9 +268,9 @@ export const serviceCredentials = pgTable(
   {
     id: uuid("id").primaryKey().defaultRandom(),
     service: text("service").notNull(),
-    apiKeyId: uuid("api_key_id")
+    userId: text("user_id")
       .notNull()
-      .references(() => apiKeys.id, { onDelete: "cascade" }),
+      .references(() => users.id, { onDelete: "cascade" }),
     username: text("username").notNull(),
     passwordHash: text("password_hash").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -288,9 +280,51 @@ export const serviceCredentials = pgTable(
       .$onUpdate(() => new Date()),
   },
   (t) => [
-    unique("service_credentials_service_api_key_uniq").on(t.service, t.apiKeyId),
-    index("service_credentials_api_key_id_idx").on(t.apiKeyId),
+    unique("service_credentials_service_user_uniq").on(t.service, t.userId),
+    index("service_credentials_user_id_idx").on(t.userId),
     uniqueIndex("service_credentials_service_username_uniq").on(t.service, t.username),
+  ],
+);
+
+/**
+ * KoSync credentials, deliberately NOT Better Auth api keys.
+ *
+ * KOReader sends `x-auth-user` and `x-auth-key`, where x-auth-key is
+ * md5(password) — the plaintext never travels, so the md5 digest IS the bearer
+ * secret. Forcing this onto the apiKey plugin would mean storing
+ * md5(appPassword) while showing appPassword to the user, and the plugin only
+ * lets you influence the stored value through customKeyGenerator, which takes
+ * no per-call context. That needs AsyncLocalStorage — action at a distance in
+ * the credential-minting path, to satisfy one client's quirk. The weirdness
+ * stays at the edge instead.
+ *
+ * secretHash is sha256 of the exact value KOReader puts on the wire. A fast
+ * hash is the right choice precisely because that value is a high-entropy
+ * random secret rather than a human-chosen password: there is nothing for an
+ * offline attacker to guess, so the work factor buys nothing and only slows
+ * down every sync request.
+ */
+export const kosyncCredentials = pgTable(
+  "kosync_credentials",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    username: text("username").notNull(),
+    secretHash: text("secret_hash").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow()
+      .$onUpdate(() => new Date()),
+  },
+  (t) => [
+    // Lookup is by username, which is what KOReader sends; unique because it is
+    // the identity KOReader knows the account by.
+    uniqueIndex("kosync_credentials_username_uniq").on(t.username),
+    // One KoSync credential per person, matching the old (service, user) unique.
+    uniqueIndex("kosync_credentials_user_id_uniq").on(t.userId),
   ],
 );
 
@@ -315,13 +349,13 @@ export const uploadRegistry = pgTable(
   {
     id: uuid("id").primaryKey().defaultRandom(),
     checksum: text("checksum").notNull(),
-    apiKeyId: uuid("api_key_id")
+    userId: text("user_id")
       .notNull()
-      .references(() => apiKeys.id, { onDelete: "cascade" }),
+      .references(() => users.id, { onDelete: "cascade" }),
     filename: text("filename").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [unique("upload_registry_checksum_api_key_uniq").on(t.checksum, t.apiKeyId)],
+  (t) => [unique("upload_registry_checksum_user_uniq").on(t.checksum, t.userId)],
 );
 
 export const hardcoverSyncLog = pgTable(
@@ -331,9 +365,9 @@ export const hardcoverSyncLog = pgTable(
     bookId: uuid("book_id")
       .notNull()
       .references(() => books.id, { onDelete: "cascade" }),
-    apiKeyId: uuid("api_key_id")
+    userId: text("user_id")
       .notNull()
-      .references(() => apiKeys.id, { onDelete: "cascade" }),
+      .references(() => users.id, { onDelete: "cascade" }),
     hardcoverUserBookId: integer("hardcover_user_book_id"),
     hardcoverReadId: integer("hardcover_read_id"),
     lastStatus: text("last_status"),
@@ -347,9 +381,9 @@ export const hardcoverSyncLog = pgTable(
       .$onUpdate(() => new Date()),
   },
   (t) => [
-    unique("hardcover_sync_log_user_book_uniq").on(t.apiKeyId, t.bookId),
+    unique("hardcover_sync_log_user_book_uniq").on(t.userId, t.bookId),
     index("hardcover_sync_log_status_idx").on(t.lastStatus),
     index("hardcover_sync_log_last_synced_at_idx").on(t.lastSyncedAt),
-    index("hardcover_sync_log_api_key_id_idx").on(t.apiKeyId),
+    index("hardcover_sync_log_user_id_idx").on(t.userId),
   ],
 );
