@@ -55,7 +55,31 @@ export default defineConfig({
         ...devices["Desktop Chrome"],
         storageState: ".auth/user.json",
       },
+      // Everything except first-run setup, which has to come after this whole
+      // project — see below.
+      testIgnore: /first-run-setup\.spec\.ts/,
       dependencies: ["setup", "user-setup"],
+    },
+    {
+      /**
+       * First-run setup, alone and last.
+       *
+       * It deletes every account to get the empty install it is testing, which
+       * revokes the app passwords, invalidates the ids in E2E_ADMIN_USER_ID and
+       * friends, and kills the cookies in .auth/*.json. Nothing that depends on
+       * those can follow it.
+       *
+       * `dependencies: ["chromium"]` is what enforces that: Playwright will not
+       * start this project until chromium has finished. Without it the spec
+       * sorts alphabetically among the rest and every spec after it runs signed
+       * out.
+       *
+       * No storageState: a first-run visitor has no session by definition.
+       */
+      name: "first-run",
+      testMatch: /first-run-setup\.spec\.ts/,
+      use: { ...devices["Desktop Chrome"] },
+      dependencies: ["chromium"],
     },
   ],
 

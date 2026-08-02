@@ -248,7 +248,11 @@ test.describe("Inbox List", { tag: "@smoke" }, () => {
     test("inbox list and detail show uploader label", async ({ authedPage: page }) => {
       await goInbox(page);
       await expect(page.getByText("Uploader Inbox Book")).toBeVisible({ timeout: 10_000 });
-      await expect(page.getByText(`Uploaded by ${uploaderLabel}`)).toBeVisible();
+
+      // Scoped to this book's row: every book has an owner, so the byline is on
+      // every row and an unscoped getByText matches the whole list.
+      const row = page.getByRole("button").filter({ hasText: "Uploader Inbox Book" });
+      await expect(row.getByText(`Uploaded by ${uploaderLabel}`)).toBeVisible();
 
       await page.getByText("Uploader Inbox Book").click();
       await page.waitForURL(`**/inbox/${uploaderBookId}`, { timeout: 10_000 });

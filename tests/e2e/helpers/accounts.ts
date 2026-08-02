@@ -29,14 +29,14 @@ export const USER_KEY_ENV = "E2E_USER_API_KEY";
 /**
  * Replayable session cookies, for the routes app passwords are refused on.
  *
- * Since libris-5ng.28 an app password is scoped: it may not reach admin routes,
- * /api/auth/*, /api/app-passwords or /api/credentials. That is the point of the
- * feature — a credential on an e-reader must not be able to manage the account
- * that issued it — but it means a spec that wants to drive those routes has to
- * authenticate the way a browser does, not with a Bearer key.
+ * An app password is scoped: it may not reach admin routes, /api/auth/*,
+ * /api/app-passwords or /api/credentials. That is the point of the feature — a
+ * credential on an e-reader must not be able to manage the account that issued
+ * it — but it means a spec driving those routes has to authenticate the way a
+ * browser does, not with a Bearer key.
  *
- * These are the same sessions global-setup already creates to bootstrap the
- * run; it now just keeps them rather than throwing them away.
+ * global-setup signs both accounts in to bootstrap the run and keeps the
+ * cookies here rather than throwing them away.
  */
 export const ADMIN_COOKIE_ENV = "E2E_ADMIN_COOKIE";
 export const USER_COOKIE_ENV = "E2E_USER_COOKIE";

@@ -1,5 +1,5 @@
 /**
- * E2E: the whole auth surface, front to back (libris-5ng.24).
+ * E2E: the whole auth surface, front to back.
  *
  * These drive a real browser against a real API and a real Postgres. Unit and
  * integration tests cover the pieces; what only this level can catch is the
@@ -18,7 +18,7 @@ import {
   type Browser,
   type Page,
 } from "@playwright/test";
-import { ADMIN, REGULAR_USER } from "./helpers/accounts.js";
+import { ADMIN } from "./helpers/accounts.js";
 import { API_BASE, getApiKey, getUserApiKey, sessionHeaders, userSessionHeaders } from "./helpers";
 import { signInThroughUi } from "./helpers/sign-in.js";
 
@@ -247,9 +247,9 @@ test.describe("session", () => {
 
 test.describe("authorization", () => {
   test("a non-admin cannot reach an admin-only endpoint", async () => {
-    // Sessions, not app passwords, so this stays a test about ROLE. Since
-    // libris-5ng.28 a Bearer key is refused on admin routes whoever owns it,
-    // which would make this pass without the role check existing at all.
+    // Sessions, not app passwords, so this stays a test about ROLE. A Bearer
+    // key is refused on admin routes whoever owns it, which would make this
+    // pass without the role check existing at all.
     const api = await anonymousApi();
     const res = await api.get(`${API_BASE}/api/jobs/status`, { headers: userSessionHeaders() });
     expect(res.status()).toBe(403);
@@ -374,7 +374,7 @@ test.describe("app passwords", () => {
   });
 });
 
-// ── How far an app password reaches (libris-5ng.28) ──────────────────
+// ── How far an app password reaches ──────────────────
 
 /**
  * The blast radius of a leaked credential.
@@ -550,7 +550,7 @@ test.describe("app passwords in the UI", () => {
       true,
     );
     // ...and it reaches no further than the library: admin routes refuse app
-    // passwords outright now (libris-5ng.28), on top of this user not being an
+    // passwords outright now, on top of this user not being an
     // admin in the first place.
     expect(
       (await api.get(`${API_BASE}/api/jobs/status`, { headers: { "x-api-key": key } })).status(),
@@ -793,63 +793,10 @@ test.describe.serial("user management", () => {
   });
 });
 
-// ── First-run setup ──────────────────────────────────────────────────
+// ── First-run setup lives in first-run-setup.spec.ts ─────────────────
 //
-// Last, and serial: it empties the users table, which invalidates every other
-// spec's session. The accounts are rebuilt before it finishes.
-
-test.describe.serial("first-run setup", () => {
-  test.use(ANONYMOUS);
-
-  test("offers setup on an empty install, then closes for good", async ({ page }) => {
-    const api = await anonymousApi();
-    await api.post(`${API_BASE}/__test/cleanup`, { data: { includeAuth: true } });
-
-    expect(await (await api.get(`${API_BASE}/api/setup`)).json()).toEqual({ required: true });
-
-    await page.goto("/login");
-    await expect(page.getByTestId("setup-intro")).toBeVisible();
-    await expect(page.getByTestId("setup-submit-btn")).toBeVisible();
-
-    await page.getByTestId("setup-name-input").fill(ADMIN.name);
-    await page.getByTestId("setup-email-input").fill(ADMIN.email);
-    await page.getByTestId("setup-password-input").fill(ADMIN.password);
-    await page.getByTestId("setup-submit-btn").click();
-
-    // Setup signs the new admin straight in — no second form to fill.
-    await expect(page).not.toHaveURL(/\/login/, { timeout: 15_000 });
-    await expect(page.getByRole("link", { name: "Home" })).toBeVisible();
-
-    // And it cannot be used again to mint a second admin.
-    const second = await api.post(`${API_BASE}/api/setup`, {
-      data: { email: "intruder@example.test", password: "intruder-password", name: "Intruder" },
-    });
-    expect(second.status()).toBe(409);
-    expect(await (await api.get(`${API_BASE}/api/setup`)).json()).toEqual({ required: false });
-    await api.dispose();
-  });
-
-  test("the first account really is an admin", async ({ page }) => {
-    await signInThroughUi(page, ADMIN.email, ADMIN.password);
-    const cookie = (await page.context().cookies()).map((c) => `${c.name}=${c.value}`).join("; ");
-
-    const api = await anonymousApi();
-    // An admin-only endpoint is the honest test of the role — the setup route
-    // claims to create an admin, and this is what that claim has to mean.
-    expect((await api.get(`${API_BASE}/api/jobs/status`, { headers: { cookie } })).ok()).toBe(true);
-
-    // Rebuild the regular user the rest of the suite expects — the cleanup
-    // above removed it, and the storageState files still reference it.
-    const res = await api.post(`${API_BASE}/api/auth/admin/create-user`, {
-      headers: { cookie, Origin: API_BASE },
-      data: {
-        email: REGULAR_USER.email,
-        password: REGULAR_USER.password,
-        name: REGULAR_USER.name,
-        role: "user",
-      },
-    });
-    expect(res.ok(), await res.text()).toBe(true);
-    await api.dispose();
-  });
-});
+// It was here, marked "Last, and serial", because it empties the users table.
+// That was last within THIS FILE, which sorts first in the suite — so every
+// other spec ran against an install with no accounts. It now
+// has its own Playwright project that depends on `chromium`, which is the only
+// way to be last in a run rather than last in a file.

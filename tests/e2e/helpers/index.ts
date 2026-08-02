@@ -38,7 +38,7 @@ export function userAuthHeaders(): { Authorization: string } {
 }
 
 /**
- * Session headers for the routes an app password is refused on (libris-5ng.28):
+ * Session headers for the routes an app password is refused on:
  * anything under /api/auth/, /api/app-passwords, /api/credentials, and every
  * admin route including /api/jobs.
  *
@@ -132,7 +132,7 @@ export async function waitForJob(
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     // Session, not Bearer: /api/jobs is admin-policy and app passwords are
-    // refused there (libris-5ng.28).
+    // refused there.
     const res = await fetch(`${API_BASE}/api/jobs/status`, { headers: sessionHeaders() });
     if (res.ok) {
       const data = (await res.json()) as {

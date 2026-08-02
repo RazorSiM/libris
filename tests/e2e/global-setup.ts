@@ -160,7 +160,7 @@ export default async function globalSetup(): Promise<void> {
   process.env[ADMIN_KEY_ENV] = await createAppPassword(adminCookie, "e2e-admin-key");
   process.env[USER_KEY_ENV] = await createAppPassword(userCookie, "e2e-user-key");
   // Kept, not discarded: app passwords are scoped out of the admin, account and
-  // credential routes (libris-5ng.28), so specs touching those need a session.
+  // credential routes, so specs touching those need a session.
   process.env[ADMIN_COOKIE_ENV] = adminCookie;
   process.env[USER_COOKIE_ENV] = userCookie;
 }

@@ -9,7 +9,6 @@
 import type { Page } from "@playwright/test";
 import { copyFile, mkdir, readdir, unlink } from "node:fs/promises";
 import { join } from "node:path";
-import { test as baseTest } from "@playwright/test";
 import { test, expect } from "./fixtures";
 import {
   API_BASE,
@@ -127,45 +126,19 @@ async function countInboxBooks(): Promise<number> {
 }
 
 // ---------------------------------------------------------------------------
-// Tests — Auth Error Handling (unauthenticated context)
+// Auth error handling lives in auth.spec.ts
 // ---------------------------------------------------------------------------
-
-baseTest.describe("Auth Error Handling", { tag: "@smoke" }, () => {
-  // These tests verify unauthenticated flows — clear the project-level storageState
-  baseTest.use({ storageState: { cookies: [], origins: [] } });
-
-  baseTest("accessing /inbox without auth redirects to /settings", async ({ page }) => {
-    await page.goto("/inbox");
-    await page.waitForURL("**/settings");
-  });
-
-  baseTest("accessing /library without auth redirects to /settings", async ({ page }) => {
-    await page.goto("/library");
-    await page.waitForURL("**/settings");
-  });
-
-  baseTest("invalid API key: BFF rejects login and shows error", async ({ page }) => {
-    await page.goto("/settings");
-    await page.waitForLoadState("networkidle");
-    await expect(page.getByText("Welcome to Libris — Set Up Your API Key")).toBeVisible({
-      timeout: 10_000,
-    });
-
-    // Enter an invalid API key via manual entry
-    await page.getByPlaceholder("Enter your API key").fill("invalid-key-will-not-work");
-    await page.getByRole("button", { name: "Login" }).click();
-
-    // BFF validates the key against the backend → 401 → error toast
-    // User should remain on the unauthenticated setup view
-    await expect(page.getByText("Welcome to Libris — Set Up Your API Key")).toBeVisible({
-      timeout: 10_000,
-    });
-
-    // Authenticated tabs should NOT appear
-    await expect(page.getByRole("tab", { name: "System" })).not.toBeVisible();
-  });
-});
-
+//
+// Three tests were here and all three described the old model: an
+// unauthenticated visitor was bounced to /settings, and signing in meant
+// pasting an API key into a "Welcome to Libris — Set Up Your API Key" screen.
+// The target is /login now and the credential is an email and a password.
+//
+// auth.spec.ts covers the replacements and covers them better — "sends an
+// anonymous visitor to /login", "returns the user to the page they asked for"
+// (which the old redirect tests never checked), and "rejects a wrong password
+// without confirming the account exists".
+//
 // ---------------------------------------------------------------------------
 // Tests — Error Toasts & Edge Cases (authenticated context)
 // ---------------------------------------------------------------------------
