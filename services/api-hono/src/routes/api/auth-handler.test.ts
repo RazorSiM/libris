@@ -7,6 +7,8 @@ import type { Env } from "../../env.js";
 import { createAuth } from "../../lib/auth.js";
 import { createMemorySecondaryStorage } from "../../services/auth-secondary-storage.js";
 import { createMemoryKVStore } from "../../services/kv-store.js";
+import { eq } from "drizzle-orm";
+import { withLastAdminLock } from "../../middleware/last-admin.js";
 
 vi.mock("../../services/redis.js", () => ({
   isRedisHealthy: async () => ({ ok: true, latencyMs: 1 }),
@@ -108,7 +110,67 @@ beforeEach(async () => {
   await db.delete(schema.accounts);
   await db.delete(schema.verifications);
   await db.delete(schema.users);
+  await db.delete(schema.appSettings);
 });
+
+async function createAdmin(
+  auth: ReturnType<typeof createTestApp>["auth"],
+  email: string,
+): Promise<{ id: string; cookie: string }> {
+  const created = await auth.api.createUser({
+    body: {
+      email,
+      password: "correct-horse-battery",
+      name: email.split("@")[0]!,
+      role: "admin",
+    },
+  });
+  const { headers } = await auth.api.signInEmail({
+    body: { email, password: "correct-horse-battery" },
+    returnHeaders: true,
+  });
+  return {
+    id: created.user.id,
+    cookie: headers
+      .getSetCookie()
+      .map((value) => value.split(";")[0])
+      .join("; "),
+  };
+}
+
+async function setRoleOverHttp(
+  app: ReturnType<typeof createTestApp>["app"],
+  cookie: string,
+  userId: string,
+  role: "admin" | "user",
+) {
+  return await app.request("/api/auth/admin/set-role", {
+    method: "POST",
+    headers: {
+      cookie,
+      "content-type": "application/json",
+      origin: "http://localhost:3000",
+    },
+    body: JSON.stringify({ userId, role }),
+  });
+}
+
+async function adminActionOverHttp(
+  app: ReturnType<typeof createTestApp>["app"],
+  cookie: string,
+  path: "ban-user" | "remove-user",
+  userId: string,
+) {
+  return await app.request(`/api/auth/admin/${path}`, {
+    method: "POST",
+    headers: {
+      cookie,
+      "content-type": "application/json",
+      origin: "http://localhost:3000",
+    },
+    body: JSON.stringify({ userId }),
+  });
+}
 
 describe("GET /api/auth/ok", () => {
   it("answers without any credentials", async () => {
@@ -190,6 +252,66 @@ describe("the auth middleware stands aside for /api/auth/", () => {
     const res = await app.request("/api/authors");
 
     expect(res.status).toBe(401);
+  });
+});
+
+describe("last-admin invariant", () => {
+  it("refuses a direct HTTP attempt to demote the sole admin", async () => {
+    const { app, auth } = createTestApp();
+    const admin = await createAdmin(auth, "sole-admin@example.com");
+
+    const response = await setRoleOverHttp(app, admin.cookie, admin.id, "user");
+
+    expect(response.status).toBe(409);
+    const [stored] = await db.select().from(schema.users).where(eq(schema.users.id, admin.id));
+    expect(stored?.role).toBe("admin");
+  });
+
+  it("still allows demotion while another admin remains", async () => {
+    const { app, auth } = createTestApp();
+    const acting = await createAdmin(auth, "acting-admin@example.com");
+    const target = await createAdmin(auth, "target-admin@example.com");
+
+    const response = await setRoleOverHttp(app, acting.cookie, target.id, "user");
+
+    expect(response.status).toBe(200);
+    const admins = await db.select().from(schema.users).where(eq(schema.users.role, "admin"));
+    expect(admins.map(({ id }) => id)).toEqual([acting.id]);
+  });
+
+  it.each(["ban-user", "remove-user"] as const)(
+    "refuses to %s when the target is the sole admin",
+    async (path) => {
+      const { app, auth } = createTestApp();
+      const admin = await createAdmin(auth, `${path}@example.com`);
+
+      const response = await adminActionOverHttp(app, admin.cookie, path, admin.id);
+
+      expect(response.status).toBe(409);
+      const [stored] = await db.select().from(schema.users).where(eq(schema.users.id, admin.id));
+      expect(stored).toMatchObject({ role: "admin", banned: false });
+    },
+  );
+
+  it("allows only one of two concurrent demotions", async () => {
+    const { auth } = createTestApp();
+    const first = await createAdmin(auth, "first-admin@example.com");
+    const second = await createAdmin(auth, "second-admin@example.com");
+
+    const attempts = await Promise.allSettled([
+      withLastAdminLock(db as never, second.id, async (tx) => {
+        await tx.update(schema.users).set({ role: "user" }).where(eq(schema.users.id, second.id));
+      }),
+      withLastAdminLock(db as never, first.id, async (tx) => {
+        await tx.update(schema.users).set({ role: "user" }).where(eq(schema.users.id, first.id));
+      }),
+    ]);
+
+    expect(attempts.map(({ status }) => status).sort()).toEqual(["fulfilled", "rejected"]);
+    const rejection = attempts.find(({ status }) => status === "rejected");
+    expect(rejection).toMatchObject({ reason: { status: 409 } });
+    const admins = await db.select().from(schema.users).where(eq(schema.users.role, "admin"));
+    expect(admins).toHaveLength(1);
   });
 });
 

@@ -819,6 +819,18 @@ test.describe.serial("user management", () => {
     await expect(other.getByTestId("role-badge-admin")).toHaveCount(0);
 
     await expect(adminRow.getByRole("button", { name: "Make user" })).toBeDisabled();
+
+    // The disabled button is only a convenience. Bypass the UI and prove the
+    // authoritative Better Auth endpoint enforces the invariant too.
+    const adminTestId = await adminRow.getAttribute("data-testid");
+    const adminId = adminTestId?.replace("user-item-", "");
+    expect(adminId).toBeTruthy();
+    const response = await page.request.post(`${API_BASE}/api/auth/admin/set-role`, {
+      data: { userId: adminId, role: "user" },
+      headers: { origin: new URL(page.url()).origin },
+    });
+    expect(response.status()).toBe(409);
+    await expect(adminRow.getByTestId("role-badge-admin")).toBeVisible();
   });
 });
 

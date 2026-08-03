@@ -10,6 +10,7 @@ import { securityHeaders } from "./middleware/security-headers.js";
 import { rateLimitMiddleware } from "./middleware/rate-limit.js";
 import { bodyLimitMiddleware } from "./middleware/body-limit.js";
 import { authMiddleware } from "./middleware/auth.js";
+import { lastAdminMiddleware } from "./middleware/last-admin.js";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { createRouter } from "./routes/index.js";
 import { root, getLogger } from "./lib/logger.js";
@@ -95,6 +96,9 @@ export function createApp({ services, env }: CreateAppOptions) {
   // Consequence: a catch-all contributes nothing to Hono's RPC type graph, so
   // there is no typed client for these paths. The frontend talks to them
   // through the Better Auth client instead.
+  app.use("/api/auth/admin/set-role", lastAdminMiddleware);
+  app.use("/api/auth/admin/ban-user", lastAdminMiddleware);
+  app.use("/api/auth/admin/remove-user", lastAdminMiddleware);
   app.on(["GET", "POST"], "/api/auth/*", (c) => services.auth.handler(c.req.raw));
 
   // Mount routes
