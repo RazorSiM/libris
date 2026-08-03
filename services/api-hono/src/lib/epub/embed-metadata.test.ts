@@ -250,6 +250,33 @@ describe("embedEpubMetadata", () => {
     expect(raw.readUInt16LE(8)).toBe(0);
   });
 
+  it("keeps deflated entries deflated when rebuilding the EPUB", async () => {
+    const opf = makeOpf({ title: "Compression Test" });
+    const epub = buildZip([
+      { name: "mimetype", data: Buffer.from("application/epub+zip"), compress: false },
+      {
+        name: "META-INF/container.xml",
+        data: Buffer.from(makeContainerXml("content.opf")),
+        compress: true,
+      },
+      { name: "content.opf", data: Buffer.from(opf), compress: true },
+      { name: "chapter.xhtml", data: Buffer.alloc(16_384, "a"), compress: true },
+    ]);
+    const path = await writeEpub("preserve-compression.epub", epub);
+
+    await embedEpubMetadata(path, { title: "Updated" });
+
+    const rebuilt = await readFile(path);
+    const eocd = rebuilt.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06]));
+    const cdSize = rebuilt.readUInt32LE(eocd + 12);
+    const cdOffset = rebuilt.readUInt32LE(eocd + 16);
+    const { parseCentralDirectory } = await import("./zip");
+    const entries = parseCentralDirectory(rebuilt.subarray(cdOffset, cdOffset + cdSize), cdSize);
+
+    expect(entries.find((entry) => entry.fileName === "chapter.xhtml")?.compression).toBe(8);
+    expect(rebuilt.length).toBeLessThan(epub.length * 2);
+  });
+
   it("handles epub with no existing metadata section gracefully", async () => {
     const opfXml = `<?xml version="1.0" encoding="UTF-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" version="3.0">

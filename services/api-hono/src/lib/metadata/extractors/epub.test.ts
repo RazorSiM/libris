@@ -164,6 +164,16 @@ async function writeEpub(name: string, data: Buffer): Promise<string> {
 }
 
 describe("extractEpubMetadata", () => {
+  it("rejects an OPF beyond the parser input budget without scanning it", async () => {
+    const oversizedOpf = `<package><metadata>${"<dc:title>".repeat(250_000)}</metadata></package>`;
+    const epub = buildEpub(oversizedOpf);
+    const path = await writeEpub("oversized-opf.epub", epub);
+    const startedAt = performance.now();
+
+    await expect(extractEpubMetadata(path)).rejects.toThrow(/OPF.*limit/i);
+    expect(performance.now() - startedAt).toBeLessThan(100);
+  });
+
   describe("valid EPUBs", () => {
     it("extracts full metadata from a well-formed EPUB", async () => {
       const opf = makeOpf({

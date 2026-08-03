@@ -28,7 +28,10 @@ export async function embedEpubMetadata(
   // Skip if no meaningful metadata to embed
   if (!hasAnyMetadata(metadata) && !coverImagePath) return;
 
-  const { rawEntries } = await readAllZipEntries(filePath);
+  const { entries, rawEntries } = await readAllZipEntries(filePath);
+  const originalCompression = new Map(
+    entries.map((entry) => [entry.fileName, entry.compression === 8] as const),
+  );
 
   // Find OPF path from container.xml
   const containerXml = rawEntries.get("META-INF/container.xml");
@@ -77,19 +80,23 @@ export async function embedEpubMetadata(
 
     if (name === opfPath) {
       // Replace OPF with modified version
-      buildEntries.push({ name, data: Buffer.from(newOpfXml, "utf8"), compress: false });
+      buildEntries.push({
+        name,
+        data: Buffer.from(newOpfXml, "utf8"),
+        compress: originalCompression.get(name) ?? true,
+      });
     } else if (coverData && existingCoverZipPath && name === existingCoverZipPath) {
       // Replace existing cover image (found via OPF metadata or filename heuristic)
-      buildEntries.push({ name, data: coverData, compress: false });
+      buildEntries.push({ name, data: coverData, compress: originalCompression.get(name) ?? true });
     } else {
-      buildEntries.push({ name, data, compress: false });
+      buildEntries.push({ name, data, compress: originalCompression.get(name) ?? true });
     }
   }
 
   // Add new cover image entry only if no existing cover was found to replace
   if (coverData && !existingCoverZipPath) {
     const coverZipPath = opfDir + "cover-embedded.jpg";
-    buildEntries.push({ name: coverZipPath, data: coverData, compress: false });
+    buildEntries.push({ name: coverZipPath, data: coverData, compress: true });
   }
 
   const zipBuffer = buildZip(buildEntries);

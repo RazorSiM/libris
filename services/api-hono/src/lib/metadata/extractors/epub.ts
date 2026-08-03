@@ -9,6 +9,7 @@ import {
   parseCentralDirectory,
   readRange,
   readZipEntry,
+  ZipLimitError,
 } from "../../epub/zip.js";
 import type { ZipEntry } from "../../epub/zip.js";
 import { normalizeLanguage } from "../../languages.js";
@@ -34,6 +35,9 @@ function parseContainerXml(xml: string): string | null {
 // Field length limits to prevent DoS via extremely long metadata strings
 const MAX_FIELD_LENGTH = 1000;
 const MAX_DESCRIPTION_LENGTH = 5000;
+const MAX_OPF_BYTES = 2 * 1024 * 1024;
+const MAX_XML_ELEMENT_BYTES = 20 * 1024;
+const MAX_COVER_BYTES = 10 * 1024 * 1024;
 
 // Body-text sampling for language detection (see extractEpubTextSample).
 const TEXT_SAMPLE_TARGET = 1500; // stop once this many chars of prose are collected
@@ -48,9 +52,19 @@ function truncate(value: string | undefined, max: number): string | undefined {
 function parseOpf(xml: string): NormalizedMetadata {
   const getAll = (tag: string): string[] => {
     const results: string[] = [];
-    for (const m of xml.matchAll(new RegExp(`<dc:${tag}[^>]*>([\\s\\S]*?)</dc:${tag}>`, "gi"))) {
-      const text = m[1]?.trim();
+    const openingTag = new RegExp(`<dc:${tag}(?:\\s[^>]*)?>`, "gi");
+    const closingTag = `</dc:${tag}>`;
+    const lowerXml = xml.toLowerCase();
+    let opening: RegExpExecArray | null;
+    while ((opening = openingTag.exec(xml))) {
+      const contentStart = opening.index + opening[0].length;
+      const contentEnd = lowerXml.indexOf(closingTag, contentStart);
+      if (contentEnd === -1) break;
+      const text = xml
+        .slice(contentStart, Math.min(contentEnd, contentStart + MAX_XML_ELEMENT_BYTES))
+        .trim();
       if (text) results.push(text);
+      openingTag.lastIndex = contentEnd + closingTag.length;
     }
     return results;
   };
@@ -373,7 +387,10 @@ async function readEpubOpf(filePath: string): Promise<EpubOpfResult | null> {
   }
   if (!opfEntry) return null;
 
-  const opfBuf = await readZipEntry(filePath, opfEntry);
+  const opfBuf = await readZipEntry(filePath, opfEntry, {
+    maxOutputBytes: MAX_OPF_BYTES,
+    label: "OPF document",
+  });
   if (!opfBuf) return null;
 
   return { entries, opfEntry, opfXml: opfBuf.toString("utf8") };
@@ -423,7 +440,10 @@ export async function extractEpubCoverImage(filePath: string): Promise<Buffer | 
           `Cover manifest item is XHTML (${coverRef.mediaType}): ${coverEntry.fileName}. ` +
             `Parsing for embedded image reference.`,
         );
-        const xhtmlBuf = await readZipEntry(filePath, coverEntry);
+        const xhtmlBuf = await readZipEntry(filePath, coverEntry, {
+          maxOutputBytes: MAX_OPF_BYTES,
+          label: "cover XHTML document",
+        });
         if (xhtmlBuf) {
           const imageHref = extractImageHrefFromXhtml(xhtmlBuf.toString("utf8"));
           if (imageHref) {
@@ -481,7 +501,10 @@ export async function extractEpubCoverImage(filePath: string): Promise<Buffer | 
       return null;
     }
 
-    const data = await readZipEntry(filePath, coverEntry);
+    const data = await readZipEntry(filePath, coverEntry, {
+      maxOutputBytes: MAX_COVER_BYTES,
+      label: "cover image",
+    });
     if (!data || data.length === 0) {
       logger.warn(
         `Cover extraction failed: readZipEntry returned empty data for ${coverEntry.fileName}`,
@@ -582,7 +605,8 @@ export async function extractEpubMetadata(filePath: string): Promise<NormalizedM
     if (!result) return fallbackExtract(filePath);
 
     return parseOpf(result.opfXml);
-  } catch {
+  } catch (error: unknown) {
+    if (error instanceof ZipLimitError) throw error;
     return {};
   }
 }
