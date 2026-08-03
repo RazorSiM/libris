@@ -181,5 +181,9 @@ export const CredentialServiceParamSchema = z.object({
 
 export const CredentialPutBodySchema = z.object({
   username: z.string().max(200).trim().min(1, "username is required"),
-  password: z.string().max(4096).min(1, "password is required"),
+  password: z
+    .string()
+    .max(4096)
+    .min(12, "password must be at least 12 characters")
+    .openapi({ description: "KoSync password or Hardcover API token (minimum 12 characters)" }),
 });

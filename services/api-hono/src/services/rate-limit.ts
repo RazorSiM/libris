@@ -104,16 +104,15 @@ export async function checkRateLimit(
   const key = `ratelimit:${tier}:${ip}:${windowId}`;
 
   try {
-    const current = ((await storage.getItem(key)) as number) || 0;
+    const current = await storage.increment(key, windowSeconds);
     const elapsedInWindow = (Date.now() / 1000) % windowSeconds;
     const resetIn = Math.ceil(windowSeconds - elapsedInWindow);
 
-    if (current >= limit) {
+    if (current > limit) {
       return { retryAfter: resetIn, remaining: 0, limit, resetIn };
     }
 
-    await storage.setItem(key, current + 1, { ttl: windowSeconds });
-    const remaining = Math.max(0, limit - (current + 1));
+    const remaining = Math.max(0, limit - current);
     return { retryAfter: null, remaining, limit, resetIn };
   } catch (err) {
     // Redis unavailable — use in-memory fallback for auth-critical tiers

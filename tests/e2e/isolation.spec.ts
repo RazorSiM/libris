@@ -255,6 +255,25 @@ test.describe("stats are per person", () => {
 // ── Connections form ────────────────────────────────────────────────
 
 test.describe("credential form", () => {
+  test("rejects a weak KoSync password before sending it", async ({ authedPage: page }) => {
+    await goSettings(page);
+    await page.getByRole("tab", { name: "Connections", exact: true }).click();
+    await page.getByTestId("kosync-username-input").fill("kosync-weak-password");
+    await page.getByTestId("kosync-password-input").fill("short");
+
+    const requests: string[] = [];
+    page.on("request", (request) => {
+      if (request.url().includes("/api/credentials/kosync") && request.method() === "PUT") {
+        requests.push(request.url());
+      }
+    });
+
+    await page.getByTestId("kosync-save-btn").click();
+
+    await expect(page.getByText("At least 12 characters", { exact: true })).toBeVisible();
+    expect(requests).toEqual([]);
+  });
+
   test("a saved KoSync username survives a reload", async ({ authedPage: page }) => {
     // Regression guard for a v-model bug where the field rendered the saved
     // value once and then lost it on the next fetch. Its OPDS twin retired with

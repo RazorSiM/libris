@@ -69,3 +69,8 @@ Breaking:
 - `PUT /api/credentials/opds` is gone — OPDS clients use app passwords.
 - OPDS rows in `service_credentials` are deleted; the table itself stays for the
   Hardcover token.
+- KoSync passwords must contain at least 12 characters.
+- Reading progress in the bulk library sync feed is now scoped to the signed-in
+  user instead of combining every account's activity.
+- Request-path Redis operations are bounded and application rate-limit counters
+  increment atomically under concurrency.

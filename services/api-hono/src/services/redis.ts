@@ -1,10 +1,36 @@
-import Redis from "ioredis";
+import Redis, { type RedisOptions } from "ioredis";
 import { getLogger } from "../lib/logger.js";
 import { getEnv, parseRedisUrl } from "../env.js";
 
 const logger = getLogger("redis");
 
 let _shared: Redis | null = null;
+let _request: Redis | null = null;
+
+/**
+ * Redis client for request-path key/value work. BullMQ requires unlimited
+ * retries, but HTTP requests need commands to reject promptly so middleware
+ * can fail open, fall back, or fail authentication closed.
+ */
+export function createRequestRedis(options: RedisOptions): Redis {
+  const redis = new Redis({
+    ...options,
+    maxRetriesPerRequest: 1,
+    enableOfflineQueue: false,
+    enableReadyCheck: false,
+    commandTimeout: 250,
+    lazyConnect: true,
+  });
+  redis.on("error", (err: Error) => logger.warn(`Request Redis error: ${err.message}`));
+  return redis;
+}
+
+export function getRequestRedis(): Redis {
+  if (!_request) {
+    _request = createRequestRedis(parseRedisUrl(getEnv().REDIS_URL));
+  }
+  return _request;
+}
 
 /**
  * Returns the shared ioredis instance used by BullMQ queues, the event bus
@@ -41,10 +67,10 @@ export async function isRedisHealthy(): Promise<{
 }> {
   const start = Date.now();
   try {
-    if (!_shared) {
+    if (!_request) {
       return { ok: false, latencyMs: 0, error: "Redis not initialized" };
     }
-    await _shared.ping();
+    await _request.ping();
     return { ok: true, latencyMs: Date.now() - start };
   } catch (err) {
     return {
@@ -59,13 +85,15 @@ export async function isRedisHealthy(): Promise<{
  * Gracefully close the shared connection. Called during server shutdown.
  */
 export async function closeSharedRedis(): Promise<void> {
-  if (!_shared) return;
-  const conn = _shared;
+  const connections = [_shared, _request].filter((conn): conn is Redis => conn !== null);
   _shared = null;
-  try {
-    await conn.quit();
-  } catch {
-    conn.disconnect();
+  _request = null;
+  for (const conn of connections) {
+    try {
+      await conn.quit();
+    } catch {
+      conn.disconnect();
+    }
   }
-  logger.info("Shared Redis connection closed");
+  if (connections.length > 0) logger.info("Redis connections closed");
 }

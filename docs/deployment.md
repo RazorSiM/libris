@@ -82,7 +82,7 @@ books.example.com/_docs/*  → Hono API (OpenAPI docs)
 
 Rate limits are configurable through the validated env schema. The defaults are sized for LAN/VPN deployments. Tighten them if you expose the server publicly.
 
-There are three tiers, each with a request limit and a sliding window in seconds:
+There are three tiers, each with a request limit and a fixed window in seconds:
 
 - `general` — applies to ordinary API traffic. Defaults to 600 requests per 60 seconds.
 - `auth` — applies to authentication endpoints (login, setup). Defaults to 30 requests per 60 seconds.
@@ -97,7 +97,12 @@ There are three tiers, each with a request limit and a sliding window in seconds
 | `LIBRIS_RATELIMIT_KEY_CREATION_LIMIT`          | Max requests per window for credential creation.         | `30`    |
 | `LIBRIS_RATELIMIT_KEY_CREATION_WINDOW_SECONDS` | Key-creation tier window length, in seconds.             | `3600`  |
 
-The `auth` and `keyCreation` tiers fall back to an in-memory limiter when Redis is unavailable; the `general` tier fails open. Set `TRUST_PROXY_HEADERS=1` behind a reverse proxy so limits key off the real client IP. See _Reverse Proxy_ below.
+Request-path Redis commands have a 250 ms bound. If Redis is unavailable, the
+`auth` and `keyCreation` tiers fall back to an in-memory limiter and the `general`
+tier fails open. Existing browser sessions fail closed until Redis recovers;
+`/api/health` remains responsive and reports the degraded dependency. Set
+`TRUST_PROXY_HEADERS=1` behind a reverse proxy so limits key off the real client
+IP. See _Reverse Proxy_ below.
 
 ### OpenTelemetry
 

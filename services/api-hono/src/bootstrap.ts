@@ -28,7 +28,7 @@ import type { Queues } from "./context.js";
 import { getQueues, registerQueue } from "./services/queue.js";
 import { setWorkers } from "./services/workers.js";
 import { getDb } from "./services/db.js";
-import { getSharedRedis, closeSharedRedis } from "./services/redis.js";
+import { getSharedRedis, getRequestRedis, closeSharedRedis } from "./services/redis.js";
 import { createRedisKVStore, createMemoryKVStore, type KVStore } from "./services/kv-store.js";
 import {
   createMemorySecondaryStorage,
@@ -101,11 +101,11 @@ export async function bootstrap(env: Env): Promise<AppServices> {
     cacheStorage = createMemoryKVStore();
     authStorage = createMemorySecondaryStorage();
   } else {
-    const sharedRedis = getSharedRedis();
-    redisStorage = createRedisKVStore(sharedRedis, "kv");
-    cacheStorage = createRedisKVStore(sharedRedis, "cache");
-    authStorage = createRedisSecondaryStorage(sharedRedis, "ba");
-    logger.info("Redis KV stores mounted (shared connection).");
+    const requestRedis = getRequestRedis();
+    redisStorage = createRedisKVStore(requestRedis, "kv");
+    cacheStorage = createRedisKVStore(requestRedis, "cache");
+    authStorage = createRedisSecondaryStorage(requestRedis, "ba");
+    logger.info("Redis request-path stores mounted (bounded connection).");
   }
 
   const auth = createAuth({

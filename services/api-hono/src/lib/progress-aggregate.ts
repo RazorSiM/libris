@@ -204,9 +204,9 @@ export async function buildProgressAggregateForBook(
 }
 
 /**
- * Batch variant for the bulk sync endpoint. Aggregates across all api keys —
- * the sync feed is library-wide rather than per-user (mirror clients show the
- * library to whichever user is reading the export).
+ * Batch variant for the bulk sync endpoint. Callers must supply rows already
+ * scoped to the authenticated user; this pure reducer has no identity column
+ * with which to enforce that boundary itself.
  */
 export function buildProgressAggregatesForBooks(
   bookIds: string[],

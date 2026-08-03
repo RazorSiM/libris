@@ -288,6 +288,51 @@ describe("GET /api/library/sync", () => {
     expect(typeof synced.progress.lastTimestamp).toBe("number");
   });
 
+  it("does not expose another user's reading progress", async () => {
+    const caller = await seedApiKey("Sync Caller");
+    const other = await seedApiKey("Sync Other");
+    const [book] = await db
+      .insert(schema.books)
+      .values({
+        status: "organized",
+        title: "Other User's Book",
+        author: "Private Reader",
+        createdBy: other.userId,
+      })
+      .returning({ id: schema.books.id });
+
+    await db.insert(schema.readingProgress).values({
+      bookId: book.id,
+      userId: other.userId,
+      document: "other-user-document",
+      device: "private-device",
+      progress: "page=87",
+      percentage: "0.8700",
+      timestamp: BigInt(Math.floor(Date.now() / 1000)),
+    });
+
+    const { app } = createTestApp();
+    const response = await app.request("/api/library/sync", {
+      headers: { Authorization: `Bearer ${caller.rawKey}` },
+    });
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    const synced = body.data.find((item: { id: string }) => item.id === book.id);
+    expect(synced).toBeDefined();
+    expect(synced.progress).toEqual({
+      percentage: null,
+      status: "unread",
+      lastDevice: null,
+      lastTimestamp: null,
+      startedAt: null,
+      finishedAt: null,
+      pausedAt: null,
+      manuallySet: false,
+      externallySet: false,
+    });
+  });
+
   it("reports progress as `unread` with null fields for books with no progress rows", async () => {
     const { userId, rawKey } = await seedApiKey();
     const [book] = await db

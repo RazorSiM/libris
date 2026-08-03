@@ -290,6 +290,11 @@ Two limiters, split by prefix.
 
 **The app's limiter owns everything else**, per client IP via Redis, with an in-memory fallback for the credential tiers. Defaults are sized for LAN/VPN deployments (the typical Libris install) and are tunable via `LIBRIS_RATELIMIT_*` — see [Environment Variables](./environment.md).
 
+The HTTP-path Redis connection is separate from BullMQ's unlimited-retry
+connection. Commands reject within 250 ms so the fallback policy can run, and
+counter increments are atomic under concurrency. `/api/health` bypasses the
+limiter and uses the bounded connection for its Redis diagnostic.
+
 | Tier          | Default limit | Applied to                                                                                                                         |
 | ------------- | ------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
 | `auth`        | 30 req/min    | `/kosync/users/auth`, plus the credential-creation routes below                                                                    |

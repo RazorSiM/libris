@@ -543,6 +543,7 @@ export const libraryRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
     const { page, limit, since } = c.req.valid("query");
     const offset = (page - 1) * limit;
     const db = c.get("db");
+    const userId = getUserId(c);
 
     const conditions = [eq(books.status, "organized")];
     if (since) {
@@ -552,6 +553,7 @@ export const libraryRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
         OR EXISTS (
           SELECT 1 FROM ${readingProgress} rp
           WHERE rp.book_id = ${books.id}
+          AND rp.user_id = ${userId}
           AND to_timestamp(rp.timestamp) > ${since}
         )
       )`);
@@ -605,7 +607,13 @@ export const libraryRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
           timestamp: readingProgress.timestamp,
         })
         .from(readingProgress)
-        .where(and(isNotNull(readingProgress.bookId), inArray(readingProgress.bookId, bookIds))),
+        .where(
+          and(
+            eq(readingProgress.userId, userId),
+            isNotNull(readingProgress.bookId),
+            inArray(readingProgress.bookId, bookIds),
+          ),
+        ),
       db
         .select({
           bookId: readingAggregate.bookId,
@@ -620,7 +628,13 @@ export const libraryRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
           externalStatusSyncedAt: readingAggregate.externalStatusSyncedAt,
         })
         .from(readingAggregate)
-        .where(and(isNotNull(readingAggregate.bookId), inArray(readingAggregate.bookId, bookIds))),
+        .where(
+          and(
+            eq(readingAggregate.userId, userId),
+            isNotNull(readingAggregate.bookId),
+            inArray(readingAggregate.bookId, bookIds),
+          ),
+        ),
     ]);
 
     const progressByBook = buildProgressAggregatesForBooks(bookIds, progressRows, aggregateRows);

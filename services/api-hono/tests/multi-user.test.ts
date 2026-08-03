@@ -271,10 +271,21 @@ describe("book ownership", () => {
  *    the test would pass for entirely the wrong reason.
  */
 describe("credential isolation", () => {
+  it("rejects a trivially weak KoSync password", async () => {
+    const { data, status } = await $fetchRaw("/api/credentials/kosync", {
+      method: "PUT",
+      body: { username: "weak-password-user", password: "short" },
+      headers: adminSession(),
+    });
+
+    expect(status).toBe(400);
+    expect(JSON.stringify(data)).toContain("at least 12 characters");
+  });
+
   it("user A's credentials are invisible to user B", async () => {
     const { status: putStatus } = await $fetchRaw("/api/credentials/kosync", {
       method: "PUT",
-      body: { username: "admin-kosync", password: "admin-pass" },
+      body: { username: "admin-kosync", password: "admin-pass-strong" },
       headers: adminSession(),
     });
     expect(putStatus).toBe(200);
@@ -301,7 +312,7 @@ describe("credential isolation", () => {
     // that half the code still wrote to.
     const { status } = await $fetchRaw("/api/credentials/opds", {
       method: "PUT",
-      body: { username: "admin-opds", password: "admin-pass" },
+      body: { username: "admin-opds", password: "admin-pass-strong" },
       headers: adminSession(),
     });
     expect(status).toBe(400);
@@ -310,13 +321,13 @@ describe("credential isolation", () => {
   it("each user can set independent credentials", async () => {
     await $fetchRaw("/api/credentials/kosync", {
       method: "PUT",
-      body: { username: "admin-kosync", password: "admin-pass" },
+      body: { username: "admin-kosync", password: "admin-pass-strong" },
       headers: adminSession(),
     });
 
     await $fetchRaw("/api/credentials/kosync", {
       method: "PUT",
-      body: { username: "user-kosync", password: "user-pass" },
+      body: { username: "user-kosync", password: "user-pass-strong" },
       headers: userSession(),
     });
 
@@ -336,12 +347,12 @@ describe("credential isolation", () => {
     // Both users set credentials
     await $fetchRaw("/api/credentials/kosync", {
       method: "PUT",
-      body: { username: "admin-kosync", password: "admin-pass" },
+      body: { username: "admin-kosync", password: "admin-pass-strong" },
       headers: adminSession(),
     });
     await $fetchRaw("/api/credentials/kosync", {
       method: "PUT",
-      body: { username: "user-kosync", password: "user-pass" },
+      body: { username: "user-kosync", password: "user-pass-strong" },
       headers: userSession(),
     });
 
@@ -370,13 +381,13 @@ describe("credential isolation", () => {
 // ── KoSync Progress Isolation ─────────────────────────────────────
 
 describe("KoSync progress isolation", () => {
-  const ADMIN_TESTPASS_MD5 = "179ad45c6ce2cb97cf1029e212046e81"; // md5("testpass")
+  const ADMIN_TESTPASS_MD5 = "7b41a909c57c86088eb92f47bdd6dc67"; // md5("testpass-strong")
 
   async function seedKosyncForAdmin() {
     await $fetchRaw("/api/credentials/kosync", {
       method: "PUT",
       headers: adminSession(),
-      body: { username: "admin-kosync", password: "testpass" },
+      body: { username: "admin-kosync", password: "testpass-strong" },
     });
   }
 
@@ -384,7 +395,7 @@ describe("KoSync progress isolation", () => {
     await $fetchRaw("/api/credentials/kosync", {
       method: "PUT",
       headers: userSession(),
-      body: { username: "user-kosync", password: "testpass" },
+      body: { username: "user-kosync", password: "testpass-strong" },
     });
   }
 

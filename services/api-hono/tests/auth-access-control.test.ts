@@ -378,7 +378,7 @@ describe("credential isolation", () => {
   it("user A sets credentials, user B cannot see them", async () => {
     const { status: putStatus } = await $fetchRaw("/api/credentials/kosync", {
       method: "PUT",
-      body: { username: "admin-kosync", password: "admin-pass" },
+      body: { username: "admin-kosync", password: "admin-pass-strong" },
       headers: adminSession(),
     });
     expect(putStatus).toBe(200);
@@ -403,13 +403,13 @@ describe("credential isolation", () => {
   it("user A and user B have independent credentials", async () => {
     await $fetchRaw("/api/credentials/kosync", {
       method: "PUT",
-      body: { username: "admin-kosync", password: "admin-pass" },
+      body: { username: "admin-kosync", password: "admin-pass-strong" },
       headers: adminSession(),
     });
 
     await $fetchRaw("/api/credentials/kosync", {
       method: "PUT",
-      body: { username: "user-kosync", password: "user-pass" },
+      body: { username: "user-kosync", password: "user-pass-strong" },
       headers: userSession(),
     });
 
@@ -431,12 +431,12 @@ describe("credential isolation", () => {
     // Both users set credentials
     await $fetchRaw("/api/credentials/kosync", {
       method: "PUT",
-      body: { username: "admin-kosync", password: "admin-pass" },
+      body: { username: "admin-kosync", password: "admin-pass-strong" },
       headers: adminSession(),
     });
     await $fetchRaw("/api/credentials/kosync", {
       method: "PUT",
-      body: { username: "user-kosync", password: "user-pass" },
+      body: { username: "user-kosync", password: "user-pass-strong" },
       headers: userSession(),
     });
 
@@ -465,7 +465,7 @@ describe("credential isolation", () => {
     // Admin sets Hardcover credentials
     await $fetchRaw("/api/credentials/hardcover", {
       method: "PUT",
-      body: { username: "admin-hc", password: "admin-token" },
+      body: { username: "admin-hc", password: "admin-token-long" },
       headers: adminSession(),
     });
 

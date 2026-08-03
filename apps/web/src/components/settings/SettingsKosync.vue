@@ -16,7 +16,7 @@ const { appSettings, kosyncCredentials } = useSettingsStatusQuery();
 
 const credentialSchema = z.object({
   username: z.string().min(1, "Username is required"),
-  password: z.string().min(1, "Password is required"),
+  password: z.string().min(12, "At least 12 characters"),
 });
 
 const kosyncCredForm = reactive({ username: "", password: "" });
@@ -107,7 +107,9 @@ async function saveKosyncCredentials() {
       @submit="saveKosyncCredentials"
     >
       <h4 class="text-xs font-medium">Set KoSync Credentials</h4>
-      <p class="text-xs text-muted">Set a username and password for KoReader sync.</p>
+      <p class="text-xs text-muted">
+        Set a username and a password of at least 12 characters for KoReader sync.
+      </p>
       <div class="flex flex-col sm:flex-row gap-2">
         <UFormField name="username" class="flex-1">
           <UInput

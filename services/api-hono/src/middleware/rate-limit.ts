@@ -5,6 +5,10 @@ import type { RateLimitTier } from "../services/rate-limit.js";
 import { getRequestIp } from "../shared/request-ip.js";
 
 export function resolveRateLimitTiers(path: string, method: string): RateLimitTier[] {
+  // Liveness must remain observable when Redis is unavailable. The handler
+  // reports Redis as degraded using the bounded request-path connection.
+  if (path === "/api/health") return [];
+
   // Better Auth rate-limits its own prefix, with per-endpoint windows far
   // tighter than anything here (three requests per ten seconds on sign-in,
   // change-password and change-email). Applying a second limiter on top would

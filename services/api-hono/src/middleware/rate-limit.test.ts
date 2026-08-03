@@ -49,6 +49,7 @@ describe("resolveRateLimitTiers", () => {
   });
 
   it("puts ordinary library traffic in the general tier", () => {
+    expect(resolveRateLimitTiers("/api/health", "GET")).toEqual([]);
     expect(resolveRateLimitTiers("/api/books", "GET")).toEqual(["general"]);
     expect(resolveRateLimitTiers("/api/library", "GET")).toEqual(["general"]);
   });

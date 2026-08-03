@@ -582,8 +582,8 @@ describe("books", () => {
 // KoSync uses its own auth (x-auth-user / x-auth-key headers), not API keys.
 // Credentials are seeded via the credentials API in each test.
 
-// KOReader sends md5(password) as x-auth-key — md5("testpass") = "179ad45c6ce2cb97cf1029e212046e81"
-const TESTPASS_MD5 = "179ad45c6ce2cb97cf1029e212046e81";
+// KOReader sends md5(password) as x-auth-key.
+const TESTPASS_MD5 = "7b41a909c57c86088eb92f47bdd6dc67"; // md5("testpass-strong")
 
 function kosyncAuth() {
   return { "x-auth-user": "testuser", "x-auth-key": TESTPASS_MD5 };
@@ -594,7 +594,7 @@ async function seedKosyncCredentials() {
   await $fetchRaw("/api/credentials/kosync", {
     method: "PUT",
     headers: session(),
-    body: { username: "testuser", password: "testpass" },
+    body: { username: "testuser", password: "testpass-strong" },
   });
 }
 
@@ -644,7 +644,7 @@ describe("KoSync: POST /kosync/users/auth", () => {
   it("authenticates with valid credentials", async () => {
     const { data, status } = await $fetchRaw("/kosync/users/auth", {
       method: "POST",
-      body: { username: "testuser", password: "testpass" },
+      body: { username: "testuser", password: "testpass-strong" },
     });
     expect(status).toBe(200);
     expect(data).toEqual({ authorized: "OK", userkey: TESTPASS_MD5 });
@@ -661,7 +661,7 @@ describe("KoSync: POST /kosync/users/auth", () => {
   it("rejects wrong username", async () => {
     const { status } = await $fetchRaw("/kosync/users/auth", {
       method: "POST",
-      body: { username: "wronguser", password: "testpass" },
+      body: { username: "wronguser", password: "testpass-strong" },
     });
     expect(status).toBe(401);
   });
