@@ -24,17 +24,19 @@ const TEST_ENV = {
 let pglite: PGlite;
 let db: TestDb;
 let auth: Auth;
+let secondaryStorage: ReturnType<typeof createMemorySecondaryStorage>;
 
 beforeAll(async () => {
   const testDb = await createTestDb();
   pglite = testDb.pglite;
   db = testDb.db;
+  secondaryStorage = createMemorySecondaryStorage();
 
   auth = createAuth({
     // PGlite-backed drizzle rather than postgres-js. Same query builder, and
     // the adapter only ever sees the drizzle instance.
     db: db as unknown as Db,
-    secondaryStorage: createMemorySecondaryStorage(),
+    secondaryStorage,
     env: TEST_ENV,
     secret: "test-only-secret-at-least-32-characters-long",
     baseURL: "http://localhost:3000",
@@ -70,6 +72,27 @@ async function signUp(email: string, password = PASSWORD) {
 
 function cookieFrom(res: Response): string {
   return res.headers.get("set-cookie")?.split(";")[0] ?? "";
+}
+
+/** The store key for a session cookie: the token, without its signature. */
+function tokenFrom(cookie: string): string {
+  return decodeURIComponent(cookie.split("=")[1] ?? "").split(".")[0]!;
+}
+
+/**
+ * Age a session by rewriting its createdAt in the secondary store.
+ *
+ * Freshness is measured from createdAt, and there is no way to reach a
+ * day-old session in a test that finishes in milliseconds. Rewriting the
+ * stored record is the same thing the clock would have done.
+ */
+async function ageSession(cookie: string, byDays: number): Promise<void> {
+  const key = tokenFrom(cookie);
+  const raw = await secondaryStorage.get(key);
+  if (!raw) throw new Error("no stored session for that cookie");
+  const parsed = JSON.parse(typeof raw === "string" ? raw : JSON.stringify(raw));
+  parsed.session.createdAt = new Date(Date.now() - byDays * 24 * 60 * 60 * 1000).toISOString();
+  await secondaryStorage.set(key, JSON.stringify(parsed));
 }
 
 describe("better auth schema", () => {
@@ -218,6 +241,80 @@ describe("sessions", () => {
     });
 
     expect(session).toBeNull();
+  });
+});
+
+describe("listing your own devices", () => {
+  it("lists every session the account has open", async () => {
+    const first = cookieFrom(await signUp("reader@example.com"));
+    await auth.api.signInEmail({ body: { email: "reader@example.com", password: PASSWORD } });
+
+    const sessions = await auth.api.listSessions({ headers: new Headers({ cookie: first }) });
+
+    expect(sessions).toHaveLength(2);
+    expect(sessions.every((s) => typeof s.token === "string")).toBe(true);
+  });
+
+  it("still lists them on a session older than a day", async () => {
+    // list-sessions is the one endpoint this app exposes that sits behind
+    // freshSessionMiddleware, and its default window is 24 hours against a
+    // session lifetime of seven days. With the default in place the devices
+    // list 403s for six sevenths of a session's life, and the only way to see
+    // it is to sign out and back in — which destroys the session you came to
+    // look at. session.freshAge: 0 in createAuth() is what keeps this passing.
+    const cookie = cookieFrom(await signUp("longtimer@example.com"));
+    await ageSession(cookie, 3);
+
+    const sessions = await auth.api.listSessions({ headers: new Headers({ cookie }) });
+
+    expect(sessions).toHaveLength(1);
+  });
+
+  it("revokes one device without touching the others", async () => {
+    const staying = cookieFrom(await signUp("reader@example.com"));
+    const going = cookieFrom(
+      await auth.api.signInEmail({
+        body: { email: "reader@example.com", password: PASSWORD },
+        asResponse: true,
+      }),
+    );
+
+    await auth.api.revokeSession({
+      body: { token: tokenFrom(going) },
+      headers: new Headers({ cookie: staying }),
+    });
+
+    expect(await auth.api.getSession({ headers: new Headers({ cookie: going }) })).toBeNull();
+    expect(await auth.api.getSession({ headers: new Headers({ cookie: staying }) })).not.toBeNull();
+  });
+
+  it("refuses to revoke a session belonging to somebody else", async () => {
+    // The endpoint takes a bare token, so without the ownership check any
+    // signed-in user could sign out any other by guessing or replaying one.
+    const mine = cookieFrom(await signUp("mine@example.com"));
+    const theirs = cookieFrom(await signUp("theirs@example.com"));
+
+    await auth.api.revokeSession({
+      body: { token: tokenFrom(theirs) },
+      headers: new Headers({ cookie: mine }),
+    });
+
+    expect(await auth.api.getSession({ headers: new Headers({ cookie: theirs }) })).not.toBeNull();
+  });
+
+  it("revoke-others leaves the caller signed in and clears the rest", async () => {
+    const keeping = cookieFrom(await signUp("reader@example.com"));
+    const other = cookieFrom(
+      await auth.api.signInEmail({
+        body: { email: "reader@example.com", password: PASSWORD },
+        asResponse: true,
+      }),
+    );
+
+    await auth.api.revokeOtherSessions({ headers: new Headers({ cookie: keeping }) });
+
+    expect(await auth.api.getSession({ headers: new Headers({ cookie: keeping }) })).not.toBeNull();
+    expect(await auth.api.getSession({ headers: new Headers({ cookie: other }) })).toBeNull();
   });
 });
 

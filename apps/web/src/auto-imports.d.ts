@@ -43,6 +43,7 @@ declare global {
   const defineLocale: typeof import("../../../node_modules/.pnpm/@nuxt+ui@4.8.1_@azure+identity@4.13.1_@internationalized+date@3.12.2_@internationalized_c290ff1effd5693eb1e051e07b348ac7/node_modules/@nuxt/ui/dist/runtime/composables/defineLocale").defineLocale;
   const defineShortcuts: typeof import("../../../node_modules/.pnpm/@nuxt+ui@4.8.1_@azure+identity@4.13.1_@internationalized+date@3.12.2_@internationalized_c290ff1effd5693eb1e051e07b348ac7/node_modules/@nuxt/ui/dist/runtime/composables/defineShortcuts").defineShortcuts;
   const defineStore: typeof import("pinia").defineStore;
+  const describeUserAgent: typeof import("./utils/user-agent").describeUserAgent;
   const eagerComputed: typeof import("@vueuse/core").eagerComputed;
   const effectScope: typeof import("vue").effectScope;
   const extendLocale: typeof import("../../../node_modules/.pnpm/@nuxt+ui@4.8.1_@azure+identity@4.13.1_@internationalized+date@3.12.2_@internationalized_c290ff1effd5693eb1e051e07b348ac7/node_modules/@nuxt/ui/dist/runtime/composables/defineLocale").extendLocale;
@@ -329,6 +330,8 @@ declare global {
   const useResizeObserver: typeof import("@vueuse/core").useResizeObserver;
   const useResumeQueue: typeof import("./composables/mutations/useJobMutations").useResumeQueue;
   const useRetryJob: typeof import("./composables/mutations/useJobMutations").useRetryJob;
+  const useRevokeOtherSessions: typeof import("./composables/mutations/useSessionMutations").useRevokeOtherSessions;
+  const useRevokeSession: typeof import("./composables/mutations/useSessionMutations").useRevokeSession;
   const useRoute: typeof import("vue-router").useRoute;
   const useRouter: typeof import("vue-router").useRouter;
   const useSSRWidth: typeof import("@vueuse/core").useSSRWidth;
@@ -343,6 +346,7 @@ declare global {
   const useSeriesListQuery: typeof import("./composables/queries/useSeriesQueries").useSeriesListQuery;
   const useServerEvents: typeof import("./composables/useServerEvents").useServerEvents;
   const useSessionStorage: typeof import("@vueuse/core").useSessionStorage;
+  const useSessionsQuery: typeof import("./composables/mutations/useSessionMutations").useSessionsQuery;
   const useSetReadingStatus: typeof import("./composables/mutations/useBookMutations").useSetReadingStatus;
   const useSetUserPassword: typeof import("./composables/mutations/useUserMutations").useSetUserPassword;
   const useSetUserRole: typeof import("./composables/mutations/useUserMutations").useSetUserRole;
@@ -399,6 +403,7 @@ declare global {
   const useWindowFocus: typeof import("@vueuse/core").useWindowFocus;
   const useWindowScroll: typeof import("@vueuse/core").useWindowScroll;
   const useWindowSize: typeof import("@vueuse/core").useWindowSize;
+  const userAgentIcon: typeof import("./utils/user-agent").userAgentIcon;
   const watch: typeof import("vue").watch;
   const watchArray: typeof import("@vueuse/core").watchArray;
   const watchAtMost: typeof import("@vueuse/core").watchAtMost;
@@ -443,6 +448,9 @@ declare global {
   // @ts-ignore
   export type { ChangePasswordVars } from "./composables/mutations/useAccountMutations";
   import("./composables/mutations/useAccountMutations");
+  // @ts-ignore
+  export type { DeviceSession } from "./composables/mutations/useSessionMutations";
+  import("./composables/mutations/useSessionMutations");
   // @ts-ignore
   export type { ManagedUser } from "./composables/mutations/useUserMutations";
   import("./composables/mutations/useUserMutations");
@@ -532,6 +540,9 @@ declare module "vue" {
       (typeof import("../../../node_modules/.pnpm/@nuxt+ui@4.8.1_@azure+identity@4.13.1_@internationalized+date@3.12.2_@internationalized_c290ff1effd5693eb1e051e07b348ac7/node_modules/@nuxt/ui/dist/runtime/composables/defineShortcuts"))["defineShortcuts"]
     >;
     readonly defineStore: UnwrapRef<(typeof import("pinia"))["defineStore"]>;
+    readonly describeUserAgent: UnwrapRef<
+      (typeof import("./utils/user-agent"))["describeUserAgent"]
+    >;
     readonly eagerComputed: UnwrapRef<(typeof import("@vueuse/core"))["eagerComputed"]>;
     readonly effectScope: UnwrapRef<(typeof import("vue"))["effectScope"]>;
     readonly extendLocale: UnwrapRef<
@@ -926,6 +937,12 @@ declare module "vue" {
     readonly useRetryJob: UnwrapRef<
       (typeof import("./composables/mutations/useJobMutations"))["useRetryJob"]
     >;
+    readonly useRevokeOtherSessions: UnwrapRef<
+      (typeof import("./composables/mutations/useSessionMutations"))["useRevokeOtherSessions"]
+    >;
+    readonly useRevokeSession: UnwrapRef<
+      (typeof import("./composables/mutations/useSessionMutations"))["useRevokeSession"]
+    >;
     readonly useRoute: UnwrapRef<(typeof import("vue-router"))["useRoute"]>;
     readonly useRouter: UnwrapRef<(typeof import("vue-router"))["useRouter"]>;
     readonly useSSRWidth: UnwrapRef<(typeof import("@vueuse/core"))["useSSRWidth"]>;
@@ -952,6 +969,9 @@ declare module "vue" {
       (typeof import("./composables/useServerEvents"))["useServerEvents"]
     >;
     readonly useSessionStorage: UnwrapRef<(typeof import("@vueuse/core"))["useSessionStorage"]>;
+    readonly useSessionsQuery: UnwrapRef<
+      (typeof import("./composables/mutations/useSessionMutations"))["useSessionsQuery"]
+    >;
     readonly useSetReadingStatus: UnwrapRef<
       (typeof import("./composables/mutations/useBookMutations"))["useSetReadingStatus"]
     >;
@@ -1032,6 +1052,7 @@ declare module "vue" {
     readonly useWindowFocus: UnwrapRef<(typeof import("@vueuse/core"))["useWindowFocus"]>;
     readonly useWindowScroll: UnwrapRef<(typeof import("@vueuse/core"))["useWindowScroll"]>;
     readonly useWindowSize: UnwrapRef<(typeof import("@vueuse/core"))["useWindowSize"]>;
+    readonly userAgentIcon: UnwrapRef<(typeof import("./utils/user-agent"))["userAgentIcon"]>;
     readonly watch: UnwrapRef<(typeof import("vue"))["watch"]>;
     readonly watchArray: UnwrapRef<(typeof import("@vueuse/core"))["watchArray"]>;
     readonly watchAtMost: UnwrapRef<(typeof import("@vueuse/core"))["watchAtMost"]>;

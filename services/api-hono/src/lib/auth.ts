@@ -134,6 +134,21 @@ export function createAuth({ db, secondaryStorage, env, secret, baseURL }: Creat
       // or a banned user would keep working until it expired. Revocation being
       // instant is worth a Redis read per request.
       cookieCache: { enabled: false },
+      // Freshness off, which affects exactly one endpoint this app exposes:
+      // GET /list-sessions, behind freshSessionMiddleware. Its default window
+      // is 24 hours against a session lifetime of seven days, so the devices
+      // list would refuse for six sevenths of a session's life — and the only
+      // cure available to a user is to sign out and back in, destroying the
+      // session they opened the page to inspect.
+      //
+      // This costs nothing in revocation strength. revoke-session,
+      // revoke-sessions and revoke-other-sessions all use
+      // sensitiveSessionMiddleware, which re-reads the authoritative store but
+      // never consults freshAge, and changing a password needs the current
+      // password rather than a recent sign-in. What is left behind the check is
+      // a read of your own device list by a caller who already holds a valid
+      // session for that account.
+      freshAge: 0,
     },
     account: { modelName: "accounts" },
     verification: { modelName: "verifications" },

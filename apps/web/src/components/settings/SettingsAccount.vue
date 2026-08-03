@@ -6,11 +6,14 @@ const { isAdmin } = useAuth();
   <div class="space-y-6 pt-6" data-testid="account-panel">
     <div>
       <h2 class="text-lg font-semibold">Account</h2>
-      <p class="text-sm text-muted mt-1">Your name and the password you sign in with.</p>
+      <p class="text-sm text-muted mt-1">
+        Your name, the password you sign in with, and where you are signed in.
+      </p>
     </div>
 
     <SettingsAccountProfile />
     <SettingsAccountPassword />
+    <SettingsAccountSessions />
 
     <p v-if="!isAdmin" class="text-sm text-muted" data-testid="account-recovery-note">
       Forgotten your password? There is no reset email — ask an admin to set a new one for you.

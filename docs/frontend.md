@@ -18,7 +18,7 @@ Pages live under `src/pages/` (auto-routed by vue-router's file-based routing).
 | `/series`          | `pages/series/index.vue`     | Series browsing page with search, cover grid, and book counts                                                                                                                                  |
 | `/series/:name`    | `pages/series/[name].vue`    | Series detail: ordered book list with position numbers, covers, genres                                                                                                                         |
 | `/stats`           | `pages/stats.vue`            | Reading analytics: books finished, streaks, daily activity chart, genre distribution                                                                                                           |
-| `/settings`        | `pages/settings.vue`         | Tabbed: Connections (app passwords, OPDS/KoSync/Hardcover), Account (display name, change password), and — for admins — Users, System, Jobs, Failed Jobs, Queues, Paths                        |
+| `/settings`        | `pages/settings.vue`         | Tabbed: Connections (app passwords, OPDS/KoSync/Hardcover), Account (display name, change password, signed-in devices), and — for admins — Users, System, Jobs, Failed Jobs, Queues, Paths     |
 
 ## Authentication Flow
 

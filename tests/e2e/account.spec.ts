@@ -1,11 +1,10 @@
 /**
- * E2E: the account tab — your own name and your own password.
+ * E2E: the account tab — your own name, password and signed-in devices.
  *
  * Every test here works on a THROWAWAY account, never the shared admin or
  * regular user. A password change rewrites the credential the rest of the suite
- * signs in with, and "sign out everywhere else" deletes every session that
- * account owns — including the storageState the whole run shares. Two specs
- * have poisoned this suite that way before.
+ * signs in with, and revoking sessions deletes the storageState the whole run
+ * shares. Two specs have poisoned this suite that way before.
  */
 
 import {
@@ -288,6 +287,189 @@ test.describe("other sessions", () => {
   });
 });
 
+// ── The device list ──────────────────────────────────────────────────
+
+test.describe("signed-in devices", () => {
+  test.slow();
+
+  /** The rows in the device list, top to bottom. */
+  function deviceRows(page: Page) {
+    return page.locator('[data-testid^="session-item-"]');
+  }
+
+  test("lists this browser, marked, and every other one", async ({ browser }) => {
+    const account = await createDisposableAccount("devices");
+
+    const here = await freshContext(browser);
+    const herePage = await here.newPage();
+    await signInThroughUi(herePage, account.email, account.password);
+
+    const elsewhere = await freshContext(browser);
+    await signInThroughUi(await elsewhere.newPage(), account.email, account.password);
+
+    await openAccountTab(herePage);
+    await expect(deviceRows(herePage)).toHaveCount(2);
+
+    // Exactly one row is the caller, and it sorts first so it is never the one
+    // you revoke by reflex.
+    await expect(herePage.getByTestId("current-session-badge")).toHaveCount(1);
+    await expect(deviceRows(herePage).first()).toContainText("This browser");
+
+    await here.close();
+    await elsewhere.close();
+  });
+
+  test("never puts a session token in the page", async ({ browser }) => {
+    // revokeSession is keyed by token, and a token IS the cookie value that
+    // authenticates that device. Rendering one — as text, an attribute or a
+    // testid — would undo the httpOnly cookie for every session at once.
+    const account = await createDisposableAccount("no-token");
+    const context = await freshContext(browser);
+    const page = await context.newPage();
+    await signInThroughUi(page, account.email, account.password);
+    await openAccountTab(page);
+    await expect(deviceRows(page)).toHaveCount(1);
+
+    const leaked = await page.evaluate(async () => {
+      const res = await fetch("/api/auth/list-sessions");
+      const sessions = (await res.json()) as { token: string }[];
+      const html = document.documentElement.outerHTML;
+      return sessions.filter((s) => html.includes(s.token)).length;
+    });
+    expect(leaked).toBe(0);
+
+    await context.close();
+  });
+
+  test("signing out one device kills that session and leaves this one alone", async ({
+    browser,
+  }) => {
+    const account = await createDisposableAccount("revoke-one");
+
+    const here = await freshContext(browser);
+    const herePage = await here.newPage();
+    await signInThroughUi(herePage, account.email, account.password);
+
+    const elsewhere = await freshContext(browser);
+    const elsewherePage = await elsewhere.newPage();
+    await signInThroughUi(elsewherePage, account.email, account.password);
+
+    await openAccountTab(herePage);
+    await expect(deviceRows(herePage)).toHaveCount(2);
+
+    // The row that is NOT this browser.
+    const other = deviceRows(herePage).filter({ hasNotText: "This browser" });
+    await other.getByRole("button", { name: "Sign out" }).click();
+    await herePage.getByTestId("confirm-revoke-session-btn").click();
+
+    await expect(deviceRows(herePage)).toHaveCount(1);
+
+    // Gone from the list is not the claim; gone from the server is. With
+    // secondaryStorage in play these can disagree, which is the whole reason
+    // this goes through the Better Auth API rather than a DELETE.
+    await elsewherePage.reload();
+    await expect(elsewherePage).toHaveURL(/\/login/);
+    await expect(herePage.getByTestId("account-panel")).toBeVisible();
+
+    await here.close();
+    await elsewhere.close();
+  });
+
+  test("a revoke asks first, and cancelling changes nothing", async ({ browser }) => {
+    const account = await createDisposableAccount("revoke-cancel");
+
+    const here = await freshContext(browser);
+    const herePage = await here.newPage();
+    await signInThroughUi(herePage, account.email, account.password);
+
+    const elsewhere = await freshContext(browser);
+    const elsewherePage = await elsewhere.newPage();
+    await signInThroughUi(elsewherePage, account.email, account.password);
+
+    await openAccountTab(herePage);
+    const other = deviceRows(herePage).filter({ hasNotText: "This browser" });
+    await other.getByRole("button", { name: "Sign out" }).click();
+    await herePage.getByTestId("cancel-revoke-session-btn").click();
+
+    await expect(deviceRows(herePage)).toHaveCount(2);
+    await elsewherePage.reload();
+    await expect(elsewherePage.getByRole("link", { name: "Home" })).toBeVisible();
+
+    await here.close();
+    await elsewhere.close();
+  });
+
+  test("sign out everywhere else clears the rest and keeps this one", async ({ browser }) => {
+    const account = await createDisposableAccount("revoke-rest");
+
+    const here = await freshContext(browser);
+    const herePage = await here.newPage();
+    await signInThroughUi(herePage, account.email, account.password);
+
+    const elsewhere = await freshContext(browser);
+    const elsewherePage = await elsewhere.newPage();
+    await signInThroughUi(elsewherePage, account.email, account.password);
+
+    await openAccountTab(herePage);
+    await expect(deviceRows(herePage)).toHaveCount(2);
+
+    await herePage.getByTestId("sign-out-others-btn").click();
+    await herePage.getByTestId("confirm-sign-out-others-btn").click();
+
+    await expect(deviceRows(herePage)).toHaveCount(1);
+    // Nothing left to sign out, so the button goes away rather than sitting
+    // there doing nothing.
+    await expect(herePage.getByTestId("sign-out-others-btn")).toHaveCount(0);
+
+    await elsewherePage.reload();
+    await expect(elsewherePage).toHaveURL(/\/login/);
+    await expect(herePage.getByTestId("account-panel")).toBeVisible();
+
+    await here.close();
+    await elsewhere.close();
+  });
+
+  test("signing out this browser really signs it out, not just visually", async ({ browser }) => {
+    // The dangerous version leaves the cookie alive while the SPA renders a
+    // signed-out shell — the user believes they are out and walks away.
+    const account = await createDisposableAccount("revoke-self");
+    const context = await freshContext(browser);
+    const page = await context.newPage();
+    await signInThroughUi(page, account.email, account.password);
+    await openAccountTab(page);
+
+    await deviceRows(page)
+      .filter({ hasText: "This browser" })
+      .getByRole("button", { name: "Sign out" })
+      .click();
+    await page.getByTestId("confirm-revoke-session-btn").click();
+
+    await expect(page).toHaveURL(/\/login/);
+    const status = await page.evaluate(async () => (await fetch("/api/library")).status);
+    expect(status).toBe(401);
+
+    await context.close();
+  });
+
+  test("works on a session older than the default freshness window", async ({ browser }) => {
+    // list-sessions sits behind freshSessionMiddleware, whose default window is
+    // 24 hours against a seven-day session. This asserts the page loads at all;
+    // the aged-session case is pinned properly in auth.integration.test.ts,
+    // where the stored createdAt can actually be moved.
+    const account = await createDisposableAccount("fresh-window");
+    const context = await freshContext(browser);
+    const page = await context.newPage();
+    await signInThroughUi(page, account.email, account.password);
+    await openAccountTab(page);
+
+    await expect(page.getByTestId("account-sessions-card")).toBeVisible();
+    await expect(page.getByTestId("sessions-error")).toHaveCount(0);
+    await expect(deviceRows(page)).toHaveCount(1);
+
+    await context.close();
+  });
+});
+
 // ── Who gets to use it ───────────────────────────────────────────────
 
 test.describe("access", () => {
@@ -306,6 +488,9 @@ test.describe("access", () => {
 
     await expect(page.getByRole("tab", { name: "Users" })).toHaveCount(0);
     await expect(page.getByTestId("account-recovery-note")).toContainText(/admin/i);
+    // Devices are yours too — a user who cannot see where they are signed in
+    // cannot notice that somebody else is.
+    await expect(page.getByTestId("account-sessions-card")).toBeVisible();
 
     await fillPasswordChange(page, { current: account.password, next: "chosen-by-me-alone-2" });
     await expect(page.getByTestId("current-password-input")).toHaveValue("");
