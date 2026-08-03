@@ -9,7 +9,6 @@
 
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vite-plus/test";
 import { bootstrapAdmin, createTestApp, createFetchHelper } from "./setup.js";
 import type { Db } from "../src/db/client.js";
@@ -180,7 +179,7 @@ describe("upload route creates registry entry", () => {
 describe("book-detected worker uses registry for ownership", () => {
   it("sets createdBy when registry entry exists for the checksum", async () => {
     // Create a temp file to simulate a detected book
-    const tempDir = await mkdtemp(join(tmpdir(), "libris-worker-test-"));
+    const tempDir = await mkdtemp(join("/tmp/libris-test-inbox", "worker-test-"));
     const epubContent = "PK\x03\x04fake-epub-for-worker-test";
     const filePath = join(tempDir, "detected-book.epub");
     await writeFile(filePath, epubContent);
@@ -242,7 +241,7 @@ describe("book-detected worker uses registry for ownership", () => {
     // books.created_by is NOT NULL, so there is no unowned state to fall back
     // to — the worker assigns the oldest admin. Oldest rather than any admin so
     // two files arriving at once cannot land on different owners.
-    const tempDir = await mkdtemp(join(tmpdir(), "libris-worker-test-"));
+    const tempDir = await mkdtemp(join("/tmp/libris-test-inbox", "worker-test-"));
     const filePath = join(tempDir, "filesystem-drop.epub");
     await writeFile(filePath, "PK\x03\x04filesystem-dropped-book");
 
@@ -281,7 +280,7 @@ describe("book-detected worker uses registry for ownership", () => {
     // running by then.
     await $fetchRaw("/__test/cleanup", { method: "POST", body: { includeAuth: true } });
 
-    const tempDir = await mkdtemp(join(tmpdir(), "libris-worker-test-"));
+    const tempDir = await mkdtemp(join("/tmp/libris-test-inbox", "worker-test-"));
     const filePath = join(tempDir, "no-admin.epub");
     await writeFile(filePath, "PK\x03\x04nobody-to-own-this");
 
@@ -299,7 +298,7 @@ describe("book-detected worker uses registry for ownership", () => {
 
   it("skips duplicate files and does not consume registry entry", async () => {
     // Create and process first file
-    const tempDir = await mkdtemp(join(tmpdir(), "libris-worker-test-"));
+    const tempDir = await mkdtemp(join("/tmp/libris-test-inbox", "worker-test-"));
     const epubContent = "PK\x03\x04duplicate-test-epub";
     const filePath = join(tempDir, "duplicate.epub");
     await writeFile(filePath, epubContent);

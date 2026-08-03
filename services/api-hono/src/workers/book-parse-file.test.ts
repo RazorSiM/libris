@@ -1,4 +1,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vite-plus/test";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { PGlite } from "@electric-sql/pglite";
 import { eq } from "drizzle-orm";
 import { createTestDb, seedUser, type TestDb } from "../db/test-utils.js";
@@ -21,6 +24,8 @@ let db: TestDb;
 // books.created_by is NOT NULL since the cutover, so every seeded book needs an
 // owner even in suites that have nothing to do with ownership.
 let ownerId: string;
+let inboxPath: string;
+let filePath: string;
 
 beforeAll(async () => {
   const testDb = await createTestDb();
@@ -29,6 +34,9 @@ beforeAll(async () => {
   ownerId = await seedUser(db);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   __setTestDb(db as any);
+  inboxPath = await mkdtemp(join(tmpdir(), "libris-parse-inbox-"));
+  filePath = join(inboxPath, "test.epub");
+  await writeFile(filePath, "test epub");
 });
 
 afterEach(async () => {
@@ -41,6 +49,7 @@ afterEach(async () => {
 
 afterAll(async () => {
   await pglite.close();
+  await rm(inboxPath, { recursive: true, force: true });
 });
 
 function createMockQueue() {
@@ -70,7 +79,7 @@ async function seedInboxBook() {
       bookId: book.id,
       format: "epub",
       originalName: "test.epub",
-      inboxPath: "/tmp/test.epub",
+      inboxPath: filePath,
       fileSize: 123,
     })
     .returning({ id: schema.bookFiles.id });
@@ -79,18 +88,29 @@ async function seedInboxBook() {
 }
 
 describe("createBookParseFileProcessor", () => {
+  it("rejects a queued path outside the inbox before reading metadata", async () => {
+    const { bookId, bookFileId } = await seedInboxBook();
+    const { queue } = createMockQueue();
+    const processor = createBookParseFileProcessor(queue, inboxPath);
+
+    await expect(
+      processor(createMockJob({ bookId, bookFileId, filePath: "/etc/passwd", format: "epub" })),
+    ).rejects.toThrow(/outside the inbox/i);
+    expect(extractEpubMetadata).not.toHaveBeenCalled();
+  });
+
   it("moves a metadata-empty EPUB to manual review without queueing external lookup", async () => {
     extractEpubMetadata.mockResolvedValue({});
 
     const { bookId, bookFileId } = await seedInboxBook();
     const { add, queue } = createMockQueue();
-    const processor = createBookParseFileProcessor(queue);
+    const processor = createBookParseFileProcessor(queue, inboxPath);
 
     await processor(
       createMockJob({
         bookId,
         bookFileId,
-        filePath: "/tmp/test.epub",
+        filePath,
         format: "epub",
       }),
     );
@@ -120,13 +140,13 @@ describe("createBookParseFileProcessor", () => {
 
     const { bookId, bookFileId } = await seedInboxBook();
     const { add, queue } = createMockQueue();
-    const processor = createBookParseFileProcessor(queue);
+    const processor = createBookParseFileProcessor(queue, inboxPath);
 
     await processor(
       createMockJob({
         bookId,
         bookFileId,
-        filePath: "/tmp/test.epub",
+        filePath,
         format: "epub",
       }),
     );
@@ -170,11 +190,9 @@ describe("createBookParseFileProcessor", () => {
 
     const { bookId, bookFileId } = await seedInboxBook();
     const { queue } = createMockQueue();
-    const processor = createBookParseFileProcessor(queue);
+    const processor = createBookParseFileProcessor(queue, inboxPath);
 
-    await processor(
-      createMockJob({ bookId, bookFileId, filePath: "/tmp/test.epub", format: "epub" }),
-    );
+    await processor(createMockJob({ bookId, bookFileId, filePath, format: "epub" }));
 
     const [book] = await db
       .select({ language: schema.books.language })
@@ -194,11 +212,9 @@ describe("createBookParseFileProcessor", () => {
 
     const { bookId, bookFileId } = await seedInboxBook();
     const { queue } = createMockQueue();
-    const processor = createBookParseFileProcessor(queue);
+    const processor = createBookParseFileProcessor(queue, inboxPath);
 
-    await processor(
-      createMockJob({ bookId, bookFileId, filePath: "/tmp/test.epub", format: "epub" }),
-    );
+    await processor(createMockJob({ bookId, bookFileId, filePath, format: "epub" }));
 
     const [book] = await db
       .select({ language: schema.books.language })
@@ -221,11 +237,9 @@ describe("createBookParseFileProcessor", () => {
 
     const { bookId, bookFileId } = await seedInboxBook();
     const { queue } = createMockQueue();
-    const processor = createBookParseFileProcessor(queue);
+    const processor = createBookParseFileProcessor(queue, inboxPath);
 
-    await processor(
-      createMockJob({ bookId, bookFileId, filePath: "/tmp/test.epub", format: "epub" }),
-    );
+    await processor(createMockJob({ bookId, bookFileId, filePath, format: "epub" }));
 
     const [book] = await db
       .select({ language: schema.books.language })

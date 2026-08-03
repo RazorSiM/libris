@@ -36,12 +36,35 @@ const logger = getLogger("worker:book-organize");
  * Sanitize a string for use as a filesystem directory/file name.
  * Replaces characters unsafe on common filesystems and trims to 200 chars.
  */
-function sanitizeName(name: string): string {
-  return name
+export function sanitizeName(name: string): string {
+  const sanitized = name
     .replace(/[/:?*"<>|\\]/g, "_")
     .replace(/\s+/g, " ")
     .trim()
+    .replace(/[. ]+$/g, "")
     .slice(0, 200);
+
+  if (
+    sanitized === "" ||
+    sanitized === "." ||
+    sanitized === ".." ||
+    /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(sanitized)
+  ) {
+    return `_${sanitized.replace(/\./g, "dot") || "unnamed"}`;
+  }
+  return sanitized;
+}
+
+/** Validate the complete destination before creating anything on disk. */
+export async function createDestinationDirectory(
+  libraryPath: string,
+  destination: string,
+): Promise<void> {
+  const resolvedDestination = resolve(destination);
+  if (!resolvedDestination.startsWith(libraryPath + sep)) {
+    throw new Error(`Destination path escapes library: ${resolvedDestination}`);
+  }
+  await mkdir(resolvedDestination, { recursive: true });
 }
 
 /**
@@ -96,8 +119,8 @@ export async function processBookOrganize(job: Job<BookOrganizePayload>): Promis
   const safeTitle = sanitizeName(title);
   const destDir = join(libraryPath, safeAuthor, safeTitle);
 
-  // 2. Create destination directory
-  await mkdir(destDir, { recursive: true });
+  // 2. Validate the complete destination before creating anything on disk.
+  await createDestinationDirectory(libraryPath, destDir);
   await job.log(`Destination: ${destDir}`);
 
   // 3. Fetch book files and move each one

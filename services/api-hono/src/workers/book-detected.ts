@@ -4,10 +4,16 @@ import { asc, eq } from "drizzle-orm";
 import { bookFiles, books, uploadRegistry, users } from "#db";
 import { BookDetectedPayloadSchema } from "../types/index.js";
 import type { BookDetectedPayload, BookFormat } from "../types/index.js";
-import type { Job, Queue } from "bullmq";
+import { UnrecoverableError, type Job, type Queue } from "bullmq";
 import { getDb } from "../services/db.js";
 import { computeChecksumFromFile } from "../shared/checksum.js";
 import { getLogger } from "../lib/logger.js";
+import { getEnv } from "../env.js";
+import {
+  assertExistingPathWithinRoot,
+  PathNotFoundError,
+  PathOutsideRootError,
+} from "../lib/assert-path-within-root.js";
 
 const logger = getLogger("worker:book-detected");
 
@@ -53,11 +59,26 @@ async function oldestAdminId(db: ReturnType<typeof getDb>): Promise<string> {
  * - Create books record (status: 'inbox') and book_files record
  * - Enqueue BOOK_PARSE_FILE job
  */
-export function createBookDetectedProcessor(parseQueue: Queue) {
+export function createBookDetectedProcessor(
+  parseQueue: Queue,
+  inboxPath = getEnv().LIBRIS_INBOX_PATH,
+) {
   return async function processBookDetected(job: Job<BookDetectedPayload>): Promise<void> {
     const { filePath } = BookDetectedPayloadSchema.parse(job.data);
     logger.info(`Processing detected book: ${filePath}`);
     await job.log(`Processing detected book: ${filePath}`);
+
+    try {
+      assertExistingPathWithinRoot(filePath, inboxPath);
+    } catch (error: unknown) {
+      if (error instanceof PathOutsideRootError) {
+        throw new UnrecoverableError(`Refusing to ingest a path outside the inbox: ${filePath}`);
+      }
+      if (error instanceof PathNotFoundError) {
+        throw new UnrecoverableError(`Inbox file not found: ${filePath}`);
+      }
+      throw error;
+    }
 
     const db = getDb();
 

@@ -4,10 +4,16 @@ import { predictLanguage } from "../lib/metadata/detect-language.js";
 import { extractEpubMetadata, extractEpubTextSample } from "../lib/metadata/index.js";
 import { BookParseFilePayloadSchema } from "../types/index.js";
 import type { BookParseFilePayload, NormalizedMetadata } from "../types/index.js";
-import type { Job, Queue } from "bullmq";
+import { UnrecoverableError, type Job, type Queue } from "bullmq";
 import { eq } from "drizzle-orm";
 import { getDb } from "../services/db.js";
 import { getLogger } from "../lib/logger.js";
+import { getEnv } from "../env.js";
+import {
+  assertExistingPathWithinRoot,
+  PathNotFoundError,
+  PathOutsideRootError,
+} from "../lib/assert-path-within-root.js";
 
 const logger = getLogger("worker:book-parse-file");
 
@@ -39,11 +45,26 @@ function buildSearchQuery(meta: NormalizedMetadata): string | null {
  * - Partially populate books fields from extracted metadata
  * - Enqueue BOOK_FETCH_METADATA job
  */
-export function createBookParseFileProcessor(fetchMetadataQueue: Queue) {
+export function createBookParseFileProcessor(
+  fetchMetadataQueue: Queue,
+  inboxPath = getEnv().LIBRIS_INBOX_PATH,
+) {
   return async function processBookParseFile(job: Job<BookParseFilePayload>): Promise<void> {
     const { bookId, filePath, format } = BookParseFilePayloadSchema.parse(job.data);
     logger.info(`Parsing ${format} file for book ${bookId}: ${filePath}`);
     await job.log(`Parsing ${format} file for book ${bookId}`);
+
+    try {
+      assertExistingPathWithinRoot(filePath, inboxPath);
+    } catch (error: unknown) {
+      if (error instanceof PathOutsideRootError) {
+        throw new UnrecoverableError(`Refusing to parse a path outside the inbox: ${filePath}`);
+      }
+      if (error instanceof PathNotFoundError) {
+        throw new UnrecoverableError(`Inbox file not found: ${filePath}`);
+      }
+      throw error;
+    }
 
     const db = getDb();
 

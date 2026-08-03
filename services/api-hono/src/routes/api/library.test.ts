@@ -5,6 +5,8 @@ import { createTestAuth, createTestDb, seedAppPassword, type TestDb } from "../.
 import * as schema from "../../db/schema.js";
 import type { Env } from "../../env.js";
 import { createMemoryKVStore } from "../../services/kv-store.js";
+import { mkdir, rm } from "node:fs/promises";
+import { inArray } from "drizzle-orm";
 
 const TEST_ENV: Env = {
   NODE_ENV: "test",
@@ -101,6 +103,58 @@ afterAll(async () => {
 });
 
 describe("GET /api/library", () => {
+  it("returns 404 for missing files and 403 for paths outside the library", async () => {
+    const { userId, rawKey } = await seedApiKey("Path Boundary Test Key");
+    await mkdir(TEST_ENV.LIBRIS_LIBRARY_PATH, { recursive: true });
+
+    const [missingBook] = await db
+      .insert(schema.books)
+      .values({ status: "organized", title: "Missing", createdBy: userId })
+      .returning({ id: schema.books.id });
+    const [missingFile] = await db
+      .insert(schema.bookFiles)
+      .values({
+        bookId: missingBook.id,
+        format: "epub",
+        originalName: "missing.epub",
+        storagePath: "Missing/missing.epub",
+      })
+      .returning({ id: schema.bookFiles.id });
+
+    const [escapedBook] = await db
+      .insert(schema.books)
+      .values({ status: "organized", title: "Escaped", createdBy: userId })
+      .returning({ id: schema.books.id });
+    const [escapedFile] = await db
+      .insert(schema.bookFiles)
+      .values({
+        bookId: escapedBook.id,
+        format: "epub",
+        originalName: "escaped.epub",
+        storagePath: "../escaped.epub",
+      })
+      .returning({ id: schema.bookFiles.id });
+
+    const { app } = createTestApp();
+    const headers = { Authorization: `Bearer ${rawKey}` };
+    const missing = await app.request(`/api/library/${missingBook.id}/download/${missingFile.id}`, {
+      headers,
+    });
+    const escaped = await app.request(`/api/library/${escapedBook.id}/download/${escapedFile.id}`, {
+      headers,
+    });
+
+    expect(missing.status).toBe(404);
+    expect(escaped.status).toBe(403);
+    // These rows belong only to this test; remove them so the suite can keep
+    // its intentionally cumulative auth fixtures without leaking books.
+    await db
+      .delete(schema.bookFiles)
+      .where(inArray(schema.bookFiles.bookId, [missingBook.id, escapedBook.id]));
+    await db.delete(schema.books).where(inArray(schema.books.id, [missingBook.id, escapedBook.id]));
+    await rm(TEST_ENV.LIBRIS_LIBRARY_PATH, { recursive: true, force: true });
+  });
+
   it("returns uploader labels in list responses without exposing api key fields", async () => {
     const { userId, rawKey, label } = await seedApiKey();
     const [book] = await db

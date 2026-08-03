@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vite-plus/test";
@@ -74,6 +74,28 @@ async function createUser(name: string, role: "user" | "admin" = "user") {
 }
 
 describe("createBookDetectedProcessor", () => {
+  it("rejects out-of-root, symlinked, and relative paths before writing rows", async () => {
+    const inbox = await mkdtemp(join(tmpdir(), "libris-inbox-root-"));
+    const outside = await mkdtemp(join(tmpdir(), "libris-inbox-outside-"));
+    const outsideFile = join(outside, "outside.epub");
+    const linkedFile = join(inbox, "linked.epub");
+    await writeFile(outsideFile, "outside");
+    await symlink(outsideFile, linkedFile);
+
+    const { queue } = createMockQueue();
+    const processor = createBookDetectedProcessor(queue, inbox);
+    for (const filePath of [outsideFile, linkedFile, "relative.epub"]) {
+      await expect(
+        processor(createMockJob({ filePath, detectedAt: new Date().toISOString() })),
+      ).rejects.toThrow(/inbox/i);
+    }
+
+    expect(await db.select().from(schema.books)).toHaveLength(0);
+    expect(await db.select().from(schema.bookFiles)).toHaveLength(0);
+    await rm(inbox, { recursive: true, force: true });
+    await rm(outside, { recursive: true, force: true });
+  });
+
   it("prefers the upload registry filename over the collision-safe inbox basename", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "libris-book-detected-"));
     const filePath = join(tempDir, "same-1.epub");
@@ -91,7 +113,7 @@ describe("createBookDetectedProcessor", () => {
     });
 
     const { queuedJobs, queue } = createMockQueue();
-    const processor = createBookDetectedProcessor(queue);
+    const processor = createBookDetectedProcessor(queue, tmpdir());
 
     await processor(createMockJob({ filePath, detectedAt: new Date().toISOString() }));
 
@@ -154,7 +176,7 @@ describe("createBookDetectedProcessor", () => {
     expect(registryBefore).toHaveLength(2);
 
     const { queuedJobs, queue } = createMockQueue();
-    const processor = createBookDetectedProcessor(queue);
+    const processor = createBookDetectedProcessor(queue, tmpdir());
 
     await processor(createMockJob({ filePath, detectedAt: new Date().toISOString() }));
 
@@ -217,7 +239,7 @@ describe("createBookDetectedProcessor", () => {
     expect(registryBefore).toHaveLength(3);
 
     const { queue } = createMockQueue();
-    const processor = createBookDetectedProcessor(queue);
+    const processor = createBookDetectedProcessor(queue, tmpdir());
 
     await processor(createMockJob({ filePath, detectedAt: new Date().toISOString() }));
 
@@ -242,9 +264,10 @@ describe("createBookDetectedProcessor", () => {
     await createUser("Plain User");
 
     const { queuedJobs, queue } = createMockQueue();
-    await createBookDetectedProcessor(queue)(
-      createMockJob({ filePath, detectedAt: new Date().toISOString() }),
-    );
+    await createBookDetectedProcessor(
+      queue,
+      tmpdir(),
+    )(createMockJob({ filePath, detectedAt: new Date().toISOString() }));
 
     const [book] = await db
       .select({ id: schema.books.id, createdBy: schema.books.createdBy })
@@ -274,9 +297,10 @@ describe("createBookDetectedProcessor", () => {
 
     const { queue } = createMockQueue();
     await expect(
-      createBookDetectedProcessor(queue)(
-        createMockJob({ filePath, detectedAt: new Date().toISOString() }),
-      ),
+      createBookDetectedProcessor(
+        queue,
+        tmpdir(),
+      )(createMockJob({ filePath, detectedAt: new Date().toISOString() })),
     ).rejects.toThrow(/admin/i);
 
     expect(await db.select().from(schema.books)).toHaveLength(0);
