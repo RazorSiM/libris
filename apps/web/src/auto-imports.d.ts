@@ -184,6 +184,7 @@ declare global {
   const useBroadcastChannel: typeof import("@vueuse/core").useBroadcastChannel;
   const useBrowserLocation: typeof import("@vueuse/core").useBrowserLocation;
   const useCached: typeof import("@vueuse/core").useCached;
+  const useChangePassword: typeof import("./composables/mutations/useAccountMutations").useChangePassword;
   const useChartTheme: typeof import("./composables/useChartTheme").useChartTheme;
   const useCleanQueue: typeof import("./composables/mutations/useJobMutations").useCleanQueue;
   const useClearReadingStatus: typeof import("./composables/mutations/useBookMutations").useClearReadingStatus;
@@ -381,6 +382,7 @@ declare global {
   const useToggle: typeof import("@vueuse/core").useToggle;
   const useTransition: typeof import("@vueuse/core").useTransition;
   const useTriggerHardcoverSync: typeof import("./composables/mutations/useSettingsMutations").useTriggerHardcoverSync;
+  const useUpdateProfile: typeof import("./composables/mutations/useAccountMutations").useUpdateProfile;
   const useUpload: typeof import("./composables/useUpload").useUpload;
   const useUrlSearchParams: typeof import("@vueuse/core").useUrlSearchParams;
   const useUserMedia: typeof import("@vueuse/core").useUserMedia;
@@ -438,6 +440,9 @@ declare global {
     WritableComputedRef,
   } from "vue";
   import("vue");
+  // @ts-ignore
+  export type { ChangePasswordVars } from "./composables/mutations/useAccountMutations";
+  import("./composables/mutations/useAccountMutations");
   // @ts-ignore
   export type { ManagedUser } from "./composables/mutations/useUserMutations";
   import("./composables/mutations/useUserMutations");
@@ -674,6 +679,9 @@ declare module "vue" {
     readonly useBroadcastChannel: UnwrapRef<(typeof import("@vueuse/core"))["useBroadcastChannel"]>;
     readonly useBrowserLocation: UnwrapRef<(typeof import("@vueuse/core"))["useBrowserLocation"]>;
     readonly useCached: UnwrapRef<(typeof import("@vueuse/core"))["useCached"]>;
+    readonly useChangePassword: UnwrapRef<
+      (typeof import("./composables/mutations/useAccountMutations"))["useChangePassword"]
+    >;
     readonly useChartTheme: UnwrapRef<
       (typeof import("./composables/useChartTheme"))["useChartTheme"]
     >;
@@ -1002,6 +1010,9 @@ declare module "vue" {
     readonly useTransition: UnwrapRef<(typeof import("@vueuse/core"))["useTransition"]>;
     readonly useTriggerHardcoverSync: UnwrapRef<
       (typeof import("./composables/mutations/useSettingsMutations"))["useTriggerHardcoverSync"]
+    >;
+    readonly useUpdateProfile: UnwrapRef<
+      (typeof import("./composables/mutations/useAccountMutations"))["useUpdateProfile"]
     >;
     readonly useUpload: UnwrapRef<(typeof import("./composables/useUpload"))["useUpload"]>;
     readonly useUrlSearchParams: UnwrapRef<(typeof import("@vueuse/core"))["useUrlSearchParams"]>;

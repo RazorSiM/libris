@@ -22,6 +22,7 @@ const DEFAULT_TAB = "connections";
 const tabs = computed(() => {
   const items = [
     { label: "Connections", value: "connections", slot: "connections", icon: "i-lucide-plug" },
+    { label: "Account", value: "account", slot: "account", icon: "i-lucide-user-round" },
   ];
 
   if (isAdmin.value) {
@@ -188,20 +189,17 @@ whenever(
     <template #body>
       <div class="max-w-4xl mx-auto py-8 px-4">
         <!--
-          The setup key-reveal modal is gone: setup creates an ACCOUNT now, and
-          the password is one the admin chose, so there is nothing secret to
-          show back. App passwords still reveal once — that lives in
-          SettingsApiKeys.vue, next to where they are created.
+          There is no sign-in form here: the router guard sends unauthenticated
+          visitors to /login, which also handles first-run setup. Reaching this
+          page at all means there is a session.
         -->
-        <!--
-          No sign-in form here any more: the router guard sends unauthenticated
-          visitors to /login (libris-5ng.18), which also handles first-run setup.
-          Reaching this page at all means there is a session.
-        -->
-        <!-- Tabbed settings (when authenticated) -->
         <UTabs v-model="selectedTab" :items="tabs" value-key="value" class="w-full">
           <template #connections>
             <SettingsConnections />
+          </template>
+
+          <template #account>
+            <SettingsAccount />
           </template>
 
           <template v-if="isAdmin" #users>

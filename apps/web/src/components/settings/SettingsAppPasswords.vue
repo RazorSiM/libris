@@ -82,7 +82,7 @@ function dismissRevealedKey() {
       <div class="flex items-start gap-2">
         <UIcon name="i-lucide-triangle-alert" class="text-warning mt-0.5 shrink-0" />
         <p class="text-sm text-warning">
-          \n Copy this now — it is shown once and cannot be retrieved later.\n
+          Copy this now — it is shown once and cannot be retrieved later.
         </p>
       </div>
       <div class="flex items-center gap-2">

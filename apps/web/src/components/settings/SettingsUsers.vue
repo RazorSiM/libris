@@ -10,7 +10,7 @@ import {
 } from "~/composables/mutations/useUserMutations";
 
 /**
- * Household account management (libris-5ng.20).
+ * Household account management.
  *
  * Self-registration is disabled, so this page is the only way a second person
  * gets an account — without it, adding someone means SQL. It is also the only

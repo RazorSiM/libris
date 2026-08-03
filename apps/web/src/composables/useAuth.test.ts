@@ -1,16 +1,17 @@
 // @vitest-environment happy-dom
 /**
- * useAuth() over the Better Auth client (libris-5ng.17).
+ * useAuth() over the Better Auth client.
  *
- * The composable's contract is what the app depends on; the transport behind
- * it changed completely. These tests pin the two behaviours that are easy to
- * lose in a rewrite and expensive to lose in production:
+ * A dozen call sites depend on this surface. These pin the behaviours that are
+ * cheap to break and expensive to lose in production:
  *
  * - the generation counter, which stops a check() that was already in flight
- *   from re-authenticating the app after logout (a real bug, fixed once
- *   already — see the auth-logout-race work of 2026-04-11);
+ *   from re-authenticating the app after logout. This regressed once before,
+ *   on 2026-04-11, and the symptom was a user watching themselves get signed
+ *   back in;
  * - the single-flight promise, so a page mounting five components does one
- *   session request rather than five.
+ *   session request rather than five;
+ * - refresh(), which is the only way to see your own edits to the session.
  */
 import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
@@ -68,7 +69,23 @@ describe("check()", () => {
     expect(auth.isAuthenticated.value).toBe(true);
     expect(auth.isAdmin.value).toBe(true);
     expect(auth.userId.value).toBe("u1");
+    expect(auth.userName.value).toBe("u1-name");
+    expect(auth.userEmail.value).toBe("u1@x.test");
     expect(auth.userLabel.value).toBe("u1-name");
+  });
+
+  it("falls back to the email address when the account has no name", async () => {
+    // The account page can clear a name down to nothing server-side; the
+    // sidebar must still have something to render.
+    getSession.mockResolvedValue({
+      data: { user: { id: "u1", name: null, email: "u1@x.test", role: "user" } },
+      error: null,
+    });
+    const auth = useAuth();
+
+    await auth.check();
+
+    expect(auth.userLabel.value).toBe("u1@x.test");
   });
 
   it("treats a null session as signed out rather than an error", async () => {
@@ -104,6 +121,27 @@ describe("check()", () => {
     await auth.check();
 
     expect(getSession).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("refresh()", () => {
+  it("re-reads a session that check() has already cached", async () => {
+    // Renaming yourself changes the session's contents without changing who is
+    // signed in. check() short-circuits on `checked`, so without refresh() the
+    // sidebar keeps rendering the old name until a full page load.
+    getSession.mockResolvedValue(session("u1"));
+    const auth = useAuth();
+    await auth.check();
+    expect(auth.userName.value).toBe("u1-name");
+
+    getSession.mockResolvedValue({
+      data: { user: { id: "u1", name: "Renamed", email: "u1@x.test", role: "user" } },
+      error: null,
+    });
+    await auth.refresh();
+
+    expect(getSession).toHaveBeenCalledTimes(2);
+    expect(auth.userName.value).toBe("Renamed");
   });
 });
 

@@ -18,7 +18,7 @@ Pages live under `src/pages/` (auto-routed by vue-router's file-based routing).
 | `/series`          | `pages/series/index.vue`     | Series browsing page with search, cover grid, and book counts                                                                                                                                  |
 | `/series/:name`    | `pages/series/[name].vue`    | Series detail: ordered book list with position numbers, covers, genres                                                                                                                         |
 | `/stats`           | `pages/stats.vue`            | Reading analytics: books finished, streaks, daily activity chart, genre distribution                                                                                                           |
-| `/settings`        | `pages/settings.vue`         | Auth setup/login, OPDS/KoSync/Hardcover config (with metadata and sync toggles), server health, jobs browser, failed jobs, queue management, paths                                             |
+| `/settings`        | `pages/settings.vue`         | Tabbed: Connections (app passwords, OPDS/KoSync/Hardcover), Account (display name, change password), and — for admins — Users, System, Jobs, Failed Jobs, Queues, Paths                        |
 
 ## Authentication Flow
 
@@ -33,7 +33,7 @@ The SPA authenticates directly with the Hono API via httpOnly cookies.
 
 Single `default.vue` layout with:
 
-- **Sidebar:** Logo, search button, nav links (Home, Inbox with badge, Library, Series, Stats), Reading section (Reading, Finished, Unread, Paused links with count badges), Settings link with failed jobs badge, and an external Documentation link (shown only when the runtime config `docsUrl` is set). The color mode and theme toggles are not in the sidebar — they live in each page's toolbar (see Styling).
+- **Sidebar:** Logo, search button, nav links (Home, Inbox with badge, Library, Series, Stats), Reading section (Reading, Finished, Unread, Paused links with count badges), your own name (a link to `/settings?tab=account`, with an Admin badge where it applies), Settings link with failed jobs badge, and an external Documentation link (shown only when the runtime config `docsUrl` is set). The color mode and theme toggles are not in the sidebar — they live in each page's toolbar (see Styling).
 - **Global search:** Debounced (200ms) command palette searching books and navigation links
 - **Content area:** `<RouterView>`
 

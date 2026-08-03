@@ -21,3 +21,35 @@ export const authClient = createAuthClient({
   basePath: "/api/auth",
   plugins: [adminClient(), apiKeyClient()],
 });
+
+/**
+ * A Better Auth client result, reduced to the value or a throw.
+ *
+ * The client resolves rather than rejects on a rejected request, so a caller
+ * that forgets to read `.error` treats a refusal as a success. Funnelling every
+ * call through here makes that impossible.
+ */
+export function unwrapAuthResult<T>(result: {
+  data: T | null;
+  error?: { message?: string; code?: string } | null;
+}): T {
+  if (result.error) throw new AuthRequestError(result.error);
+  if (result.data === null) throw new Error("Request returned no data");
+  return result.data;
+}
+
+/**
+ * Carries Better Auth's error `code` alongside the message.
+ *
+ * The message is written for a generic auth UI; the code is stable and lets a
+ * call site say something specific to what the user was actually doing.
+ */
+export class AuthRequestError extends Error {
+  readonly code: string | undefined;
+
+  constructor(error: { message?: string; code?: string }) {
+    super(error.message ?? "Request failed");
+    this.name = "AuthRequestError";
+    this.code = error.code;
+  }
+}

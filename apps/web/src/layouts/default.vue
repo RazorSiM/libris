@@ -256,20 +256,26 @@ const groups = computed(() => {
 
         <div class="mt-auto" />
 
-        <!-- User label -->
-        <div
+        <!-- User label: also the way into the account settings, since your own
+             name is where people look for "change my password". -->
+        <ULink
           v-if="userLabel && !collapsed"
+          to="/settings?tab=account"
           data-testid="sidebar-user-label"
-          class="px-3 py-2 flex items-center gap-2 text-sm text-muted"
+          class="px-3 py-2 flex items-center gap-2 text-sm text-muted rounded-md hover:text-default hover:bg-elevated/50"
         >
           <UIcon name="i-lucide-user" class="shrink-0" />
           <span class="truncate">{{ userLabel }}</span>
           <UBadge v-if="isAdmin" variant="subtle" color="warning" size="xs">Admin</UBadge>
-        </div>
+        </ULink>
         <UTooltip v-else-if="userLabel && collapsed" :text="userLabel">
-          <div data-testid="sidebar-user-label-collapsed" class="flex justify-center py-2">
-            <UIcon name="i-lucide-user" class="text-muted" />
-          </div>
+          <ULink
+            to="/settings?tab=account"
+            data-testid="sidebar-user-label-collapsed"
+            class="flex justify-center py-2 text-muted hover:text-default"
+          >
+            <UIcon name="i-lucide-user" />
+          </ULink>
         </UTooltip>
 
         <UNavigationMenu

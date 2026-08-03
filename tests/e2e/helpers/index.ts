@@ -65,6 +65,36 @@ export function userSessionHeaders(): { cookie: string } {
 export { getAdminUserId, getRegularUserId, getAdminCookie, getUserCookie } from "./accounts.js";
 
 /**
+ * Create a throwaway account and return the credentials to sign in with.
+ *
+ * Any spec that changes a password needs one of these. Doing it to ADMIN or
+ * REGULAR_USER rewrites the password the rest of the suite signs in with, and
+ * "sign out everywhere else" goes further still — it deletes every session that
+ * account owns, including the storageState the whole run shares.
+ *
+ * The `origin` header is not optional: Better Auth rejects a state-changing
+ * request without one, and the failure reads as a permissions problem.
+ */
+export async function createDisposableAccount(
+  label: string,
+  role: "user" | "admin" = "user",
+): Promise<{ email: string; password: string; name: string; id: string }> {
+  const email = `${label}-${Date.now()}@example.test`;
+  const account = { email, password: `${label}-correct-horse-battery`, name: `Throwaway ${label}` };
+
+  const res = await fetch(`${API_BASE}/api/auth/admin/create-user`, {
+    method: "POST",
+    headers: { ...sessionHeaders(), "Content-Type": "application/json", origin: API_BASE },
+    body: JSON.stringify({ ...account, role }),
+  });
+  if (!res.ok) {
+    throw new Error(`Could not create ${email}: ${res.status} ${await res.text()}`);
+  }
+  const { user } = (await res.json()) as { user: { id: string } };
+  return { ...account, id: user.id };
+}
+
+/**
  * Reset DB between tests by calling POST /__test/cleanup.
  * Deletes all books, files, metadata candidates, reading progress, and API keys.
  * Also clears Redis storage.

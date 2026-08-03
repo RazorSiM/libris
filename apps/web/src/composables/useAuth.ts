@@ -7,23 +7,22 @@ import { authClient } from "~/lib/auth-client";
 /**
  * The app's view of who is signed in.
  *
- * The surface is unchanged from the API-key era on purpose — a dozen call
- * sites depend on it — but everything underneath now goes through the Better
- * Auth client. `login` is the one exception: it takes an email and password
- * instead of a key, because there is no key to paste any more.
- *
- * No call site outside this file should touch authClient. Keeping the boundary
- * here is what let the transport change without the app noticing.
+ * A dozen call sites read this, and none of them should touch authClient. The
+ * boundary is the point: everything about how a session is fetched, cached and
+ * cleared lives here, so a change in transport touches one file.
  */
 export function useAuth() {
   const queryCache = useQueryCache();
   const store = useAuthStore();
-  const { authenticated, checked, admin, label, userId: storedUserId } = storeToRefs(store);
+  const { authenticated, checked, admin, name, email, userId: storedUserId } = storeToRefs(store);
 
   const isAuthenticated = computed(() => authenticated.value);
   const isAdmin = computed(() => admin.value);
-  const userLabel = computed(() => label.value);
   const userId = computed(() => storedUserId.value);
+  const userName = computed(() => name.value);
+  const userEmail = computed(() => email.value);
+  /** What to call someone in the chrome: their name, or their address if unset. */
+  const userLabel = computed(() => name.value ?? email.value ?? null);
 
   function clearFrontendQueryCache() {
     queryCache.cancelQueries({});
@@ -35,7 +34,8 @@ export function useAuth() {
   function clearAuthState() {
     authenticated.value = false;
     admin.value = false;
-    label.value = null;
+    name.value = null;
+    email.value = null;
     storedUserId.value = null;
   }
 
@@ -57,7 +57,8 @@ export function useAuth() {
         if (data?.user) {
           authenticated.value = true;
           admin.value = data.user.role === "admin";
-          label.value = data.user.name ?? data.user.email ?? null;
+          name.value = data.user.name ?? null;
+          email.value = data.user.email ?? null;
           storedUserId.value = data.user.id;
         } else {
           clearAuthState();
@@ -120,23 +121,35 @@ export function useAuth() {
     clearFrontendQueryCache();
   }
 
+  /**
+   * Re-read the session even though it has already been checked.
+   *
+   * check() is a once-per-load cache, which is right for the guard that calls
+   * it on every navigation and wrong after something changes the session's
+   * contents — renaming yourself, or a role change — because the stale copy is
+   * what the sidebar renders.
+   */
+  async function refresh() {
+    checked.value = false;
+    await check();
+  }
+
   async function setAuthenticated(value: boolean) {
     authenticated.value = value;
     checked.value = true;
-    if (value) {
-      // Re-fetch session details (role, name) after auth state change
-      checked.value = false;
-      await check();
-    }
+    if (value) await refresh();
   }
 
   return {
     isAuthenticated,
     isAdmin,
     userLabel,
+    userName,
+    userEmail,
     userId,
     checked,
     check,
+    refresh,
     login,
     logout,
     setAuthenticated,

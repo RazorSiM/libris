@@ -3,13 +3,12 @@ import { useMutation, useQuery, useQueryCache } from "@pinia/colada";
 /**
  * App passwords — the credential an e-reader, OPDS client or script uses.
  *
- * These used to be "API keys", and each one was an account. They are now
- * credentials belonging to a person, managed by that person: there is no admin
- * gate on creating one, and the list only ever contains your own. Creating
- * accounts for other people is admin user management instead (libris-5ng.20).
+ * A credential belongs to a person and is managed by that person: there is no
+ * admin gate on creating one, and the list only ever contains your own.
+ * Creating accounts for other people is admin user management instead.
  *
- * The query key stays "api-keys" so existing invalidation call sites keep
- * working; the UI rename is libris-5ng.21.
+ * The query key is "api-keys" rather than "app-passwords" so that every
+ * invalidation call site agrees on one string.
  */
 
 export function useApiKeysQuery() {

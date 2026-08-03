@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryCache } from "@pinia/colada";
-import { authClient } from "~/lib/auth-client";
+import { authClient, unwrapAuthResult as unwrap } from "~/lib/auth-client";
 
 /**
  * Admin user management, over the Better Auth admin plugin.
@@ -24,13 +24,6 @@ export interface ManagedUser {
 }
 
 const USERS_KEY = ["admin", "users"];
-
-/** Unwrap a Better Auth client result, turning its error into a throw. */
-function unwrap<T>(result: { data: T | null; error?: { message?: string } | null }): T {
-  if (result.error) throw new Error(result.error.message ?? "Request failed");
-  if (result.data === null) throw new Error("Request returned no data");
-  return result.data;
-}
 
 export function useUsersQuery() {
   const { isAdmin } = useAuth();
@@ -94,9 +87,9 @@ export function useBanUser() {
 /**
  * Set someone's password for them.
  *
- * This is the whole account-recovery story: there is no mail transport
- * (libris-2ld), so a forgotten password is fixed by an admin here and told to
- * the user out of band.
+ * This is the whole account-recovery story: there is no mail transport, so a
+ * forgotten password is fixed by an admin here and told to the user out of
+ * band.
  */
 export function useSetUserPassword() {
   return useMutation({
