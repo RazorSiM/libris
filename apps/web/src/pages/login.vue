@@ -106,8 +106,12 @@ watchEffect(() => {
 </script>
 
 <template>
-  <div class="min-h-screen flex items-center justify-center bg-default px-4">
-    <div class="w-full max-w-sm space-y-6" data-testid="login-page">
+  <UCard
+    class="w-full shadow-xl shadow-black/5 ring-default"
+    :ui="{ body: 'p-6 sm:p-8' }"
+    data-testid="login-page"
+  >
+    <div class="space-y-6">
       <div class="text-center space-y-2">
         <UIcon name="i-lucide-library-big" class="text-4xl text-primary" />
         <h1 class="text-xl font-semibold text-highlighted">
@@ -214,5 +218,5 @@ watchEffect(() => {
         </p>
       </UForm>
     </div>
-  </div>
+  </UCard>
 </template>

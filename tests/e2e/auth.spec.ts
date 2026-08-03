@@ -116,6 +116,15 @@ test.describe("sign-in", { tag: "@smoke" }, () => {
     await expect(page.getByTestId("password-reset-note")).toContainText(/admin/i);
   });
 
+  test("uses the standalone authentication layout", async ({ page }) => {
+    await page.goto("/login");
+
+    await expect(page.getByTestId("auth-layout")).toBeVisible();
+    await expect(page.getByTestId("login-page")).toBeVisible();
+    await expect(page.getByRole("link", { name: "Home" })).toHaveCount(0);
+    await expect(page.getByRole("link", { name: "Settings" })).toHaveCount(0);
+  });
+
   test("the sign-up endpoint stays shut even when called directly", async () => {
     const api = await anonymousApi();
     const res = await api.post(`${API_BASE}/api/auth/sign-up/email`, {

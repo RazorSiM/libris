@@ -42,6 +42,7 @@ test.describe.serial("first-run setup", () => {
     expect(await (await api.get(`${API_BASE}/api/setup`)).json()).toEqual({ required: true });
 
     await page.goto("/login");
+    await expect(page.getByTestId("auth-layout")).toBeVisible();
     await expect(page.getByTestId("setup-intro")).toBeVisible();
     await expect(page.getByTestId("setup-submit-btn")).toBeVisible();
 
