@@ -57,9 +57,11 @@ services:
       POSTGRES_DB: libris_test
       REDIS_HOST: redis
       REDIS_PORT: "6379"
+      NODE_ENV: development
       LIBRIS_INBOX_PATH: /repo/tmp/test-inbox
       LIBRIS_LIBRARY_PATH: /repo/tmp/test-library
       API_SECRET_KEY: e2e-test-secret-key-minimum-32-chars!
+      TEST_ROUTE_TOKEN: e2e-test-route-token-minimum-32-chars!
       BETTER_AUTH_SECRET: e2e-better-auth-secret-minimum-32-chars!
       COOKIE_DOMAIN: ""
       MIGRATIONS_PATH: /repo/services/api-hono/migrations

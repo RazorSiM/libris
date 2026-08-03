@@ -21,7 +21,7 @@ import { asc, eq } from "drizzle-orm";
 import type { AppVariables } from "../../context.js";
 
 function assertTestEnv(env: { NODE_ENV: string; E2E_TEST: string }): void {
-  if (env.NODE_ENV !== "test" && env.NODE_ENV !== "development" && env.E2E_TEST !== "1") {
+  if (env.NODE_ENV !== "test" && env.E2E_TEST !== "1") {
     throw new HTTPException(404, { message: "Not found" });
   }
 }

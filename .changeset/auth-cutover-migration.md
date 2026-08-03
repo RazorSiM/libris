@@ -33,6 +33,10 @@ to `POST /api/setup`, which creates the first admin only while no user exists.
 
 Breaking:
 
+- `NODE_ENV` is now required instead of silently defaulting to `development`.
+  Test-support routes are mounted only for `NODE_ENV=test` or `E2E_TEST=1`, and
+  require a separate 32+ character `TEST_ROUTE_TOKEN` even then.
+
 - Self-registration is now disabled outright (`disableSignUp`). Previously enabling
   email/password auth would have exposed `POST /api/auth/sign-up/email` publicly.
   All accounts are admin-created.

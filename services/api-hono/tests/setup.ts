@@ -19,6 +19,7 @@ const testEnv: Env = {
   MIGRATIONS_PATH: "./migrations",
   TRUST_PROXY_HEADERS: "0",
   E2E_TEST: "",
+  TEST_ROUTE_TOKEN: "integration-test-route-token-32-characters!!",
   LOG_LEVEL: "info",
   LIBRIS_RATELIMIT_GENERAL_LIMIT: 600,
   LIBRIS_RATELIMIT_GENERAL_WINDOW_SECONDS: 60,
@@ -86,9 +87,16 @@ export function createFetchHelper(app: ReturnType<typeof createApp>["app"]) {
     },
   ) {
     const url = `http://localhost${path}`;
-    const init: RequestInit = { method: opts?.method || "GET" };
+    const init: RequestInit = {
+      method: opts?.method || "GET",
+      headers: path.startsWith("/__test/")
+        ? { "x-test-token": testEnv.TEST_ROUTE_TOKEN! }
+        : undefined,
+    };
 
-    if (opts?.headers) init.headers = opts.headers;
+    if (opts?.headers) {
+      init.headers = { ...(init.headers as Record<string, string>), ...opts.headers };
+    }
     if (opts?.body) {
       init.body = JSON.stringify(opts.body);
       init.headers = {

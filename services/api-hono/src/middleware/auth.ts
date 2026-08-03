@@ -1,4 +1,5 @@
 import { createMiddleware } from "hono/factory";
+import { timingSafeEqual } from "node:crypto";
 import { HTTPException } from "hono/http-exception";
 import { getLogger } from "../lib/logger.js";
 import type { AppVariables } from "../context.js";
@@ -111,12 +112,6 @@ export const authMiddleware = createMiddleware<{ Variables: AppVariables }>(asyn
 
   switch (policy) {
     case "skip":
-      if (
-        path.startsWith("/__test/") &&
-        !(env.NODE_ENV === "development" || env.NODE_ENV === "test" || env.E2E_TEST === "1")
-      ) {
-        throw new HTTPException(404, { message: "Not found" });
-      }
       break;
 
     case "public":
@@ -125,6 +120,19 @@ export const authMiddleware = createMiddleware<{ Variables: AppVariables }>(asyn
     case "optional":
       await resolveSession(false);
       break;
+
+    case "test": {
+      const actual = Buffer.from(c.req.header("x-test-token") ?? "");
+      const expected = Buffer.from(env.TEST_ROUTE_TOKEN ?? "");
+      if (
+        expected.length < 32 ||
+        actual.length !== expected.length ||
+        !timingSafeEqual(actual, expected)
+      ) {
+        throw unauthorized();
+      }
+      break;
+    }
 
     case "kosync": {
       if (path === "/kosync/users/auth" || path === "/kosync/users/create") break;

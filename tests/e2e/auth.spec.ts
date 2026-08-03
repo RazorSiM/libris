@@ -19,7 +19,14 @@ import {
   type Page,
 } from "@playwright/test";
 import { ADMIN } from "./helpers/accounts.js";
-import { API_BASE, getApiKey, getUserApiKey, sessionHeaders, userSessionHeaders } from "./helpers";
+import {
+  API_BASE,
+  getApiKey,
+  getUserApiKey,
+  sessionHeaders,
+  testRouteHeaders,
+  userSessionHeaders,
+} from "./helpers";
 import { signInThroughUi } from "./helpers/sign-in.js";
 
 /** A context with no cookies, for testing the signed-out world. */
@@ -62,6 +69,19 @@ async function fillSignIn(page: Page, email: string, password: string) {
   await page.getByTestId("login-password-input").fill(password);
   await page.getByTestId("login-submit-btn").click();
 }
+
+test.describe("test-only routes", () => {
+  test("refuses an anonymous request and accepts an authenticated one", async () => {
+    const api = await anonymousApi();
+
+    expect((await api.post(`${API_BASE}/__test/invalidate-cache`)).status()).toBe(401);
+    expect(
+      (await api.post(`${API_BASE}/__test/invalidate-cache`, { headers: testRouteHeaders() })).ok(),
+    ).toBe(true);
+
+    await api.dispose();
+  });
+});
 
 // ── Sign-in ──────────────────────────────────────────────────────────
 

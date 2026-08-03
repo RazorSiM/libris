@@ -5,7 +5,7 @@ import { openTelemetryPlugin } from "@loglayer/plugin-opentelemetry";
 import { serializeError } from "serialize-error";
 import pino from "pino";
 
-const isTest = process.env.NODE_ENV === "test";
+const isTest = process.env.NODE_ENV === "test" || process.env.E2E_TEST === "1";
 const isDev = process.env.NODE_ENV === "development";
 
 // Dynamic import avoids bundling better-sqlite3 (pretty-terminal dep) into production

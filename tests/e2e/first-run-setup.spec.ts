@@ -24,7 +24,7 @@
 
 import { test, expect, request as playwrightRequest } from "@playwright/test";
 import { ADMIN, REGULAR_USER } from "./helpers/accounts.js";
-import { API_BASE } from "./helpers";
+import { API_BASE, testRouteHeaders } from "./helpers";
 import { signInThroughUi } from "./helpers/sign-in.js";
 
 /** A context with no cookies — a first-run visitor has none by definition. */
@@ -37,7 +37,10 @@ async function anonymousApi() {
 test.describe.serial("first-run setup", () => {
   test("offers setup on an empty install, then closes for good", async ({ page }) => {
     const api = await anonymousApi();
-    await api.post(`${API_BASE}/__test/cleanup`, { data: { includeAuth: true } });
+    await api.post(`${API_BASE}/__test/cleanup`, {
+      headers: testRouteHeaders(),
+      data: { includeAuth: true },
+    });
 
     expect(await (await api.get(`${API_BASE}/api/setup`)).json()).toEqual({ required: true });
 

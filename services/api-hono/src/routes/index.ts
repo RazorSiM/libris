@@ -32,7 +32,14 @@ import { opdsDownloadRoutes } from "./opds/download.js";
 import type { UpgradeWebSocket } from "hono/ws";
 import { testRoutes } from "./__test/index.js";
 
-export function createRouter(upgradeWebSocket: UpgradeWebSocket) {
+export interface CreateRouterOptions {
+  includeTestRoutes?: boolean;
+}
+
+export function createRouter(
+  upgradeWebSocket: UpgradeWebSocket,
+  { includeTestRoutes = false }: CreateRouterOptions = {},
+) {
   const router = new OpenAPIHono<{ Variables: AppVariables }>()
     // API routes
     .route("/api/setup", setupRoutes)
@@ -63,9 +70,11 @@ export function createRouter(upgradeWebSocket: UpgradeWebSocket) {
     .route("/opds/new", opdsNewRoutes)
     .route("/opds/search", opdsSearchRoutes)
     .route("/opds/covers", opdsCoversRoutes)
-    .route("/opds/download", opdsDownloadRoutes)
-    // Test routes
-    .route("/__test", testRoutes);
+    .route("/opds/download", opdsDownloadRoutes);
+
+  if (includeTestRoutes) {
+    router.route("/__test", testRoutes);
+  }
 
   // OpenAPI JSON endpoint
   router.doc("/_docs/openapi.json", {

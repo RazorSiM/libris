@@ -20,6 +20,7 @@ export interface CreateAppOptions {
 }
 
 export function createApp({ services, env }: CreateAppOptions) {
+  const includeTestRoutes = env.NODE_ENV === "test" || env.E2E_TEST === "1";
   const app = new OpenAPIHono<{ Variables: AppVariables }>({
     strict: false,
     defaultHook: (result, c) => {
@@ -97,7 +98,9 @@ export function createApp({ services, env }: CreateAppOptions) {
   app.on(["GET", "POST"], "/api/auth/*", (c) => services.auth.handler(c.req.raw));
 
   // Mount routes
-  const router = createRouter(upgradeWebSocket);
+  const router = createRouter(upgradeWebSocket, {
+    includeTestRoutes,
+  });
   app.route("/", router);
 
   // Serve static SPA files (production only — dev uses Nuxt devServer)

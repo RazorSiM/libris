@@ -30,6 +30,13 @@ export function authHeaders(): { Authorization: string } {
   return { Authorization: `Bearer ${getApiKey()}` };
 }
 
+/** Authenticate requests to the conditionally mounted test-support router. */
+export function testRouteHeaders(): { "X-Test-Token": string } {
+  const token = process.env.TEST_ROUTE_TOKEN;
+  if (!token) throw new Error("TEST_ROUTE_TOKEN not set for the E2E server");
+  return { "X-Test-Token": token };
+}
+
 /**
  * Returns Bearer auth headers for API requests (regular user).
  */
@@ -106,7 +113,7 @@ export async function cleanup(options: { includeAuth?: boolean } = {}): Promise<
   // every spec shares one storageState captured in the setup project.
   const res = await fetch(`${API_BASE}/__test/cleanup`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { ...testRouteHeaders(), "Content-Type": "application/json" },
     body: JSON.stringify({ includeAuth: options.includeAuth ?? false }),
   });
   if (!res.ok) {
@@ -130,7 +137,7 @@ export async function seedBook(
 ): Promise<{ id: string; title: string }> {
   const res = await fetch(`${API_BASE}/__test/seed-books`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { ...testRouteHeaders(), "Content-Type": "application/json" },
     body: JSON.stringify({
       books: [
         {
@@ -251,7 +258,10 @@ export async function seedOpdsCredentials(
  * Calls the test-only POST /__test/invalidate-cache endpoint.
  */
 export async function invalidateServerCache(): Promise<void> {
-  await fetch(`${API_BASE}/__test/invalidate-cache`, { method: "POST" });
+  await fetch(`${API_BASE}/__test/invalidate-cache`, {
+    method: "POST",
+    headers: testRouteHeaders(),
+  });
 }
 
 /**

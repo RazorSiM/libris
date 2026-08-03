@@ -3,9 +3,9 @@ import { deniesAppPasswords, resolvePolicy } from "./route-policy";
 
 describe("resolvePolicy", () => {
   const cases: [string, string][] = [
-    // Dev/test routes — skip
-    ["/__test/cleanup", "skip"],
-    ["/__test/seed", "skip"],
+    // Test-support routes use a dedicated secret
+    ["/__test/cleanup", "test"],
+    ["/__test/seed", "test"],
 
     // Internal routes (Scalar, OpenAPI) — skip via "/_" prefix
     ["/_docs/scalar", "skip"],
@@ -49,9 +49,8 @@ describe("resolvePolicy", () => {
   });
 
   describe("ordering: first match wins", () => {
-    it("matches /__test/ before /api/ even though both are prefixes", () => {
-      // /__test/ appears before /api/ in the table — verify it wins
-      expect(resolvePolicy("/__test/cleanup")).toBe("skip");
+    it("protects the conditionally mounted test router explicitly", () => {
+      expect(resolvePolicy("/__test/cleanup")).toBe("test");
     });
 
     it("matches /api/health exactly as optional, not as /api/ prefix", () => {

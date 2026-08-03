@@ -11,7 +11,13 @@
 
 import type { Page } from "@playwright/test";
 import { test, expect } from "./fixtures";
-import { API_BASE, seedBook, deleteAllBooks, invalidateServerCache } from "./helpers";
+import {
+  API_BASE,
+  testRouteHeaders,
+  seedBook,
+  deleteAllBooks,
+  invalidateServerCache,
+} from "./helpers";
 
 /**
  * Fire a server event through the test-only event bus endpoint.
@@ -24,7 +30,7 @@ async function emitEvent(event: {
 }): Promise<void> {
   const res = await fetch(`${API_BASE}/__test/emit-event`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { ...testRouteHeaders(), "Content-Type": "application/json" },
     body: JSON.stringify(event),
   });
   if (!res.ok) throw new Error(`Failed to emit event: ${res.status}`);

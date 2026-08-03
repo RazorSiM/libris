@@ -1,4 +1,12 @@
-export type AuthPolicy = "public" | "optional" | "api-key" | "admin" | "opds" | "kosync" | "skip";
+export type AuthPolicy =
+  | "public"
+  | "optional"
+  | "api-key"
+  | "admin"
+  | "opds"
+  | "kosync"
+  | "test"
+  | "skip";
 
 interface PathRule {
   pattern: string;
@@ -41,8 +49,9 @@ const ROUTE_TABLE: RouteRule[] = [
   // OPDS — Basic auth with service credentials (covers catalog and downloads)
   { pattern: "/opds", match: "prefix", policy: "opds" },
 
-  // Dev/test-only routes (must precede the `/_` catch-all)
-  { pattern: "/__test/", match: "prefix", policy: "skip" },
+  // Defence in depth for the conditionally mounted test router. These routes
+  // are never anonymous, even when explicitly enabled for tests or E2E.
+  { pattern: "/__test/", match: "prefix", policy: "test" },
 
   // Nitro internals (Scalar, OpenAPI JSON)
   { pattern: "/_", match: "prefix", policy: "skip" },

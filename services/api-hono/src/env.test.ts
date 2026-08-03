@@ -8,6 +8,7 @@ import { parseEnv, parseRedisUrl } from "./env";
  * later as forgeable sessions.
  */
 const VALID_ENV = {
+  NODE_ENV: "production",
   POSTGRES_HOST: "localhost",
   POSTGRES_USER: "libris",
   POSTGRES_PASSWORD: "pw",
@@ -20,6 +21,12 @@ const VALID_ENV = {
 };
 
 describe("parseEnv", () => {
+  it("requires NODE_ENV so a missing value cannot disable production safeguards", () => {
+    const { NODE_ENV: _omitted, ...withoutNodeEnv } = VALID_ENV;
+
+    expect(() => parseEnv(withoutNodeEnv)).toThrow(/NODE_ENV/);
+  });
+
   it("accepts a complete environment", () => {
     const env = parseEnv(VALID_ENV);
 

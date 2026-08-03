@@ -3,7 +3,7 @@ import { resolveDatabaseUrl } from "./lib/resolve-database-url";
 import { resolveRedisUrl } from "./lib/resolve-redis-url";
 
 const RawEnvSchema = z.object({
-  NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
+  NODE_ENV: z.enum(["development", "production", "test"]),
   PORT: z.coerce.number().default(3000),
   POSTGRES_HOST: z.string().optional(),
   POSTGRES_PORT: z.string().optional(),
@@ -32,6 +32,7 @@ const RawEnvSchema = z.object({
   MIGRATIONS_PATH: z.string().default("./migrations"),
   TRUST_PROXY_HEADERS: z.enum(["0", "1"]).default("0"),
   E2E_TEST: z.string().default(""),
+  TEST_ROUTE_TOKEN: z.string().optional(),
   LOG_LEVEL: z.enum(["trace", "debug", "info", "warn", "error", "fatal"]).default("info"),
   // Rate limit defaults are sized for LAN/VPN deployments. Tighten if exposing publicly.
   LIBRIS_RATELIMIT_GENERAL_LIMIT: z.coerce.number().int().positive().default(600),
