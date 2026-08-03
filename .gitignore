@@ -45,5 +45,5 @@ docs/.vitepress/cache/
 # Generated at build time — run `pnpm run build:spec` to regenerate
 services/api-hono/openapi.json
 
-# Bruno API collection — generated from OpenAPI spec via `pnpm run bruno:import`
+# Bruno API collection — generated from OpenAPI via `vp run bruno:import`
 bruno/

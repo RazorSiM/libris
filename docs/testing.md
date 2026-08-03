@@ -90,7 +90,7 @@ Tests seed data via direct PostgreSQL queries (not API calls), using the `postgr
 
 ## API Exploration (Bruno)
 
-The `bruno/` directory contains a [Bruno](https://www.usebruno.com/) API collection auto-generated from the OpenAPI spec. It provides a ready-to-use set of all API endpoints for manual testing and exploration.
+The ignored `bruno/` directory contains a [Bruno](https://www.usebruno.com/) API collection auto-generated from the OpenAPI spec. Generate it locally with `vp run bruno:import` before using it for manual testing and exploration.
 
 ### Opening the Collection
 
@@ -108,9 +108,11 @@ bru run --env Local bruno/health/     # Quick health check
 
 | Environment | File                           | Base URL                |
 | ----------- | ------------------------------ | ----------------------- |
-| Local       | `bruno/environments/Local.bru` | `http://localhost:3000` |
+| Local       | `bruno/environments/Local.yml` | `http://localhost:3000` |
 
-Requests use a <code v-pre>{{baseUrl}}</code> variable which resolves from the selected environment.
+Requests use <code v-pre>{{baseUrl}}</code> for the server and inherit collection-level Bearer
+authentication from <code v-pre>{{apiKey}}</code>. Set `apiKey` to an app password issued from
+**Settings → Connections**; browser session cookies are not needed for Bruno.
 
 ### Regenerating the Collection
 
@@ -127,8 +129,9 @@ This runs `scripts/bruno-import.sh` which:
 3. Imports into `bruno/` grouped by OpenAPI tags
 4. Removes internal/test endpoints
 5. Preserves existing environment files
+6. Configures inherited `Authorization: Bearer {{apiKey}}` authentication
 
-The collection is committed to git so it's available immediately after cloning.
+The generated collection is not committed. Run `vp run bruno:import` after cloning and whenever the API routes change.
 
 ### Structure
 

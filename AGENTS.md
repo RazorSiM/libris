@@ -68,7 +68,7 @@ Per-package operations: `vp run -F @libris/<pkg> <task>`. Recursive operations: 
 
 ### API Testing (Bruno)
 
-The `bruno/` directory contains a Bruno API collection auto-generated from the OpenAPI spec. Any dev can open it in the Bruno GUI or run requests from the CLI.
+The ignored `bruno/` directory contains a Bruno API collection auto-generated from the OpenAPI spec. Generate it locally before opening it in the Bruno GUI or running requests from the CLI.
 
 ```bash
 vp run bruno:import                 # Regenerate collection from OpenAPI spec (auto-starts server)
@@ -78,7 +78,7 @@ bru run --env Local bruno/health/   # Run a specific folder
 
 To open in Bruno GUI: **Open Collection** → select the `bruno/` folder. Select the **Local** environment (top-right dropdown).
 
-The collection is committed to git. When API routes change, run `vp run bruno:import` to refresh it — environment files are preserved across re-imports.
+The collection is generated locally and is not committed to git. Run `vp run bruno:import` after cloning and whenever API routes change — environment files are preserved across re-imports.
 
 ### Database
 
