@@ -100,7 +100,10 @@ async function handleSetPassword() {
   if (!user) return;
   try {
     await setPassword({ userId: user.id, newPassword: newPassword.value });
-    toast.add({ title: `Password set for ${user.name}. Tell them out of band.`, color: "success" });
+    toast.add({
+      title: `Password set for ${user.name}. Their browser sessions were signed out.`,
+      color: "success",
+    });
     passwordTarget.value = null;
     newPassword.value = "";
   } catch (err) {
@@ -228,7 +231,7 @@ async function handleSetPassword() {
   <UModal
     :open="!!passwordTarget"
     :title="`Set a password for ${passwordTarget?.name ?? ''}`"
-    description="They will need this to sign in. There is no reset email, so pass it on yourself."
+    description="All of their browser sessions will be signed out. App passwords for readers stay active. Pass the new password to them yourself."
     @update:open="
       (v: boolean) => {
         if (!v) passwordTarget = null;

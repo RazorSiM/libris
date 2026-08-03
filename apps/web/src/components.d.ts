@@ -27,7 +27,6 @@ declare module 'vue' {
     SettingsAccountPassword: typeof import('./components/settings/SettingsAccountPassword.vue')['default']
     SettingsAccountProfile: typeof import('./components/settings/SettingsAccountProfile.vue')['default']
     SettingsAccountSessions: typeof import('./components/settings/SettingsAccountSessions.vue')['default']
-    SettingsApiKeys: typeof import('./components/settings/SettingsApiKeys.vue')['default']
     SettingsAppPasswords: typeof import('./components/settings/SettingsAppPasswords.vue')['default']
     SettingsConnections: typeof import('./components/settings/SettingsConnections.vue')['default']
     SettingsFailedJobs: typeof import('./components/settings/SettingsFailedJobs.vue')['default']

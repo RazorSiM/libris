@@ -763,6 +763,11 @@ test.describe.serial("user management", () => {
   }) => {
     const RESET = "reset-by-the-admin-9999";
 
+    const capturedContext = await freshContext(browser);
+    const captured = await capturedContext.newPage();
+    await signInThroughUi(captured, NEW_USER.email, NEW_USER.password);
+    await expect(captured.getByRole("link", { name: "Home" })).toBeVisible();
+
     await page.goto("/settings");
     await page.getByRole("tab", { name: "Users" }).click();
     const row = page.locator('[data-testid^="user-item-"]', { hasText: NEW_USER.email });
@@ -771,6 +776,12 @@ test.describe.serial("user management", () => {
     await page.getByTestId("set-password-input").fill(RESET);
     await page.getByTestId("confirm-set-password-btn").click();
     await expect(page.getByTestId("set-password-input")).toHaveCount(0);
+
+    const replay = await captured.request.get(`${API_BASE}/api/books`);
+    expect(replay.status()).toBe(401);
+    await captured.goto("/account");
+    await expect(captured).toHaveURL(/\/login/);
+    await capturedContext.close();
 
     const context = await freshContext(browser);
     const fresh = await context.newPage();

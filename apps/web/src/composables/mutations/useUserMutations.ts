@@ -89,7 +89,8 @@ export function useBanUser() {
  *
  * This is the whole account-recovery story: there is no mail transport, so a
  * forgotten password is fixed by an admin here and told to the user out of
- * band.
+ * band. The server revokes every browser session after the password changes;
+ * app passwords remain active as separately managed device credentials.
  */
 export function useSetUserPassword() {
   return useMutation({

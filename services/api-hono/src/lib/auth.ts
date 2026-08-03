@@ -5,6 +5,7 @@ import { drizzleAdapter } from "better-auth/adapters/drizzle";
 // direct database connections) out of the bundle entirely. Verified absent from
 // the bundle.
 import { betterAuth } from "better-auth/minimal";
+import { createAuthMiddleware } from "better-auth/api";
 import { admin } from "better-auth/plugins/admin";
 import type { BetterAuthOptions } from "better-auth/types";
 import type { Db } from "#db";
@@ -166,6 +167,22 @@ export function createAuth({ db, secondaryStorage, env, secret, baseURL }: Creat
       // No SMTP transport yet, so there is nowhere to send a
       // verification or reset mail. Admins reset passwords on a user's behalf.
       requireEmailVerification: false,
+    },
+
+    hooks: {
+      after: createAuthMiddleware(async (ctx) => {
+        if (ctx.path !== "/admin/set-user-password") return;
+        const userId = (ctx.body as { userId?: unknown } | undefined)?.userId;
+        if (typeof userId !== "string") return;
+
+        // An admin-set password is the recovery path for a forgotten or
+        // compromised credential. A captured browser session must not survive
+        // that recovery. Better Auth's own adapter call clears both Redis and
+        // the persisted session rows; deleting rows directly would leave the
+        // Redis-backed sessions valid until expiry. App passwords deliberately
+        // remain valid because they are separately managed device credentials.
+        await ctx.context.internalAdapter.deleteUserSessions(userId);
+      }),
     },
 
     // Better Auth owns rate limiting for the whole /api/auth/* prefix and

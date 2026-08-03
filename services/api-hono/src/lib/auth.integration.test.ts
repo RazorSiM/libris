@@ -175,6 +175,55 @@ describe("account creation", () => {
 });
 
 describe("sessions", () => {
+  it("revokes all target browser sessions after an admin sets their password", async () => {
+    const admin = await auth.api.createUser({
+      body: {
+        email: "admin@example.com",
+        password: PASSWORD,
+        name: "Admin",
+        role: "admin",
+      },
+    });
+    const adminSignIn = await auth.api.signInEmail({
+      body: { email: admin.user.email, password: PASSWORD },
+      asResponse: true,
+    });
+    const target = await auth.api.createUser({
+      body: { email: "target@example.com", password: PASSWORD, name: "Target" },
+    });
+    const firstTargetSession = await auth.api.signInEmail({
+      body: { email: target.user.email, password: PASSWORD },
+      asResponse: true,
+    });
+    const secondTargetSession = await auth.api.signInEmail({
+      body: { email: target.user.email, password: PASSWORD },
+      asResponse: true,
+    });
+    const unrelatedSession = await signUp("unrelated@example.com");
+    const appPassword = await auth.api.createApiKey({
+      body: { userId: target.user.id, name: "Target reader" },
+    });
+
+    await auth.api.setUserPassword({
+      body: { userId: target.user.id, newPassword: "replacement-password" },
+      headers: new Headers({ cookie: cookieFrom(adminSignIn) }),
+    });
+
+    for (const response of [firstTargetSession, secondTargetSession]) {
+      expect(
+        await auth.api.getSession({ headers: new Headers({ cookie: cookieFrom(response) }) }),
+      ).toBeNull();
+    }
+    expect(
+      await auth.api.getSession({
+        headers: new Headers({ cookie: cookieFrom(unrelatedSession) }),
+      }),
+    ).not.toBeNull();
+    expect(
+      await auth.api.getSession({ headers: new Headers({ "x-api-key": appPassword.key }) }),
+    ).toMatchObject({ user: { id: target.user.id } });
+  });
+
   it("resolves a session cookie back to the user", async () => {
     const res = await signUp("reader@example.com");
     const session = await auth.api.getSession({
