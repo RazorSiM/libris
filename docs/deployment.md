@@ -70,13 +70,14 @@ books.example.com/_docs/*  → Hono API (OpenAPI docs)
 
 ### Optional
 
-| Variable              | Purpose                                                                                                                                                                                             |
-| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `PORT`                | Port the API server listens on. Default: `3000`.                                                                                                                                                    |
-| `COOKIE_DOMAIN`       | Parent domain for auth cookie (e.g., `.example.com`). Leave empty for same-origin.                                                                                                                  |
-| `MIGRATIONS_PATH`     | Path to migration files directory. Default: `./migrations`.                                                                                                                                         |
-| `TRUST_PROXY_HEADERS` | Set to `1` behind a trusted reverse proxy so `X-Real-IP` / `X-Forwarded-For` drive auth logging and rate limiting. Default: `0`. See _Reverse Proxy_ below.                                         |
-| `LOG_LEVEL`           | Log level for the production Pino logger only: `trace`, `debug`, `info`, `warn`, `error`, `fatal`. Default: `info`. Validated as an enum in the env schema. Does not change the OTel SDK log level. |
+| Variable                       | Purpose                                                                                                                                                                                             |
+| ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PORT`                         | Port the API server listens on. Default: `3000`.                                                                                                                                                    |
+| `COOKIE_DOMAIN`                | Parent domain for auth cookie (e.g., `.example.com`). Leave empty for same-origin.                                                                                                                  |
+| `MIGRATIONS_PATH`              | Path to migration files directory. Default: `./migrations`.                                                                                                                                         |
+| `TRUST_PROXY_HEADERS`          | Set to `1` behind a trusted reverse proxy so `X-Real-IP` / `X-Forwarded-For` drive auth logging and rate limiting. Default: `0`. See _Reverse Proxy_ below.                                         |
+| `LOG_LEVEL`                    | Log level for the production Pino logger only: `trace`, `debug`, `info`, `warn`, `error`, `fatal`. Default: `info`. Validated as an enum in the env schema. Does not change the OTel SDK log level. |
+| `LIBRIS_COVER_FETCH_ALLOWLIST` | Comma-separated exact HTTP(S) origins allowed to serve covers from private or special-use networks, such as `http://covers.lan:8080`. Redirect destinations need their own entry.                   |
 
 ### Rate Limiting
 

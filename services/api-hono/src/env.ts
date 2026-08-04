@@ -2,6 +2,38 @@ import { z } from "zod";
 import { resolveDatabaseUrl } from "./lib/resolve-database-url";
 import { resolveRedisUrl } from "./lib/resolve-redis-url";
 
+const CoverFetchAllowlistSchema = z
+  .string()
+  .default("")
+  .transform((value, ctx): string[] => {
+    const origins: string[] = [];
+    for (const entry of value
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean)) {
+      try {
+        const url = new URL(entry);
+        if (
+          (url.protocol !== "http:" && url.protocol !== "https:") ||
+          url.username ||
+          url.password ||
+          url.pathname !== "/" ||
+          url.search ||
+          url.hash
+        ) {
+          throw new Error("not an HTTP(S) origin");
+        }
+        origins.push(url.origin);
+      } catch {
+        ctx.addIssue({
+          code: "custom",
+          message: `Invalid cover-fetch allowlist origin: ${entry}`,
+        });
+      }
+    }
+    return origins;
+  });
+
 const RawEnvSchema = z.object({
   NODE_ENV: z.enum(["development", "production", "test"]),
   PORT: z.coerce.number().default(3000),
@@ -17,6 +49,7 @@ const RawEnvSchema = z.object({
   REDIS_TLS: z.string().optional(),
   LIBRIS_INBOX_PATH: z.string().min(1, "LIBRIS_INBOX_PATH is required"),
   LIBRIS_LIBRARY_PATH: z.string().min(1, "LIBRIS_LIBRARY_PATH is required"),
+  LIBRIS_COVER_FETCH_ALLOWLIST: CoverFetchAllowlistSchema,
   API_SECRET_KEY: z.string().min(32, "API_SECRET_KEY must be at least 32 characters"),
   // Signs Better Auth session cookies. Required with no fallback to
   // API_SECRET_KEY: the two rotate independently, and silently reusing a

@@ -1,4 +1,3 @@
-import { createWriteStream } from "node:fs";
 import {
   copyFile,
   lstat,
@@ -10,8 +9,6 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { basename, join, resolve, sep } from "node:path";
-import { Readable } from "node:stream";
-import { pipeline } from "node:stream/promises";
 import { bookFiles, books } from "#db";
 import { computePartialMd5 } from "../lib/content-hash.js";
 import { linkOrphanProgressForBook } from "../lib/progress-linking.js";
@@ -23,12 +20,10 @@ import type { Job } from "bullmq";
 import { eq } from "drizzle-orm";
 import { getDb } from "../services/db.js";
 import { getEnv } from "../env.js";
-import { assertNotInternalUrl } from "../shared/ssrf.js";
+import { fetchExternalImage } from "../shared/secure-image-fetch.js";
 import { getLogger } from "../lib/logger.js";
 
-const MAX_COVER_SIZE = 10 * 1024 * 1024; // 10 MB
 const COVER_FETCH_TIMEOUT_MS = 30_000; // 30 seconds
-const ALLOWED_COVER_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
 
 const logger = getLogger("worker:book-organize");
 
@@ -252,51 +247,15 @@ export async function processBookOrganize(job: Job<BookOrganizePayload>): Promis
       coverPath = coverStoragePath;
     } else {
       try {
-        // SSRF protection: validate URL does not target internal/private IPs
-        await assertNotInternalUrl(book.coverUrl);
-
-        const response = await fetch(book.coverUrl, {
-          signal: AbortSignal.timeout(COVER_FETCH_TIMEOUT_MS),
+        const image = await fetchExternalImage(book.coverUrl, {
+          timeoutMs: COVER_FETCH_TIMEOUT_MS,
+          allowedOrigins: getEnv().LIBRIS_COVER_FETCH_ALLOWLIST,
         });
-
-        if (!response.ok) {
-          logger.warn(`Failed to download cover: HTTP ${response.status}`);
-        } else if (!response.body) {
-          logger.warn("Cover response has no body");
-        } else {
-          // Validate Content-Type
-          const contentType = response.headers.get("content-type")?.split(";")[0]?.trim();
-          if (contentType && !ALLOWED_COVER_TYPES.has(contentType)) {
-            logger.warn(`Cover has disallowed Content-Type: ${contentType}, skipping`);
-          } else {
-            // Validate Content-Length if present
-            const contentLength = response.headers.get("content-length");
-            if (contentLength && Number(contentLength) > MAX_COVER_SIZE) {
-              logger.warn(`Cover too large (${contentLength} bytes), skipping`);
-            } else {
-              // Stream with size limit
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Node/Web ReadableStream type mismatch
-              const nodeStream = Readable.fromWeb(response.body as any);
-              const tmpDest = coverDest + ".tmp";
-              const ws = createWriteStream(tmpDest);
-              let downloaded = 0;
-
-              nodeStream.on("data", (chunk: Buffer) => {
-                downloaded += chunk.length;
-                if (downloaded > MAX_COVER_SIZE) {
-                  nodeStream.destroy(new Error(`Cover download exceeded ${MAX_COVER_SIZE} bytes`));
-                }
-              });
-
-              await pipeline(nodeStream, ws);
-
-              // Atomic move from tmp to final destination
-              await moveFile(tmpDest, coverDest);
-              coverPath = coverStoragePath;
-              logger.info(`Downloaded cover to ${coverDest}`);
-            }
-          }
-        }
+        const tmpDest = coverDest + ".tmp";
+        await writeFile(tmpDest, image.data);
+        await moveFile(tmpDest, coverDest);
+        coverPath = coverStoragePath;
+        logger.info(`Downloaded validated ${image.contentType} cover to ${coverDest}`);
       } catch (err) {
         // Clean up partial tmp file on failure
         const tmpDest = coverDest + ".tmp";

@@ -8,14 +8,13 @@ import { users, books, bookColumns, bookFiles, bookMetadataCandidates, uploadReg
 import type { AppVariables } from "../../context.js";
 import { requireBookOwnership } from "../../shared/auth.js";
 import { extractEpubCoverImage } from "../../lib/metadata/index.js";
-import { assertNotInternalUrl } from "../../shared/ssrf.js";
+import { fetchExternalImage } from "../../shared/secure-image-fetch.js";
 
 import { getLogger } from "../../lib/logger.js";
 
 const coverLogger = getLogger("inbox:cover");
 
 const COVER_PROXY_TIMEOUT_MS = 10_000;
-const ALLOWED_COVER_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
 import { computeChecksumFromBuffer } from "../../shared/checksum.js";
 import { invalidateRouteCache } from "../../services/cache.js";
 import { InboxListQuerySchema, IdParamSchema } from "../../shared/validation.js";
@@ -564,26 +563,14 @@ export const inboxRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
     if (book.coverUrl) {
       coverLogger.debug(`Book ${id}: proxying cover from ${book.coverUrl}`);
       try {
-        await assertNotInternalUrl(book.coverUrl);
-
-        const response = await fetch(book.coverUrl, {
-          signal: AbortSignal.timeout(COVER_PROXY_TIMEOUT_MS),
+        const image = await fetchExternalImage(book.coverUrl, {
+          timeoutMs: COVER_PROXY_TIMEOUT_MS,
+          allowedOrigins: c.get("env").LIBRIS_COVER_FETCH_ALLOWLIST,
         });
-
-        if (!response.ok || !response.body) {
-          coverLogger.warn(`Book ${id}: cover proxy failed: HTTP ${response.status}`);
-          throw new HTTPException(404, { message: "Cover URL not reachable" });
-        }
-
-        const contentType = response.headers.get("content-type")?.split(";")[0]?.trim();
-        if (contentType && !ALLOWED_COVER_TYPES.has(contentType)) {
-          coverLogger.warn(`Book ${id}: cover proxy rejected Content-Type: ${contentType}`);
-          throw new HTTPException(404, { message: "Cover URL returned non-image content" });
-        }
-
-        return new Response(response.body, {
+        return new Response(new Uint8Array(image.data), {
           headers: {
-            "Content-Type": contentType ?? "image/jpeg",
+            "Content-Type": image.contentType,
+            "Content-Length": String(image.data.length),
             "X-Content-Type-Options": "nosniff",
             "Cache-Control": "private, max-age=3600",
           },

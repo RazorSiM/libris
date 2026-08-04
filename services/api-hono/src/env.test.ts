@@ -34,6 +34,33 @@ describe("parseEnv", () => {
     expect(env.DATABASE_URL).toContain("localhost");
   });
 
+  describe("LIBRIS_COVER_FETCH_ALLOWLIST", () => {
+    it("defaults to no private-network exceptions", () => {
+      expect(parseEnv(VALID_ENV).LIBRIS_COVER_FETCH_ALLOWLIST).toEqual([]);
+    });
+
+    it("parses exact HTTP(S) origins", () => {
+      const env = parseEnv({
+        ...VALID_ENV,
+        LIBRIS_COVER_FETCH_ALLOWLIST: "http://covers.lan:8080, https://covers.example.com",
+      });
+
+      expect(env.LIBRIS_COVER_FETCH_ALLOWLIST).toEqual([
+        "http://covers.lan:8080",
+        "https://covers.example.com",
+      ]);
+    });
+
+    it("rejects paths and non-HTTP schemes", () => {
+      expect(() =>
+        parseEnv({ ...VALID_ENV, LIBRIS_COVER_FETCH_ALLOWLIST: "http://covers.lan/path" }),
+      ).toThrow(/allowlist/i);
+      expect(() =>
+        parseEnv({ ...VALID_ENV, LIBRIS_COVER_FETCH_ALLOWLIST: "file:///covers" }),
+      ).toThrow(/allowlist/i);
+    });
+  });
+
   describe("BETTER_AUTH_SECRET", () => {
     it("is required", () => {
       const { BETTER_AUTH_SECRET: _omitted, ...withoutSecret } = VALID_ENV;
