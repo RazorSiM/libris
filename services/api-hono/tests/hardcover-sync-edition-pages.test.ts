@@ -37,7 +37,7 @@ vi.mock("../src/shared/auth.js", async (orig) => ({
 }));
 
 import * as client from "../src/lib/hardcover/client.js";
-import { processHardcoverSync } from "../src/workers/hardcover-sync.js";
+import { processHardcoverSync, shouldRunGlobalMetadata } from "../src/workers/hardcover-sync.js";
 
 const testEnv: Env = {
   NODE_ENV: "test",
@@ -46,6 +46,7 @@ const testEnv: Env = {
   REDIS_URL: "redis://localhost:6379",
   LIBRIS_INBOX_PATH: "/tmp/libris-test-inbox",
   LIBRIS_LIBRARY_PATH: "/tmp/libris-test-library",
+  LIBRIS_COVER_FETCH_ALLOWLIST: [],
   API_SECRET_KEY: "test-secret-key-at-least-32-characters-long!!",
   BETTER_AUTH_SECRET: "test-better-auth-secret-at-least-32-chars!!",
   BETTER_AUTH_URL: "",
@@ -138,6 +139,14 @@ async function seedFinishedBook(opts: { editionId: number; pageCount: number }) 
 }
 
 const fakeJob = { updateProgress: vi.fn(), log: vi.fn() };
+
+describe("hardcover-sync scope", () => {
+  it("runs global metadata maintenance only for scheduled jobs", () => {
+    expect(shouldRunGlobalMetadata(true, false)).toBe(true);
+    expect(shouldRunGlobalMetadata(true, true)).toBe(false);
+    expect(shouldRunGlobalMetadata(false, false)).toBe(false);
+  });
+});
 
 describe("hardcover-sync edition page count handling (libris-26gy)", () => {
   it("syncs a read (with finished_at, no page progress) when the edition has null pages", async () => {

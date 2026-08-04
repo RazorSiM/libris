@@ -57,6 +57,7 @@ describe("POST /api/inbox/upload", () => {
       REDIS_URL: "redis://localhost:6379",
       LIBRIS_INBOX_PATH: inboxPath,
       LIBRIS_LIBRARY_PATH: "/tmp/libris-test-library",
+      LIBRIS_COVER_FETCH_ALLOWLIST: [],
       API_SECRET_KEY: "test-secret-key-at-least-32-characters-long!!",
       BETTER_AUTH_SECRET: "test-better-auth-secret-at-least-32-chars!!",
       BETTER_AUTH_URL: "",
@@ -162,6 +163,7 @@ describe("PATCH /api/inbox/:id/rescan", () => {
       REDIS_URL: "redis://localhost:6379",
       LIBRIS_INBOX_PATH: "/tmp/libris-test-inbox",
       LIBRIS_LIBRARY_PATH: "/tmp/libris-test-library",
+      LIBRIS_COVER_FETCH_ALLOWLIST: [],
       API_SECRET_KEY: "test-secret-key-at-least-32-characters-long!!",
       BETTER_AUTH_SECRET: "test-better-auth-secret-at-least-32-chars!!",
       BETTER_AUTH_URL: "",
@@ -260,6 +262,7 @@ describe("GET /api/inbox", () => {
       REDIS_URL: "redis://localhost:6379",
       LIBRIS_INBOX_PATH: "/tmp/libris-test-inbox",
       LIBRIS_LIBRARY_PATH: "/tmp/libris-test-library",
+      LIBRIS_COVER_FETCH_ALLOWLIST: [],
       API_SECRET_KEY: "test-secret-key-at-least-32-characters-long!!",
       BETTER_AUTH_SECRET: "test-better-auth-secret-at-least-32-chars!!",
       BETTER_AUTH_URL: "",
@@ -316,11 +319,81 @@ describe("GET /api/inbox", () => {
 
     expect(detailResponse.status).toBe(200);
     const detailBody = await detailResponse.json();
+    expect(detailBody.files[0]).not.toHaveProperty("inboxPath");
     expect(detailBody.uploader).toEqual({ id: userId, label: "Inbox Test Key" });
     expect(detailBody.uploader).not.toHaveProperty("key");
     expect(detailBody.uploader).not.toHaveProperty("keyPrefix");
     expect(detailBody.uploader).not.toHaveProperty("keyHash");
     expect(detailBody.uploader).not.toHaveProperty("isAdmin");
     expect(detailBody.uploader).not.toHaveProperty("lastUsedAt");
+  });
+
+  it("forbids another non-admin from reading detail and cover routes", async () => {
+    const owner = await seedApiKey();
+    const other = await seedApiKey();
+    const [book] = await db
+      .insert(schema.books)
+      .values({ status: "review", title: "Private Inbox Book", createdBy: owner.userId })
+      .returning({ id: schema.books.id });
+
+    const env = {
+      NODE_ENV: "test",
+      PORT: 3000,
+      DATABASE_URL: "pglite://",
+      REDIS_URL: "redis://localhost:6379",
+      LIBRIS_INBOX_PATH: "/tmp/libris-test-inbox",
+      LIBRIS_LIBRARY_PATH: "/tmp/libris-test-library",
+      LIBRIS_COVER_FETCH_ALLOWLIST: [],
+      API_SECRET_KEY: "test-secret-key-at-least-32-characters-long!!",
+      BETTER_AUTH_SECRET: "test-better-auth-secret-at-least-32-chars!!",
+      BETTER_AUTH_URL: "",
+      COOKIE_DOMAIN: "",
+      MIGRATIONS_PATH: "./migrations",
+      TRUST_PROXY_HEADERS: "0",
+      E2E_TEST: "",
+      LOG_LEVEL: "info",
+      LIBRIS_RATELIMIT_GENERAL_LIMIT: 600,
+      LIBRIS_RATELIMIT_GENERAL_WINDOW_SECONDS: 60,
+      LIBRIS_RATELIMIT_AUTH_LIMIT: 30,
+      LIBRIS_RATELIMIT_AUTH_WINDOW_SECONDS: 60,
+      LIBRIS_RATELIMIT_KEY_CREATION_LIMIT: 30,
+      LIBRIS_RATELIMIT_KEY_CREATION_WINDOW_SECONDS: 3600,
+    } as Env;
+    const { app } = createApp({
+      services: {
+        db: db as never,
+        queues: {
+          bookDetected: { add: async () => ({}) },
+          bookParseFile: { add: async () => ({}) },
+          bookFetchMetadata: { add: async () => ({}) },
+          bookOrganize: { add: async () => ({}) },
+          close: async () => {},
+        },
+        redisStorage: createMemoryKVStore(),
+        cacheStorage: createMemoryKVStore(),
+        auth: createTestAuth(db, env),
+        shutdown: async () => {},
+      },
+      env,
+    });
+
+    for (const path of [`/api/inbox/${book.id}`, `/api/inbox/${book.id}/cover`]) {
+      const response = await app.request(path, {
+        headers: { Authorization: `Bearer ${other.rawKey}` },
+      });
+      expect(response.status).toBe(403);
+    }
+
+    const listResponse = await app.request("/api/inbox", {
+      headers: { Authorization: `Bearer ${other.rawKey}` },
+    });
+    expect((await listResponse.json()).data).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: book.id })]),
+    );
+
+    const countResponse = await app.request("/api/inbox/count", {
+      headers: { Authorization: `Bearer ${other.rawKey}` },
+    });
+    expect(await countResponse.json()).toEqual({ count: 0 });
   });
 });

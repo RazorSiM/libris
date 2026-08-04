@@ -15,6 +15,7 @@ const TEST_ENV: Env = {
   REDIS_URL: "redis://localhost:6379",
   LIBRIS_INBOX_PATH: "/tmp/libris-test-inbox",
   LIBRIS_LIBRARY_PATH: "/tmp/libris-test-library",
+  LIBRIS_COVER_FETCH_ALLOWLIST: [],
   API_SECRET_KEY: "test-secret-key-at-least-32-characters-long!!",
   BETTER_AUTH_SECRET: "test-better-auth-secret-at-least-32-chars!!",
   BETTER_AUTH_URL: "",
@@ -226,7 +227,7 @@ describe("GET /api/library", () => {
     expect(body.uploader).not.toHaveProperty("lastUsedAt");
   });
 
-  it("filters by language and uploader and returns matching facets", async () => {
+  it("filters by language and uploader and limits uploader facets for non-admins", async () => {
     const uploaderA = await seedApiKey("Uploader A");
     const uploaderB = await seedApiKey("Uploader B");
 
@@ -273,7 +274,17 @@ describe("GET /api/library", () => {
     expect(facetsResponse.status).toBe(200);
     const facetsBody = await facetsResponse.json();
     expect(facetsBody.languages).toEqual(expect.arrayContaining(["en", "fr"]));
-    expect(facetsBody.uploaders).toEqual(
+    expect(facetsBody.uploaders).toEqual([{ id: uploaderA.userId, label: uploaderA.label }]);
+
+    const admin = await seedAppPassword(createTestAuth(db, TEST_ENV), db, {
+      name: "Facet Admin",
+      role: "admin",
+    });
+    const adminResponse = await app.request("/api/library/facets", {
+      headers: { Authorization: `Bearer ${admin.rawKey}` },
+    });
+    const adminBody = await adminResponse.json();
+    expect(adminBody.uploaders).toEqual(
       expect.arrayContaining([
         { id: uploaderA.userId, label: uploaderA.label },
         { id: uploaderB.userId, label: uploaderB.label },

@@ -17,7 +17,7 @@ import {
   readingProgress,
 } from "#db";
 import type { AppVariables } from "../../context.js";
-import { getUserId, requireBookOwnership } from "../../shared/auth.js";
+import { getUserId, isAdmin, requireBookOwnership } from "../../shared/auth.js";
 import { invalidateRouteCache } from "../../services/cache.js";
 import { isUniqueViolation, uniqueViolationMessage } from "../../shared/db-errors.js";
 import { escapeIlike } from "../../shared/escape-ilike.js";
@@ -259,10 +259,11 @@ const facetsRoute = createRoute({
   path: "/facets",
   tags: ["library"],
   summary: "Get library filter facets",
-  description: "Returns distinct authors and genres from organized books for filter dropdowns",
+  description:
+    "Returns library filter values. Non-admin users receive only their own identity in the uploader facet; admins receive all uploaders.",
   responses: {
     200: {
-      description: "Distinct authors and genres",
+      description: "Distinct authors, genres, languages, series, and authorized uploader values",
       content: {
         "application/json": { schema: FacetsResponseSchema },
       },
@@ -665,6 +666,9 @@ export const libraryRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
   // --- GET /facets ---
   .openapi(facetsRoute, async (c) => {
     const db = c.get("db");
+    const uploaderFilter = isAdmin(c)
+      ? eq(books.status, "organized")
+      : and(eq(books.status, "organized"), eq(books.createdBy, getUserId(c)));
 
     const [authorsResult, genresResult, languagesResult, seriesResult, uploadersResult] =
       await Promise.all([
@@ -692,7 +696,7 @@ export const libraryRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
           .selectDistinct({ id: users.id, label: users.name })
           .from(books)
           .innerJoin(users, eq(users.id, books.createdBy))
-          .where(eq(books.status, "organized"))
+          .where(uploaderFilter)
           .orderBy(users.name),
       ]);
 

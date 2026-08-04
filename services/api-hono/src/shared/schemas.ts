@@ -53,7 +53,6 @@ export const UploaderSummarySchema = z
   .openapi("UploaderSummary");
 
 export const InboxDetailFileSchema = BookFileSchema.extend({
-  inboxPath: z.string().nullable().optional(),
   checksum: z.string().nullable().optional(),
 }).openapi("InboxDetailFile");
 

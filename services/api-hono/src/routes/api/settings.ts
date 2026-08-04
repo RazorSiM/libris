@@ -31,15 +31,16 @@ const getSettingsRoute = createRoute({
   path: "/",
   tags: ["settings"],
   summary: "Get settings",
-  description: "Return current library and inbox path settings",
+  description:
+    "Return application settings. Filesystem paths are included only for administrators.",
   responses: {
     200: {
       description: "Current settings",
       content: {
         "application/json": {
           schema: z.object({
-            libraryPath: z.string(),
-            inboxPath: z.string(),
+            libraryPath: z.string().optional(),
+            inboxPath: z.string().optional(),
             kosyncConfigured: z.boolean(),
             hardcoverMetadataEnabled: z.boolean(),
             hardcoverSyncEnabled: z.boolean(),
@@ -397,8 +398,9 @@ export const settingsRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
     ]);
 
     return c.json({
-      libraryPath: env.LIBRIS_LIBRARY_PATH,
-      inboxPath: env.LIBRIS_INBOX_PATH,
+      ...(isAdmin(c)
+        ? { libraryPath: env.LIBRIS_LIBRARY_PATH, inboxPath: env.LIBRIS_INBOX_PATH }
+        : {}),
       kosyncConfigured,
       hardcoverMetadataEnabled,
       hardcoverSyncEnabled,

@@ -38,6 +38,7 @@ const TEST_ENV: Env = {
   REDIS_URL: "redis://localhost:6379",
   LIBRIS_INBOX_PATH: "/tmp/libris-test-inbox",
   LIBRIS_LIBRARY_PATH: "/tmp/libris-test-library",
+  LIBRIS_COVER_FETCH_ALLOWLIST: [],
   API_SECRET_KEY: "test-secret-key-at-least-32-characters-long!!",
   BETTER_AUTH_SECRET: "test-better-auth-secret-at-least-32-chars!!",
   BETTER_AUTH_URL: "",

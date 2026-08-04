@@ -33,10 +33,15 @@ interface ValidatedUser {
   username: string;
 }
 
+export function shouldRunGlobalMetadata(metadataEnabled: boolean, manual: boolean): boolean {
+  return metadataEnabled && !manual;
+}
+
 export async function processHardcoverSync(job: Job): Promise<void> {
   const db = getDb();
   const env = getEnv();
   const targetApiKeyId: string | undefined = job.data?.userId;
+  const manual = job.data?.manual === true;
 
   // 1. Load all hardcover credentials (or just one if manually triggered for a specific user)
   const credQuery = db
@@ -104,7 +109,11 @@ export async function processHardcoverSync(job: Job): Promise<void> {
   if (!metadataEnabled) {
     log.info("Hardcover metadata disabled, skipping ISBN matching phase");
   }
-  const matchResult = metadataEnabled
+  const runGlobalMetadata = shouldRunGlobalMetadata(metadataEnabled, manual);
+  if (manual && metadataEnabled) {
+    log.info("Manual sync: skipping global ISBN matching and page-count backfill");
+  }
+  const matchResult = runGlobalMetadata
     ? await matchBooksToHardcover(db, globalToken, {
         onProgress: (matched, total) => {
           void job.updateProgress({ phase: "matching", matched, total });
@@ -118,7 +127,7 @@ export async function processHardcoverSync(job: Job): Promise<void> {
   }
 
   // 3b. Backfill page counts from Hardcover editions for already-matched books
-  if (metadataEnabled) {
+  if (runGlobalMetadata) {
     const backfillResult = await backfillEditionPageCounts(db, globalToken);
     if (backfillResult.updated > 0) {
       log.info(

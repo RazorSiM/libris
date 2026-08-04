@@ -47,7 +47,7 @@ const syncRoute = createRoute({
   tags: ["hardcover"],
   summary: "Trigger Hardcover sync",
   description:
-    "Enqueue a job to synchronize reading progress and ratings with the Hardcover service. Requires a configured Hardcover credential.",
+    "Enqueue a user-scoped job to synchronize reading progress and ratings with the Hardcover service. Global metadata maintenance runs only on scheduled jobs. Requires a configured Hardcover credential.",
   responses: {
     200: {
       description: "Sync job enqueued",

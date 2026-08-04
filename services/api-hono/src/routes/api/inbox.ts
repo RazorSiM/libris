@@ -6,7 +6,7 @@ import { writeFile } from "node:fs/promises";
 import { basename, join, extname, resolve } from "node:path";
 import { users, books, bookColumns, bookFiles, bookMetadataCandidates, uploadRegistry } from "#db";
 import type { AppVariables } from "../../context.js";
-import { requireBookOwnership } from "../../shared/auth.js";
+import { getUserId, isAdmin, requireBookOwnership } from "../../shared/auth.js";
 import { extractEpubCoverImage } from "../../lib/metadata/index.js";
 import { fetchExternalImage } from "../../shared/secure-image-fetch.js";
 
@@ -88,7 +88,8 @@ const listInboxRoute = createRoute({
   path: "/",
   tags: ["inbox"],
   summary: "List inbox books",
-  description: "Paginated list of books in inbox or review status",
+  description:
+    "Paginated list of books in inbox or review status. Non-admin users see only books they own.",
   request: {
     query: InboxListQuerySchema,
   },
@@ -107,7 +108,8 @@ const getInboxBookRoute = createRoute({
   path: "/{id}",
   tags: ["inbox"],
   summary: "Get inbox book",
-  description: "Retrieve a single inbox/review book with its files and metadata candidates",
+  description:
+    "Retrieve an owned inbox/review book with its files and metadata candidates. Admins may retrieve any book.",
   request: {
     params: IdParamSchema,
   },
@@ -118,6 +120,7 @@ const getInboxBookRoute = createRoute({
         "application/json": { schema: InboxDetailResponseSchema },
       },
     },
+    403: { description: "Not authorized to view this book" },
     404: { description: "Book not found" },
   },
 });
@@ -127,7 +130,8 @@ const inboxCountRoute = createRoute({
   path: "/count",
   tags: ["inbox"],
   summary: "Get inbox count",
-  description: "Returns the number of books in inbox or review status",
+  description:
+    "Returns the number of visible books in inbox or review status. Non-admin counts are owner-scoped.",
   responses: {
     200: {
       description: "Inbox count",
@@ -144,7 +148,7 @@ const inboxProcessingRoute = createRoute({
   tags: ["inbox"],
   summary: "Inbox processing status",
   description:
-    "Returns the current pipeline stage for books being processed (parsing, fetching metadata, organizing)",
+    "Returns the current pipeline stage for visible books being processed. Non-admin results are owner-scoped.",
   responses: {
     200: {
       description: "Map of bookId to processing stage",
@@ -183,7 +187,7 @@ const inboxCoverRoute = createRoute({
   tags: ["inbox"],
   summary: "Get inbox book cover",
   description:
-    "Returns the cover image for an inbox/review book. Tries EPUB extraction first, then falls back to proxying the coverUrl from metadata sources.",
+    "Returns the cover image for an owned inbox/review book. Admins may retrieve any cover. Tries EPUB extraction first, then falls back to proxying the coverUrl from metadata sources.",
   request: {
     params: IdParamSchema,
   },
@@ -198,6 +202,7 @@ const inboxCoverRoute = createRoute({
       },
     },
     400: { description: "Invalid book ID" },
+    403: { description: "Not authorized to view this book" },
     404: { description: "Book not found or no cover available" },
   },
 });
@@ -248,6 +253,7 @@ export const inboxRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
 
     // Inbox shows books with status 'inbox' or 'review'
     const conditions = [inArray(books.status, ["inbox", "review"])];
+    if (!isAdmin(c)) conditions.push(eq(books.createdBy, getUserId(c)));
 
     // When searching: tsquery for FTS + pg_trgm fallback for typos/filenames
     let tsquery: string | null = null;
@@ -342,17 +348,18 @@ export const inboxRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
   // GET /count — inbox count
   .openapi(inboxCountRoute, async (c) => {
     const db = c.get("db");
+    const where = isAdmin(c)
+      ? inArray(books.status, ["inbox", "review"])
+      : and(inArray(books.status, ["inbox", "review"]), eq(books.createdBy, getUserId(c)));
 
-    const result = await db
-      .select({ count: count() })
-      .from(books)
-      .where(inArray(books.status, ["inbox", "review"]));
+    const result = await db.select({ count: count() }).from(books).where(where);
 
     return c.json({ count: result[0]?.count ?? 0 });
   })
 
   // GET /processing — processing status
   .openapi(inboxProcessingRoute, async (c) => {
+    const db = c.get("db");
     const queues = c.get("queues");
     const processing: Record<string, { stage: string; label: string }> = {};
 
@@ -384,6 +391,17 @@ export const inboxRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
       // Redis may be unavailable — return empty map gracefully
     }
 
+    if (!isAdmin(c) && Object.keys(processing).length > 0) {
+      const owned = await db
+        .select({ id: books.id })
+        .from(books)
+        .where(and(inArray(books.id, Object.keys(processing)), eq(books.createdBy, getUserId(c))));
+      const ownedIds = new Set(owned.map(({ id }) => id));
+      for (const id of Object.keys(processing)) {
+        if (!ownedIds.has(id)) delete processing[id];
+      }
+    }
+
     return c.json({ processing });
   })
 
@@ -405,6 +423,8 @@ export const inboxRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
     if (!book) {
       throw new HTTPException(404, { message: "Book not found" });
     }
+
+    await requireBookOwnership(c, db, id);
 
     const [files, candidates] = await Promise.all([
       db.select().from(bookFiles).where(eq(bookFiles.bookId, id)),
@@ -436,7 +456,6 @@ export const inboxRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
         id: f.id,
         format: f.format,
         originalName: f.originalName,
-        inboxPath: f.inboxPath,
         fileSize: f.fileSize.toString(),
         checksum: f.checksum,
       })),
@@ -512,6 +531,8 @@ export const inboxRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
   .openapi(inboxCoverRoute, async (c) => {
     const { id } = c.req.valid("param");
     const db = c.get("db");
+
+    await requireBookOwnership(c, db, id);
 
     // Verify book exists and is in inbox/review status
     const [book] = await db

@@ -37,6 +37,7 @@ const TEST_ENV: Env = {
   REDIS_URL: "redis://localhost:6379",
   LIBRIS_INBOX_PATH: "/tmp/libris-test-inbox",
   LIBRIS_LIBRARY_PATH: "/tmp/libris-test-library",
+  LIBRIS_COVER_FETCH_ALLOWLIST: [],
   API_SECRET_KEY: "test-secret-key-at-least-32-characters-long!!",
   BETTER_AUTH_SECRET: "test-better-auth-secret-at-least-32-chars!!",
   BETTER_AUTH_URL: "",
@@ -272,5 +273,30 @@ describe("GET /api/settings/status", () => {
     // from a different table, so nothing here may be positional.
     expect(body.credentials.opds.service).toBe("opds");
     expect(body.credentials.hardcover.service).toBe("hardcover");
+  });
+});
+
+describe("GET /api/settings", () => {
+  it("shows filesystem paths only to admins", async () => {
+    const admin = await seedApiKey({ label: "Settings Admin", isAdmin: true });
+    const member = await seedApiKey({ label: "Settings Member", isAdmin: false });
+    const { app } = createTestApp();
+
+    const adminResponse = await app.request("/api/settings", {
+      headers: { Authorization: `Bearer ${admin.rawKey}` },
+    });
+    expect(adminResponse.status).toBe(200);
+    await expect(adminResponse.json()).resolves.toMatchObject({
+      libraryPath: TEST_ENV.LIBRIS_LIBRARY_PATH,
+      inboxPath: TEST_ENV.LIBRIS_INBOX_PATH,
+    });
+
+    const memberResponse = await app.request("/api/settings", {
+      headers: { Authorization: `Bearer ${member.rawKey}` },
+    });
+    expect(memberResponse.status).toBe(200);
+    const memberBody = await memberResponse.json();
+    expect(memberBody).not.toHaveProperty("libraryPath");
+    expect(memberBody).not.toHaveProperty("inboxPath");
   });
 });
