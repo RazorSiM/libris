@@ -16,6 +16,7 @@ const BASE_ENV = {
   NODE_ENV: "test",
   TRUST_PROXY_HEADERS: "0",
   COOKIE_DOMAIN: "",
+  LIBRIS_COOKIE_SECURE: "0",
 } as unknown as Env;
 
 function build(overrides: Partial<CreateAuthDeps> = {}) {
@@ -64,17 +65,11 @@ describe("createAuth", () => {
     expect(options.rateLimit?.storage).toBe("secondary-storage");
   });
 
-  it("rate limits in production but not under test", () => {
-    // Off under test on purpose: Better Auth throttles /sign-in/email hard, and
-    // a suite that signs in a few times in seconds gets rejected in a way the
-    // UI can only report as a wrong password. Production must keep it — this is
-    // the assertion that notices if the condition is ever widened.
+  it("uses the explicit E2E switch rather than NODE_ENV to disable rate limiting", () => {
     expect(build({ env: { ...BASE_ENV, NODE_ENV: "production" } }).options.rateLimit?.enabled).toBe(
       true,
     );
-    expect(build({ env: { ...BASE_ENV, NODE_ENV: "test" } }).options.rateLimit?.enabled).toBe(
-      false,
-    );
+    expect(build({ env: { ...BASE_ENV, NODE_ENV: "test" } }).options.rateLimit?.enabled).toBe(true);
     expect(
       build({ env: { ...BASE_ENV, NODE_ENV: "development", E2E_TEST: "1" } }).options.rateLimit
         ?.enabled,
@@ -145,7 +140,14 @@ describe("createAuth", () => {
       });
 
       expect(options.trustedOrigins).toEqual([]);
-      expect(options.advanced?.useSecureCookies).toBe(true);
+      expect(options.advanced?.useSecureCookies).toBe(false);
+    });
+
+    it("controls secure cookies independently of NODE_ENV", () => {
+      expect(
+        build({ env: { ...BASE_ENV, NODE_ENV: "development", LIBRIS_COOKIE_SECURE: "1" } }).options
+          .advanced?.useSecureCookies,
+      ).toBe(true);
     });
   });
 

@@ -9,7 +9,7 @@ import type Redis from "ioredis";
 export interface KVStore {
   getItem(key: string): Promise<unknown>;
   setItem(key: string, value: unknown, opts?: { ttl?: number }): Promise<void>;
-  increment(key: string, ttl: number): Promise<number>;
+  increment(key: string, ttl: number): Promise<{ value: number; ttl: number }>;
   getKeys(base?: string): Promise<string[]>;
   removeItem(key: string): Promise<void>;
   clear(): Promise<void>;
@@ -46,14 +46,14 @@ export function createRedisKVStore(redis: Redis, prefix: string): KVStore {
       }
     },
 
-    async increment(key: string, ttl: number): Promise<number> {
-      const value = await redis.eval(
-        "local value = redis.call('INCR', KEYS[1]); if value == 1 then redis.call('EXPIRE', KEYS[1], ARGV[1]) end; return value",
+    async increment(key: string, ttl: number): Promise<{ value: number; ttl: number }> {
+      const result = (await redis.eval(
+        "local value = redis.call('INCR', KEYS[1]); if value == 1 then redis.call('EXPIRE', KEYS[1], ARGV[1]) end; return { value, redis.call('TTL', KEYS[1]) }",
         1,
         fullKey(key),
         String(ttl),
-      );
-      return Number(value);
+      )) as [number, number];
+      return { value: Number(result[0]), ttl: Math.max(1, Number(result[1])) };
     },
 
     async getKeys(base?: string): Promise<string[]> {
@@ -115,16 +115,19 @@ export function createMemoryKVStore(): KVStore {
       store.set(key, { value, expiresAt });
     },
 
-    async increment(key: string, ttl: number): Promise<number> {
+    async increment(key: string, ttl: number): Promise<{ value: number; ttl: number }> {
       const entry = store.get(key);
       const now = Date.now();
       if (!entry || isExpired(entry)) {
         store.set(key, { value: 1, expiresAt: now + ttl * 1000 });
-        return 1;
+        return { value: 1, ttl };
       }
       const next = Number(entry.value) + 1;
       entry.value = next;
-      return next;
+      return {
+        value: next,
+        ttl: Math.max(1, Math.ceil(((entry.expiresAt ?? now) - now) / 1000)),
+      };
     },
 
     async getKeys(base?: string): Promise<string[]> {

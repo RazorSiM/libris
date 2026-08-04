@@ -17,8 +17,10 @@ import { createAuth, type Auth } from "./auth.js";
 
 const TEST_ENV = {
   NODE_ENV: "test",
+  E2E_TEST: "1",
   TRUST_PROXY_HEADERS: "0",
   COOKIE_DOMAIN: "",
+  LIBRIS_COOKIE_SECURE: "0",
 } as unknown as Env;
 
 let pglite: PGlite;

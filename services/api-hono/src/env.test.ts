@@ -32,6 +32,14 @@ describe("parseEnv", () => {
 
     expect(env.BETTER_AUTH_SECRET).toBe("b".repeat(32));
     expect(env.DATABASE_URL).toContain("localhost");
+    expect(env.LIBRIS_COOKIE_SECURE).toBe("1");
+    expect(env.LIBRIS_HTTP_HEADERS_TIMEOUT_MS).toBe(10_000);
+    expect(env.LIBRIS_HTTP_REQUEST_TIMEOUT_MS).toBe(30_000);
+    expect(env.LIBRIS_HTTP_IDLE_TIMEOUT_MS).toBe(30_000);
+  });
+
+  it("allows secure cookies to be disabled independently of NODE_ENV", () => {
+    expect(parseEnv({ ...VALID_ENV, LIBRIS_COOKIE_SECURE: "0" }).LIBRIS_COOKIE_SECURE).toBe("0");
   });
 
   describe("LIBRIS_COVER_FETCH_ALLOWLIST", () => {

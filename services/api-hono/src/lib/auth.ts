@@ -190,12 +190,12 @@ export function createAuth({ db, secondaryStorage, env, secret, baseURL }: Creat
     // stack. Counters go to the same Redis as sessions, so they survive a
     // restart and are shared if this ever runs more than one process.
     rateLimit: {
-      // Off under test. Better Auth applies a much stricter window to
+      // Off only for the explicit E2E harness. Better Auth applies a much stricter window to
       // /sign-in/email than to other endpoints, and an E2E run signs in several
       // times in quick succession during setup — the throttled attempt then
       // surfaces as a failed login, which reads as a broken auth flow rather
       // than as rate limiting doing its job.
-      enabled: env.NODE_ENV !== "test" && env.E2E_TEST !== "1",
+      enabled: env.E2E_TEST !== "1",
       storage: "secondary-storage",
     },
 
@@ -203,7 +203,10 @@ export function createAuth({ db, secondaryStorage, env, secret, baseURL }: Creat
     // Auth's default text ids in place. The cutover migration
     // converts the seven FK columns from uuid to text to match.
     advanced: {
-      useSecureCookies: isProduction,
+      // Transport security is an explicit deployment choice. Keeping it tied
+      // to NODE_ENV encouraged HTTP/LAN operators to select development mode,
+      // which also changes unrelated test and logging behaviour.
+      useSecureCookies: env.LIBRIS_COOKIE_SECURE === "1",
       ipAddress: trustProxyHeaders
         ? // Same precedence as shared/request-ip.ts so rate limiting and
           // session records agree with the rest of the app on who the caller is.

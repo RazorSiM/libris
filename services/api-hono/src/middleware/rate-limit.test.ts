@@ -53,4 +53,10 @@ describe("resolveRateLimitTiers", () => {
     expect(resolveRateLimitTiers("/api/books", "GET")).toEqual(["general"]);
     expect(resolveRateLimitTiers("/api/library", "GET")).toEqual(["general"]);
   });
+
+  it("rate-limits static and unknown paths by default", () => {
+    expect(resolveRateLimitTiers("/", "GET")).toEqual(["general"]);
+    expect(resolveRateLimitTiers("/assets/app.js", "GET")).toEqual(["general"]);
+    expect(resolveRateLimitTiers("/future-server-namespace", "POST")).toEqual(["general"]);
+  });
 });

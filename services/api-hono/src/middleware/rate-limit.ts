@@ -38,7 +38,9 @@ export function resolveRateLimitTiers(path: string, method: string): RateLimitTi
 
   if (isCredentialCheck) {
     tiers.push("auth");
-  } else if (path.startsWith("/api/") || path.startsWith("/kosync/") || path.startsWith("/opds")) {
+  } else {
+    // Default closed: static files, unknown paths and any future namespace are
+    // bounded too. Explicitly exempt only health and Better Auth above.
     tiers.push("general");
   }
 
@@ -49,8 +51,9 @@ export const rateLimitMiddleware = createMiddleware<{ Variables: AppVariables }>
   async (c, next) => {
     const env = c.get("env");
 
-    // Skip rate limiting during tests and development
-    if (env.NODE_ENV === "test" || env.NODE_ENV === "development" || env.E2E_TEST === "1") {
+    // The E2E harness deliberately opts out; NODE_ENV alone changes no rate
+    // limit behavior. Development uses the in-memory store.
+    if (env.E2E_TEST === "1") {
       return next();
     }
 

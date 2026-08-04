@@ -295,11 +295,11 @@ connection. Commands reject within 250 ms so the fallback policy can run, and
 counter increments are atomic under concurrency. `/api/health` bypasses the
 limiter and uses the bounded connection for its Redis diagnostic.
 
-| Tier          | Default limit | Applied to                                                                                                                         |
-| ------------- | ------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| `auth`        | 30 req/min    | `/kosync/users/auth`, plus the credential-creation routes below                                                                    |
-| `keyCreation` | 30 req/hour   | `POST /api/setup`, `POST /api/app-passwords` (stacks with `auth`)                                                                  |
-| `general`     | 600 req/min   | Everything else under `/api/*`, `/kosync/*` and `/opds/*` — including OPDS browsing and listing or revoking your own app passwords |
+| Tier          | Default limit | Applied to                                                                                                             |
+| ------------- | ------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `auth`        | 30 req/min    | `/kosync/users/auth`, plus the credential-creation routes below                                                        |
+| `keyCreation` | 30 req/hour   | `POST /api/setup`, `POST /api/app-passwords` (stacks with `auth`)                                                      |
+| `general`     | 600 req/min   | Every other path, including static files, unknown paths, OPDS browsing, and listing or revoking your own app passwords |
 
 `/kosync/users/auth` is the one credential check outside Better Auth's reach: KOReader speaks its own protocol on its own prefix. The two creation routes each cost a password hash, and `POST /api/setup` is public by necessity — nobody can authenticate on a fresh install — so it gets the strictest budget in the app.
 
@@ -307,7 +307,7 @@ Reading and revoking your own credentials sits in `general`: those probe nothing
 
 If exposing Libris publicly, lower the defaults via env vars (e.g. `LIBRIS_RATELIMIT_GENERAL_LIMIT=100`, `LIBRIS_RATELIMIT_AUTH_LIMIT=10`).
 
-IP extraction (`getRequestIp`) reads the direct connection address by default. When `TRUST_PROXY_HEADERS=1` is set, it prefers `X-Real-IP` or the first entry in `X-Forwarded-For` — use this when running behind a reverse proxy. Rate limiting is disabled in development and test environments.
+Each app-owned window starts on that client's first request, avoiding the double burst possible at global wall-clock boundaries. IP extraction (`getRequestIp`) reads the direct connection address by default. When `TRUST_PROXY_HEADERS=1` is set, it prefers `X-Real-IP` or the first entry in `X-Forwarded-For` — use this when running behind a reverse proxy. Rate limiting stays enabled in development through the in-memory store; only the explicit E2E switch disables it.
 
 ## Book Ingestion Pipeline
 

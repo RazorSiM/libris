@@ -31,10 +31,6 @@ export function getTiers(env: Env): Record<RateLimitTier, RateLimitConfig> {
   };
 }
 
-function getWindowId(windowSeconds: number): number {
-  return Math.floor(Date.now() / 1000 / windowSeconds);
-}
-
 // ── In-memory fallback for auth tiers when Redis is down ─────────────
 
 const memoryStore = new Map<string, { count: number; expiresAt: number }>();
@@ -89,24 +85,14 @@ export async function checkRateLimit(
 ): Promise<{ retryAfter: number | null; remaining: number; limit: number; resetIn: number }> {
   const config = getTiers(env)[tier];
 
-  // Skip rate limiting in dev mode
-  if (env.NODE_ENV === "development") {
-    return {
-      retryAfter: null,
-      remaining: config.limit - 1,
-      limit: config.limit,
-      resetIn: config.windowSeconds,
-    };
-  }
-
   const { limit, windowSeconds } = config;
-  const windowId = getWindowId(windowSeconds);
-  const key = `ratelimit:${tier}:${ip}:${windowId}`;
+  // Anchor the window to the caller's first request instead of wall-clock
+  // boundaries. A new bucket is therefore never available one millisecond
+  // after exhausting the previous one.
+  const key = `ratelimit:${tier}:${ip}`;
 
   try {
-    const current = await storage.increment(key, windowSeconds);
-    const elapsedInWindow = (Date.now() / 1000) % windowSeconds;
-    const resetIn = Math.ceil(windowSeconds - elapsedInWindow);
+    const { value: current, ttl: resetIn } = await storage.increment(key, windowSeconds);
 
     if (current > limit) {
       return { retryAfter: resetIn, remaining: 0, limit, resetIn };

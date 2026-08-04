@@ -24,6 +24,7 @@ const AUTH_ENV = {
   BETTER_AUTH_SECRET: "test-better-auth-secret-at-least-32-chars!!",
   TRUST_PROXY_HEADERS: "0",
   COOKIE_DOMAIN: "",
+  LIBRIS_COOKIE_SECURE: "0",
 } as unknown as Env;
 
 async function seedApiKey() {
@@ -86,6 +87,7 @@ describe("POST /api/inbox/upload", () => {
       BETTER_AUTH_SECRET: "test-better-auth-secret-at-least-32-chars!!",
       BETTER_AUTH_URL: "",
       COOKIE_DOMAIN: "",
+      LIBRIS_COOKIE_SECURE: "0",
       MIGRATIONS_PATH: "./migrations",
       TRUST_PROXY_HEADERS: "0",
       E2E_TEST: "",
@@ -96,6 +98,9 @@ describe("POST /api/inbox/upload", () => {
       LIBRIS_RATELIMIT_AUTH_WINDOW_SECONDS: 60,
       LIBRIS_RATELIMIT_KEY_CREATION_LIMIT: 30,
       LIBRIS_RATELIMIT_KEY_CREATION_WINDOW_SECONDS: 3600,
+      LIBRIS_HTTP_HEADERS_TIMEOUT_MS: 10_000,
+      LIBRIS_HTTP_REQUEST_TIMEOUT_MS: 30_000,
+      LIBRIS_HTTP_IDLE_TIMEOUT_MS: 30_000,
     };
 
     const { app } = createApp({
@@ -181,6 +186,9 @@ describe("POST /api/inbox/upload", () => {
       LIBRIS_RATELIMIT_AUTH_WINDOW_SECONDS: 60,
       LIBRIS_RATELIMIT_KEY_CREATION_LIMIT: 30,
       LIBRIS_RATELIMIT_KEY_CREATION_WINDOW_SECONDS: 3600,
+      LIBRIS_HTTP_HEADERS_TIMEOUT_MS: 10_000,
+      LIBRIS_HTTP_REQUEST_TIMEOUT_MS: 30_000,
+      LIBRIS_HTTP_IDLE_TIMEOUT_MS: 30_000,
     } as Env;
     const { app } = createApp({
       services: {
@@ -249,6 +257,7 @@ describe("PATCH /api/inbox/:id/rescan", () => {
       BETTER_AUTH_SECRET: "test-better-auth-secret-at-least-32-chars!!",
       BETTER_AUTH_URL: "",
       COOKIE_DOMAIN: "",
+      LIBRIS_COOKIE_SECURE: "0",
       MIGRATIONS_PATH: "./migrations",
       TRUST_PROXY_HEADERS: "0",
       E2E_TEST: "",
@@ -259,6 +268,9 @@ describe("PATCH /api/inbox/:id/rescan", () => {
       LIBRIS_RATELIMIT_AUTH_WINDOW_SECONDS: 60,
       LIBRIS_RATELIMIT_KEY_CREATION_LIMIT: 30,
       LIBRIS_RATELIMIT_KEY_CREATION_WINDOW_SECONDS: 3600,
+      LIBRIS_HTTP_HEADERS_TIMEOUT_MS: 10_000,
+      LIBRIS_HTTP_REQUEST_TIMEOUT_MS: 30_000,
+      LIBRIS_HTTP_IDLE_TIMEOUT_MS: 30_000,
     };
 
     const { app } = createApp({
@@ -348,6 +360,7 @@ describe("GET /api/inbox", () => {
       BETTER_AUTH_SECRET: "test-better-auth-secret-at-least-32-chars!!",
       BETTER_AUTH_URL: "",
       COOKIE_DOMAIN: "",
+      LIBRIS_COOKIE_SECURE: "0",
       MIGRATIONS_PATH: "./migrations",
       TRUST_PROXY_HEADERS: "0",
       E2E_TEST: "",
@@ -358,6 +371,9 @@ describe("GET /api/inbox", () => {
       LIBRIS_RATELIMIT_AUTH_WINDOW_SECONDS: 60,
       LIBRIS_RATELIMIT_KEY_CREATION_LIMIT: 30,
       LIBRIS_RATELIMIT_KEY_CREATION_WINDOW_SECONDS: 3600,
+      LIBRIS_HTTP_HEADERS_TIMEOUT_MS: 10_000,
+      LIBRIS_HTTP_REQUEST_TIMEOUT_MS: 30_000,
+      LIBRIS_HTTP_IDLE_TIMEOUT_MS: 30_000,
     };
 
     const { app } = createApp({
@@ -429,6 +445,7 @@ describe("GET /api/inbox", () => {
       BETTER_AUTH_SECRET: "test-better-auth-secret-at-least-32-chars!!",
       BETTER_AUTH_URL: "",
       COOKIE_DOMAIN: "",
+      LIBRIS_COOKIE_SECURE: "0",
       MIGRATIONS_PATH: "./migrations",
       TRUST_PROXY_HEADERS: "0",
       E2E_TEST: "",
@@ -439,6 +456,9 @@ describe("GET /api/inbox", () => {
       LIBRIS_RATELIMIT_AUTH_WINDOW_SECONDS: 60,
       LIBRIS_RATELIMIT_KEY_CREATION_LIMIT: 30,
       LIBRIS_RATELIMIT_KEY_CREATION_WINDOW_SECONDS: 3600,
+      LIBRIS_HTTP_HEADERS_TIMEOUT_MS: 10_000,
+      LIBRIS_HTTP_REQUEST_TIMEOUT_MS: 30_000,
+      LIBRIS_HTTP_IDLE_TIMEOUT_MS: 30_000,
     } as Env;
     const { app } = createApp({
       services: {

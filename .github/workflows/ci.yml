@@ -161,6 +161,7 @@ jobs:
     env:
       CI: "true"
       E2E_TEST: "1"
+      LIBRIS_COOKIE_SECURE: "0"
       POSTGRES_HOST: postgres
       POSTGRES_PORT: "5432"
       POSTGRES_USER: libris_test

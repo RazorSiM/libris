@@ -70,22 +70,26 @@ books.example.com/_docs/*  → Hono API (OpenAPI docs)
 
 ### Optional
 
-| Variable                       | Purpose                                                                                                                                                                                             |
-| ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `PORT`                         | Port the API server listens on. Default: `3000`.                                                                                                                                                    |
-| `COOKIE_DOMAIN`                | Parent domain for auth cookie (e.g., `.example.com`). Leave empty for same-origin.                                                                                                                  |
-| `MIGRATIONS_PATH`              | Path to migration files directory. Default: `./migrations`.                                                                                                                                         |
-| `TRUST_PROXY_HEADERS`          | Set to `1` behind a trusted reverse proxy so `X-Real-IP` / `X-Forwarded-For` drive auth logging and rate limiting. Default: `0`. See _Reverse Proxy_ below.                                         |
-| `LOG_LEVEL`                    | Log level for the production Pino logger only: `trace`, `debug`, `info`, `warn`, `error`, `fatal`. Default: `info`. Validated as an enum in the env schema. Does not change the OTel SDK log level. |
-| `LIBRIS_COVER_FETCH_ALLOWLIST` | Comma-separated exact HTTP(S) origins allowed to serve covers from private or special-use networks, such as `http://covers.lan:8080`. Redirect destinations need their own entry.                   |
+| Variable                         | Purpose                                                                                                                                                                                             |
+| -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PORT`                           | Port the API server listens on. Default: `3000`.                                                                                                                                                    |
+| `COOKIE_DOMAIN`                  | Parent domain for auth cookie (e.g., `.example.com`). Leave empty for same-origin.                                                                                                                  |
+| `LIBRIS_COOKIE_SECURE`           | Auth cookie `Secure` attribute. Defaults to `1`; set to `0` only when intentionally serving Libris over plain HTTP. Independent of `NODE_ENV`.                                                      |
+| `MIGRATIONS_PATH`                | Path to migration files directory. Default: `./migrations`.                                                                                                                                         |
+| `TRUST_PROXY_HEADERS`            | Set to `1` behind a trusted reverse proxy so `X-Real-IP` / `X-Forwarded-For` drive auth logging and rate limiting. Default: `0`. See _Reverse Proxy_ below.                                         |
+| `LOG_LEVEL`                      | Log level for the production Pino logger only: `trace`, `debug`, `info`, `warn`, `error`, `fatal`. Default: `info`. Validated as an enum in the env schema. Does not change the OTel SDK log level. |
+| `LIBRIS_COVER_FETCH_ALLOWLIST`   | Comma-separated exact HTTP(S) origins allowed to serve covers from private or special-use networks, such as `http://covers.lan:8080`. Redirect destinations need their own entry.                   |
+| `LIBRIS_HTTP_HEADERS_TIMEOUT_MS` | Time allowed to receive complete request headers. Default: `10000`.                                                                                                                                 |
+| `LIBRIS_HTTP_REQUEST_TIMEOUT_MS` | Time allowed to receive a complete request body. Default: `30000`.                                                                                                                                  |
+| `LIBRIS_HTTP_IDLE_TIMEOUT_MS`    | Maximum inactive time on an HTTP connection. Default: `30000`.                                                                                                                                      |
 
 ### Rate Limiting
 
 Rate limits are configurable through the validated env schema. The defaults are sized for LAN/VPN deployments. Tighten them if you expose the server publicly.
 
-There are three tiers, each with a request limit and a fixed window in seconds:
+There are three tiers, each with a request limit and a window anchored to the client's first request:
 
-- `general` — applies to ordinary API traffic. Defaults to 600 requests per 60 seconds.
+- `general` — applies to every path except health and Better Auth. Defaults to 600 requests per 60 seconds.
 - `auth` — applies to authentication endpoints (login, setup). Defaults to 30 requests per 60 seconds.
 - `keyCreation` — applies to API-key creation. Defaults to 30 requests per 3600 seconds (1 hour).
 

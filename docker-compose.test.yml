@@ -58,6 +58,7 @@ services:
       REDIS_HOST: redis
       REDIS_PORT: "6379"
       NODE_ENV: development
+      LIBRIS_COOKIE_SECURE: "0"
       LIBRIS_INBOX_PATH: /repo/tmp/test-inbox
       LIBRIS_LIBRARY_PATH: /repo/tmp/test-library
       API_SECRET_KEY: e2e-test-secret-key-minimum-32-chars!

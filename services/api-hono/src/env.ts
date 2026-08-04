@@ -76,6 +76,7 @@ const RawEnvSchema = z.object({
   // Set it only when the public URL cannot be inferred.
   BETTER_AUTH_URL: z.string().default(""),
   COOKIE_DOMAIN: z.string().default(""),
+  LIBRIS_COOKIE_SECURE: z.enum(["0", "1"]).default("1"),
   MIGRATIONS_PATH: z.string().default("./migrations"),
   TRUST_PROXY_HEADERS: z.enum(["0", "1"]).default("0"),
   E2E_TEST: z.string().default(""),
@@ -88,6 +89,9 @@ const RawEnvSchema = z.object({
   LIBRIS_RATELIMIT_AUTH_WINDOW_SECONDS: z.coerce.number().int().positive().default(60),
   LIBRIS_RATELIMIT_KEY_CREATION_LIMIT: z.coerce.number().int().positive().default(30),
   LIBRIS_RATELIMIT_KEY_CREATION_WINDOW_SECONDS: z.coerce.number().int().positive().default(3600),
+  LIBRIS_HTTP_HEADERS_TIMEOUT_MS: z.coerce.number().int().positive().default(10_000),
+  LIBRIS_HTTP_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
+  LIBRIS_HTTP_IDLE_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
 });
 
 const EnvSchema = RawEnvSchema.transform((raw, ctx) => {
