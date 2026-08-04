@@ -8,6 +8,7 @@ import type { AppVariables } from "../../context.js";
 import { normalizeLanguage } from "../../lib/languages.js";
 import { requireBookOwnership } from "../../shared/auth.js";
 import { invalidateRouteCache } from "../../services/cache.js";
+import { enqueueBookOrganize } from "../../shared/enqueue-book-organize.js";
 import { isUniqueViolation, uniqueViolationMessage } from "../../shared/db-errors.js";
 import { IdParamSchema } from "../../shared/validation.js";
 import {
@@ -268,7 +269,7 @@ export const booksRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
     }
 
     // Enqueue organize job AFTER transaction commits successfully
-    await queues.bookOrganize.add("organize", { bookId: id });
+    await enqueueBookOrganize(queues.bookOrganize, { bookId: id });
 
     // Invalidate caches
     await invalidateRouteCache(

@@ -34,6 +34,20 @@ const CoverFetchAllowlistSchema = z
     return origins;
   });
 
+const KNOWN_API_SECRET_PLACEHOLDERS = new Set(["change-me-generate-with-openssl-rand-hex-32"]);
+
+const ApiSecretSchema = z
+  .string()
+  .min(32, "API_SECRET_KEY must be at least 32 characters")
+  .refine(
+    (value) => !KNOWN_API_SECRET_PLACEHOLDERS.has(value),
+    "API_SECRET_KEY is a published placeholder; generate one with: openssl rand -hex 32",
+  )
+  .refine(
+    (value) => new Set(value).size >= 8,
+    "API_SECRET_KEY has too little character diversity; generate one with: openssl rand -hex 32",
+  );
+
 const RawEnvSchema = z.object({
   NODE_ENV: z.enum(["development", "production", "test"]),
   PORT: z.coerce.number().default(3000),
@@ -50,7 +64,7 @@ const RawEnvSchema = z.object({
   LIBRIS_INBOX_PATH: z.string().min(1, "LIBRIS_INBOX_PATH is required"),
   LIBRIS_LIBRARY_PATH: z.string().min(1, "LIBRIS_LIBRARY_PATH is required"),
   LIBRIS_COVER_FETCH_ALLOWLIST: CoverFetchAllowlistSchema,
-  API_SECRET_KEY: z.string().min(32, "API_SECRET_KEY must be at least 32 characters"),
+  API_SECRET_KEY: ApiSecretSchema,
   // Signs Better Auth session cookies. Required with no fallback to
   // API_SECRET_KEY: the two rotate independently, and silently reusing a
   // long-lived secret for session signing is worse than failing to boot.

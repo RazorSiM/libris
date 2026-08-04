@@ -7,18 +7,9 @@ import {
   paginationLinks,
   OPDS_MIME_ACQUISITION,
   OPDS_MIME_OPENSEARCH,
+  escapeXml,
 } from "../../shared/opds-xml.js";
 import { getBaseUrl, OPDS_PER_PAGE, bookToEntry } from "../../shared/opds-helpers.js";
-
-/** Escape XML attribute values (superset of text escaping for & < > " ') */
-function escapeXmlAttr(str: string): string {
-  return str
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&apos;");
-}
 
 // ── Route definitions ───────────────────────────────────────────────
 
@@ -77,7 +68,7 @@ export const opdsSearchRoutes = new OpenAPIHono<{ Variables: AppVariables }>().o
         "  <Description>Search the Libris catalog</Description>",
         "  <InputEncoding>UTF-8</InputEncoding>",
         "  <OutputEncoding>UTF-8</OutputEncoding>",
-        `  <Url type="${OPDS_MIME_ACQUISITION}" template="${escapeXmlAttr(baseUrl)}/opds/search?q={searchTerms}&amp;page={startPage?}"/>`,
+        `  <Url type="${OPDS_MIME_ACQUISITION}" template="${escapeXml(baseUrl)}/opds/search?q={searchTerms}&amp;page={startPage?}"/>`,
         "</OpenSearchDescription>",
       ].join("\n");
 

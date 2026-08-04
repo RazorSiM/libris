@@ -16,7 +16,7 @@ const VALID_ENV = {
   REDIS_HOST: "127.0.0.1",
   LIBRIS_INBOX_PATH: "/tmp/inbox",
   LIBRIS_LIBRARY_PATH: "/tmp/library",
-  API_SECRET_KEY: "a".repeat(32),
+  API_SECRET_KEY: "0123456789abcdef".repeat(2),
   BETTER_AUTH_SECRET: "b".repeat(32),
 };
 
@@ -108,6 +108,16 @@ describe("parseEnv", () => {
     const { API_SECRET_KEY: _omitted, ...withoutApiSecret } = VALID_ENV;
 
     expect(() => parseEnv(withoutApiSecret)).toThrow(/API_SECRET_KEY/);
+  });
+
+  it("rejects published and low-diversity API secret values", () => {
+    expect(() =>
+      parseEnv({
+        ...VALID_ENV,
+        API_SECRET_KEY: "change-me-generate-with-openssl-rand-hex-32",
+      }),
+    ).toThrow(/placeholder/i);
+    expect(() => parseEnv({ ...VALID_ENV, API_SECRET_KEY: "a".repeat(32) })).toThrow(/diversity/i);
   });
 });
 

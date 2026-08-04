@@ -9,6 +9,7 @@ import type { AppVariables } from "../../context.js";
 import { getUserId, isAdmin, requireBookOwnership } from "../../shared/auth.js";
 import { extractEpubCoverImage } from "../../lib/metadata/index.js";
 import { fetchExternalImage } from "../../shared/secure-image-fetch.js";
+import { validateEpubUpload } from "../../shared/epub-validation.js";
 
 import { getLogger } from "../../lib/logger.js";
 
@@ -651,6 +652,11 @@ export const inboxRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
       }
 
       const buffer = new Uint8Array(await file.arrayBuffer());
+      const epubError = validateEpubUpload(buffer);
+      if (epubError) {
+        errors.push({ filename: file.name, error: epubError });
+        continue;
+      }
       const safeName = basename(file.name);
 
       try {

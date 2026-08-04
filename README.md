@@ -77,7 +77,7 @@ The API server is configured via environment variables:
 | `REDIS_TLS`           | No       | Set to `1` for `rediss://` (TLS)                                       |
 | `LIBRIS_INBOX_PATH`   | Yes      | Directory to watch for new book files                                  |
 | `LIBRIS_LIBRARY_PATH` | Yes      | Directory for organized book storage                                   |
-| `API_SECRET_KEY`      | Yes      | Secret for API key operations                                          |
+| `API_SECRET_KEY`      | Yes      | Third-party token encryption key (`openssl rand -hex 32`)              |
 
 See [docs/environment.md](docs/environment.md) for the full reference and test-environment variables.
 

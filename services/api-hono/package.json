@@ -54,6 +54,7 @@
     "better-sqlite3": "catalog:",
     "dotenv-cli": "catalog:",
     "drizzle-kit": "catalog:",
+    "fast-xml-parser": "catalog:",
     "msw": "catalog:",
     "tsx": "catalog:",
     "typescript": "catalog:",

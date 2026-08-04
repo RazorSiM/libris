@@ -32,6 +32,30 @@ async function seedApiKey() {
   return await seedAppPassword(createTestAuth(db, AUTH_ENV), db, { name: "Inbox Test Key" });
 }
 
+function validEpubBytes(): Buffer {
+  const name = Buffer.from("mimetype");
+  const body = Buffer.from("application/epub+zip");
+  const header = Buffer.alloc(30);
+  header.writeUInt32LE(0x04034b50, 0);
+  header.writeUInt32LE(body.length, 18);
+  header.writeUInt32LE(body.length, 22);
+  header.writeUInt16LE(name.length, 26);
+  const local = Buffer.concat([header, name, body]);
+  const central = Buffer.alloc(46);
+  central.writeUInt32LE(0x02014b50, 0);
+  central.writeUInt32LE(body.length, 20);
+  central.writeUInt32LE(body.length, 24);
+  central.writeUInt16LE(name.length, 28);
+  const directory = Buffer.concat([central, name]);
+  const eocd = Buffer.alloc(22);
+  eocd.writeUInt32LE(0x06054b50, 0);
+  eocd.writeUInt16LE(1, 8);
+  eocd.writeUInt16LE(1, 10);
+  eocd.writeUInt32LE(directory.length, 12);
+  eocd.writeUInt32LE(local.length, 16);
+  return Buffer.concat([local, directory, eocd]);
+}
+
 beforeAll(async () => {
   const testDb = await createTestDb();
   pglite = testDb.pglite;
@@ -94,11 +118,10 @@ describe("POST /api/inbox/upload", () => {
     });
 
     const form = new FormData();
+    const epub = validEpubBytes();
     form.append(
       "file",
-      new File([Buffer.from("new content")], "same.epub", {
-        type: "application/epub+zip",
-      }),
+      new File([new Uint8Array(epub)], "same.epub", { type: "application/epub+zip" }),
     );
 
     const response = await app.request("/api/inbox/upload", {
@@ -109,7 +132,7 @@ describe("POST /api/inbox/upload", () => {
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
-      uploaded: [{ filename: "same.epub", size: 11 }],
+      uploaded: [{ filename: "same.epub", size: epub.length }],
       errors: [],
     });
 
@@ -117,7 +140,7 @@ describe("POST /api/inbox/upload", () => {
 
     const inboxEntries = await readdir(inboxPath);
     expect(inboxEntries.sort()).toEqual(["same-1.epub", "same.epub"]);
-    await expect(readFile(join(inboxPath, "same-1.epub"), "utf-8")).resolves.toBe("new content");
+    await expect(readFile(join(inboxPath, "same-1.epub"))).resolves.toEqual(epub);
 
     const [registryRow] = await db
       .select({
@@ -129,6 +152,64 @@ describe("POST /api/inbox/upload", () => {
 
     expect(registryRow).toEqual({ filename: "same.epub", userId });
 
+    await rm(inboxPath, { recursive: true, force: true });
+  });
+
+  it.each([
+    ["empty.epub", Buffer.alloc(0), /empty/i],
+    ["text.epub", Buffer.from("not a zip"), /ZIP archive/i],
+  ])("rejects invalid EPUB bytes before writing %s", async (name, bytes, error) => {
+    const { rawKey } = await seedApiKey();
+    const inboxPath = await mkdtemp(join(tmpdir(), "libris-inbox-invalid-"));
+    const env = {
+      ...AUTH_ENV,
+      NODE_ENV: "test",
+      PORT: 3000,
+      DATABASE_URL: "pglite://",
+      REDIS_URL: "redis://localhost:6379",
+      LIBRIS_INBOX_PATH: inboxPath,
+      LIBRIS_LIBRARY_PATH: "/tmp/libris-test-library",
+      LIBRIS_COVER_FETCH_ALLOWLIST: [],
+      API_SECRET_KEY: "test-secret-key-at-least-32-characters-long!!",
+      BETTER_AUTH_URL: "",
+      MIGRATIONS_PATH: "./migrations",
+      E2E_TEST: "",
+      LOG_LEVEL: "info",
+      LIBRIS_RATELIMIT_GENERAL_LIMIT: 600,
+      LIBRIS_RATELIMIT_GENERAL_WINDOW_SECONDS: 60,
+      LIBRIS_RATELIMIT_AUTH_LIMIT: 30,
+      LIBRIS_RATELIMIT_AUTH_WINDOW_SECONDS: 60,
+      LIBRIS_RATELIMIT_KEY_CREATION_LIMIT: 30,
+      LIBRIS_RATELIMIT_KEY_CREATION_WINDOW_SECONDS: 3600,
+    } as Env;
+    const { app } = createApp({
+      services: {
+        db: db as never,
+        queues: {
+          bookDetected: { add: async () => ({}) },
+          bookParseFile: { add: async () => ({}) },
+          bookFetchMetadata: { add: async () => ({}) },
+          bookOrganize: { add: async () => ({}) },
+          close: async () => {},
+        },
+        redisStorage: createMemoryKVStore(),
+        cacheStorage: createMemoryKVStore(),
+        auth: createTestAuth(db, env),
+        shutdown: async () => {},
+      },
+      env,
+    });
+    const form = new FormData();
+    form.append("file", new File([bytes], name, { type: "application/epub+zip" }));
+
+    const response = await app.request("/api/inbox/upload", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${rawKey}` },
+      body: form,
+    });
+    expect(response.status).toBe(400);
+    expect(await response.text()).toMatch(error);
+    expect(await readdir(inboxPath)).toEqual([]);
     await rm(inboxPath, { recursive: true, force: true });
   });
 });

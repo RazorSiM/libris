@@ -21,6 +21,7 @@ import { getUserId, isAdmin, requireBookOwnership } from "../../shared/auth.js";
 import { invalidateRouteCache } from "../../services/cache.js";
 import { isUniqueViolation, uniqueViolationMessage } from "../../shared/db-errors.js";
 import { escapeIlike } from "../../shared/escape-ilike.js";
+import { enqueueBookOrganize, enqueueUserReorganize } from "../../shared/enqueue-book-organize.js";
 import {
   IdParamSchema,
   IdFileIdParamSchema,
@@ -807,7 +808,10 @@ export const libraryRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
     const coverChanged = "coverUrl" in updates;
     const needsReorganize = Object.keys(updates).some((field) => EPUB_EMBEDDED_FIELDS.has(field));
     if (needsReorganize) {
-      await queues.bookOrganize.add("organize", { bookId: id, forceRedownloadCover: coverChanged });
+      await enqueueBookOrganize(queues.bookOrganize, {
+        bookId: id,
+        forceRedownloadCover: coverChanged,
+      });
     }
 
     // Invalidate library list and detail caches
@@ -953,7 +957,7 @@ export const libraryRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
     }
 
     // Enqueue organize job — the worker handles re-organize when inboxPath is null
-    await queues.bookOrganize.add("organize", { bookId: id });
+    await enqueueUserReorganize(queues.bookOrganize, id, getUserId(c));
 
     // Invalidate caches since the book's file locations may change
     await invalidateRouteCache(cacheStorage, "/api/library");
@@ -1047,7 +1051,7 @@ export const libraryRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
 
     // Enqueue re-organize job to move files and re-embed EPUB metadata
     const coverUrlChanged = "coverUrl" in bookUpdates;
-    await queues.bookOrganize.add("organize", {
+    await enqueueBookOrganize(queues.bookOrganize, {
       bookId: id,
       forceRedownloadCover: coverUrlChanged,
     });

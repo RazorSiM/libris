@@ -36,6 +36,32 @@ let adminKey: string;
  */
 let adminUserId: string;
 
+function validEpub(marker: string): Buffer {
+  const name = Buffer.from("mimetype");
+  const body = Buffer.from("application/epub+zip");
+  const header = Buffer.alloc(30);
+  header.writeUInt32LE(0x04034b50, 0);
+  header.writeUInt32LE(body.length, 18);
+  header.writeUInt32LE(body.length, 22);
+  header.writeUInt16LE(name.length, 26);
+  const local = Buffer.concat([header, name, body]);
+  const central = Buffer.alloc(46);
+  central.writeUInt32LE(0x02014b50, 0);
+  central.writeUInt32LE(body.length, 20);
+  central.writeUInt32LE(body.length, 24);
+  central.writeUInt16LE(name.length, 28);
+  const directory = Buffer.concat([central, name]);
+  const comment = Buffer.from(marker);
+  const eocd = Buffer.alloc(22);
+  eocd.writeUInt32LE(0x06054b50, 0);
+  eocd.writeUInt16LE(1, 8);
+  eocd.writeUInt16LE(1, 10);
+  eocd.writeUInt32LE(directory.length, 12);
+  eocd.writeUInt32LE(local.length, 16);
+  eocd.writeUInt16LE(comment.length, 20);
+  return Buffer.concat([local, directory, eocd, comment]);
+}
+
 // ── App lifecycle ──────────────────────────────────────────────────
 
 beforeAll(async () => {
@@ -67,15 +93,14 @@ afterEach(async () => {
 
 describe("upload route creates registry entry", () => {
   it("POST /api/inbox/upload inserts a registry row with correct checksum and userId", async () => {
-    // Create a minimal valid EPUB (just needs .epub extension for the route)
-    const epubContent = Buffer.from("PK\x03\x04fake-epub-content-for-testing");
+    const epubContent = validEpub("test-book");
     const expectedChecksum = computeChecksumFromBuffer(epubContent);
 
     // Upload via multipart form
     const formData = new FormData();
     formData.append(
       "file",
-      new Blob([epubContent], { type: "application/epub+zip" }),
+      new Blob([new Uint8Array(epubContent)], { type: "application/epub+zip" }),
       "test-book.epub",
     );
 
@@ -99,20 +124,20 @@ describe("upload route creates registry entry", () => {
   });
 
   it("creates separate registry entries for multiple files in one upload", async () => {
-    const content1 = Buffer.from("PK\x03\x04epub-content-one");
-    const content2 = Buffer.from("PK\x03\x04epub-content-two");
+    const content1 = validEpub("book-one");
+    const content2 = validEpub("book-two");
     const checksum1 = computeChecksumFromBuffer(content1);
     const checksum2 = computeChecksumFromBuffer(content2);
 
     const formData = new FormData();
     formData.append(
       "file",
-      new Blob([content1], { type: "application/epub+zip" }),
+      new Blob([new Uint8Array(content1)], { type: "application/epub+zip" }),
       "book-one.epub",
     );
     formData.append(
       "file",
-      new Blob([content2], { type: "application/epub+zip" }),
+      new Blob([new Uint8Array(content2)], { type: "application/epub+zip" }),
       "book-two.epub",
     );
 
@@ -148,13 +173,13 @@ describe("upload route creates registry entry", () => {
       { name: "regular-user", role: "user" },
     );
 
-    const epubContent = Buffer.from("PK\x03\x04user-uploaded-epub");
+    const epubContent = validEpub("user-uploaded");
     const expectedChecksum = computeChecksumFromBuffer(epubContent);
 
     const formData = new FormData();
     formData.append(
       "file",
-      new Blob([epubContent], { type: "application/epub+zip" }),
+      new Blob([new Uint8Array(epubContent)], { type: "application/epub+zip" }),
       "user-book.epub",
     );
 

@@ -12,6 +12,7 @@ import {
   BookMetadataCandidateSelectSchema,
   BookUpdateSchema,
 } from "#db";
+import { ExternalHttpUrlSchema, validateApprovedCoverUrl } from "./cover-url.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -206,6 +207,7 @@ export const ApproveBookBodySchema = z
   .object({
     fields: z.record(z.string().max(100), ApprovedFieldSchema),
   })
+  .superRefine(({ fields }, ctx) => validateApprovedCoverUrl(fields, ctx))
   .openapi("ApproveBookBody");
 
 // ── Library patch body (derived from DB update schema) ───────────────
@@ -227,6 +229,7 @@ export const LibraryPatchBodySchema = wrap(BookUpdateSchema)
     tags: true,
     coverUrl: true,
   })
+  .extend({ coverUrl: ExternalHttpUrlSchema.optional() })
   .openapi("LibraryPatchBody");
 
 // ── Auth schemas ─────────────────────────────────────────────────────

@@ -15,6 +15,8 @@ import { createApp } from "../app.js";
 import { createTestAuth, createTestDb, type TestDb } from "../db/test-utils.js";
 import * as schema from "../db/schema.js";
 import type { Env } from "../env.js";
+import { XMLValidator } from "fast-xml-parser";
+import { eq } from "drizzle-orm";
 
 // ---------------------------------------------------------------------------
 // Test infrastructure
@@ -65,6 +67,10 @@ let opdsUserId: string;
 
 // IDs set during seeding
 let prideBookId: string;
+
+function expectWellFormedXml(xml: string): void {
+  expect(XMLValidator.validate(xml)).toBe(true);
+}
 
 beforeAll(async () => {
   // 1. Create in-memory DB with migrations
@@ -289,6 +295,51 @@ describe("OPDS Feed (integration)", () => {
     expect(searchRes.headers.get("content-type")).toContain(
       "application/atom+xml;profile=opds-catalog;kind=acquisition",
     );
+  });
+
+  it("every feed remains well formed with XML-invalid metadata controls", async () => {
+    const [dirtyBook] = await db
+      .insert(schema.books)
+      .values({
+        status: "organized",
+        createdBy: opdsUserId,
+        title: "Control\u0001Title",
+        author: "Control\u000BAuthor",
+        description: "Control\u001FSummary",
+        genres: ["Control\u0001Genre"],
+        series: "Control\u000BSeries",
+        language: null,
+      })
+      .returning({ id: schema.books.id });
+    await db.insert(schema.bookFiles).values({
+      bookId: dirtyBook.id,
+      format: "epub",
+      originalName: "control.epub",
+    });
+
+    const routes = [
+      "/opds",
+      "/opds/books",
+      "/opds/new",
+      `/opds/books/${dirtyBook.id}`,
+      "/opds/search",
+      "/opds/search?q=control",
+      "/opds/genres",
+      "/opds/genres/romance",
+      "/opds/authors/jane-austen",
+      "/opds/series",
+      `/opds/series/${encodeURIComponent("Control\u000BSeries")}`,
+      "/opds/languages",
+      "/opds/languages/en",
+    ];
+    for (const route of routes) {
+      const response = await app.request(route, {
+        headers: { Authorization: opdsAuthHeader() },
+      });
+      expect(response.status, route).toBe(200);
+      expectWellFormedXml(await response.text());
+    }
+    await db.delete(schema.books).where(eq(schema.books.id, dirtyBook.id));
   });
 
   it("OPDS index includes a Languages navigation entry", async () => {

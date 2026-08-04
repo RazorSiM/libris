@@ -23,6 +23,7 @@ export const BookFetchMetadataPayloadSchema = z.object({
 export const BookOrganizePayloadSchema = z.object({
   bookId: z.string(),
   forceRedownloadCover: z.boolean().optional(),
+  requestedBy: z.string().optional(),
 });
 
 export type BookDetectedPayload = z.infer<typeof BookDetectedPayloadSchema>;

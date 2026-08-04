@@ -25,8 +25,27 @@ export const REL_THUMBNAIL = "http://opds-spec.org/image/thumbnail";
 // XML escaping
 // ---------------------------------------------------------------------------
 
-function escapeXml(str: string): string {
-  return str
+/** Remove code points XML 1.0 cannot represent, preserving tab, LF, and CR. */
+export function stripXmlInvalidCharacters(str: string): string {
+  let result = "";
+  for (const character of str) {
+    const codePoint = character.codePointAt(0)!;
+    if (
+      codePoint === 0x09 ||
+      codePoint === 0x0a ||
+      codePoint === 0x0d ||
+      (codePoint >= 0x20 && codePoint <= 0xd7ff) ||
+      (codePoint >= 0xe000 && codePoint <= 0xfffd) ||
+      (codePoint >= 0x10000 && codePoint <= 0x10ffff)
+    ) {
+      result += character;
+    }
+  }
+  return result;
+}
+
+export function escapeXml(str: string): string {
+  return stripXmlInvalidCharacters(str)
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")

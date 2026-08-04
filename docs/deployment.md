@@ -65,7 +65,7 @@ books.example.com/_docs/*  → Hono API (OpenAPI docs)
 | `REDIS_TLS`           | Set to `1` for `rediss://` (TLS). Required by most managed Redis providers.                                                                                                                |
 | `LIBRIS_INBOX_PATH`   | Writable directory for uploaded book files                                                                                                                                                 |
 | `LIBRIS_LIBRARY_PATH` | Writable directory for organized book storage                                                                                                                                              |
-| `API_SECRET_KEY`      | Token/cookie encryption secret — **minimum 32 characters**                                                                                                                                 |
+| `API_SECRET_KEY`      | Third-party token encryption secret. Generate with `openssl rand -hex 32`; placeholders and low-diversity values are rejected.                                                             |
 | `BETTER_AUTH_SECRET`  | Signs Better Auth session cookies — **minimum 32 characters**. Separate from `API_SECRET_KEY`, with no fallback: the server refuses to start without it. Changing it signs out every user. |
 
 ### Optional
