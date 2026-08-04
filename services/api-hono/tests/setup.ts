@@ -20,6 +20,7 @@ const testEnv: Env = {
   LIBRIS_COOKIE_SECURE: "0",
   MIGRATIONS_PATH: "./migrations",
   TRUST_PROXY_HEADERS: "0",
+  LIBRIS_TRUSTED_PROXIES: [],
   E2E_TEST: "",
   TEST_ROUTE_TOKEN: "integration-test-route-token-32-characters!!",
   LOG_LEVEL: "info",

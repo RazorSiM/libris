@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import type { Env } from "../env.js";
 import { createMemoryKVStore } from "./kv-store.js";
 import { checkRateLimit } from "./rate-limit.js";
+import { getCredentialRateLimitKey } from "../shared/request-ip.js";
 
 const ENV = {
   NODE_ENV: "production",
@@ -37,5 +38,16 @@ describe("checkRateLimit", () => {
     vi.advanceTimersByTime(200);
 
     expect((await checkRateLimit(storage, "boundary", "auth", env)).retryAfter).toBeGreaterThan(0);
+  });
+
+  it("shares a credential budget across source addresses", async () => {
+    const storage = createMemoryKVStore();
+    const env = { ...ENV, LIBRIS_RATELIMIT_AUTH_LIMIT: 2 } as Env;
+    const identity = getCredentialRateLimitKey("reader@example.com");
+
+    // The IP budget is separate; this identity follows the account being guessed.
+    expect((await checkRateLimit(storage, identity, "auth", env)).retryAfter).toBeNull();
+    expect((await checkRateLimit(storage, identity, "auth", env)).retryAfter).toBeNull();
+    expect((await checkRateLimit(storage, identity, "auth", env)).retryAfter).toBeGreaterThan(0);
   });
 });

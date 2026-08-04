@@ -15,6 +15,7 @@ import type { Env } from "../env.js";
 // package-private subpath resolves against the IMPORTING package's
 // package.json — which in web's case has no #db mapping.
 import * as schema from "../db/schema.js";
+import { betterAuthClientIpHeader } from "../shared/request-ip.js";
 
 type SecondaryStorage = NonNullable<BetterAuthOptions["secondaryStorage"]>;
 
@@ -114,7 +115,6 @@ export function apiKeyFromHeaders(headers: Headers | undefined): string | null {
 
 export function createAuth({ db, secondaryStorage, env, secret, baseURL }: CreateAuthDeps) {
   const isProduction = env.NODE_ENV === "production";
-  const trustProxyHeaders = env.TRUST_PROXY_HEADERS === "1";
 
   return betterAuth({
     baseURL,
@@ -207,14 +207,10 @@ export function createAuth({ db, secondaryStorage, env, secret, baseURL }: Creat
       // to NODE_ENV encouraged HTTP/LAN operators to select development mode,
       // which also changes unrelated test and logging behaviour.
       useSecureCookies: env.LIBRIS_COOKIE_SECURE === "1",
-      ipAddress: trustProxyHeaders
-        ? // Same precedence as shared/request-ip.ts so rate limiting and
-          // session records agree with the rest of the app on who the caller is.
-          { ipAddressHeaders: ["x-real-ip", "x-forwarded-for"] }
-        : // Without a trusted proxy in front, forwarded headers are attacker
-          // controlled: honouring them would let one client rotate its apparent
-          // IP and sidestep rate limiting entirely.
-          {},
+      // app.ts overwrites this private header with the address resolved from
+      // the TCP peer and trusted-proxy CIDRs. Better Auth never reads raw
+      // forwarded headers, so its session tracking and limiter cannot diverge.
+      ipAddress: { ipAddressHeaders: [betterAuthClientIpHeader], ipv6Subnet: 64 },
       ...(env.COOKIE_DOMAIN
         ? { crossSubDomainCookies: { enabled: true, domain: env.COOKIE_DOMAIN } }
         : {}),

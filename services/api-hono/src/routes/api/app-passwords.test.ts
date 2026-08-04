@@ -23,6 +23,7 @@ const TEST_ENV = {
   NODE_ENV: "test",
   BETTER_AUTH_SECRET: "test-better-auth-secret-at-least-32-chars!!",
   TRUST_PROXY_HEADERS: "0",
+  LIBRIS_TRUSTED_PROXIES: [],
   COOKIE_DOMAIN: "",
   LIBRIS_COOKIE_SECURE: "0",
 } as unknown as Env;

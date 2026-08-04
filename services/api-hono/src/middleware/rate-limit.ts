@@ -2,7 +2,7 @@ import { createMiddleware } from "hono/factory";
 import type { AppVariables } from "../context.js";
 import { enforceRateLimit } from "../services/rate-limit.js";
 import type { RateLimitTier } from "../services/rate-limit.js";
-import { getRequestIp } from "../shared/request-ip.js";
+import { getCredentialRateLimitKey, getIpRateLimitKey } from "../shared/request-ip.js";
 
 export function resolveRateLimitTiers(path: string, method: string): RateLimitTier[] {
   // Liveness must remain observable when Redis is unavailable. The handler
@@ -57,15 +57,15 @@ export const rateLimitMiddleware = createMiddleware<{ Variables: AppVariables }>
       return next();
     }
 
-    const ip = getRequestIp(c);
+    const ip = getIpRateLimitKey(c.get("clientIp"));
     const path = c.req.path;
     const method = c.req.method;
     const storage = c.get("redisStorage");
 
     let rateLimitInfo: { limit: number; remaining: number; resetIn: number } | null = null;
 
-    const applyTier = async (tier: RateLimitTier) => {
-      const info = await enforceRateLimit(storage, ip, tier, env);
+    const applyTier = async (tier: RateLimitTier, identity = ip) => {
+      const info = await enforceRateLimit(storage, identity, tier, env);
       if (!rateLimitInfo || info.remaining < rateLimitInfo.remaining) {
         rateLimitInfo = info;
       }
@@ -73,6 +73,22 @@ export const rateLimitMiddleware = createMiddleware<{ Variables: AppVariables }>
 
     for (const tier of resolveRateLimitTiers(path, method)) {
       await applyTier(tier);
+    }
+
+    // Brute-force budgets also follow the credential being guessed, so rotating
+    // source addresses cannot reset attempts against one account.
+    let credentialIdentifier: string | undefined;
+    if (path === "/kosync/users/auth") {
+      credentialIdentifier = c.req.header("x-auth-user");
+    } else if (path === "/api/auth/sign-in/email" && method === "POST") {
+      const body = (await c.req.raw
+        .clone()
+        .json()
+        .catch(() => null)) as { email?: unknown } | null;
+      if (typeof body?.email === "string") credentialIdentifier = body.email;
+    }
+    if (credentialIdentifier) {
+      await applyTier("auth", getCredentialRateLimitKey(credentialIdentifier));
     }
 
     // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion

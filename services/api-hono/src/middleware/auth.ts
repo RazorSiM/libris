@@ -5,7 +5,7 @@ import { getLogger } from "../lib/logger.js";
 import type { AppVariables } from "../context.js";
 import { deniesAppPasswords, resolvePolicy } from "../shared/route-policy.js";
 import { requireKosyncAuth } from "../shared/kosync-auth.js";
-import { getRequestIp } from "../shared/request-ip.js";
+import { withTrustedClientIp } from "../shared/request-ip.js";
 import { isAdmin } from "../shared/auth.js";
 import { apiKeyFromHeaders } from "../lib/auth.js";
 
@@ -44,7 +44,7 @@ export const authMiddleware = createMiddleware<{ Variables: AppVariables }>(asyn
    * browser's native Basic dialog over the SPA.
    */
   const unauthorized = (): HTTPException => {
-    logger.warn(`Auth failure from ${getRequestIp(c)}`);
+    logger.warn(`Auth failure from ${c.get("clientIp")}`);
     if (policy !== "opds") {
       return new HTTPException(401, { message: "Authentication required" });
     }
@@ -65,7 +65,7 @@ export const authMiddleware = createMiddleware<{ Variables: AppVariables }>(asyn
     // disabled app password, most commonly. Both mean the same thing here, and
     // letting the throw escape would turn a bad key into a 500.
     const session = await auth.api
-      .getSession({ headers: c.req.raw.headers })
+      .getSession({ headers: withTrustedClientIp(c.req.raw.headers, c.get("clientIp")) })
       .catch(() => null as Awaited<ReturnType<typeof auth.api.getSession>>);
 
     if (!session) {
@@ -104,7 +104,7 @@ export const authMiddleware = createMiddleware<{ Variables: AppVariables }>(asyn
    * Such a request is refused here with a message that names the cause.
    */
   if ((policy === "admin" || deniesAppPasswords(path)) && apiKeyFromHeaders(c.req.raw.headers)) {
-    logger.warn(`App password refused on ${path} from ${getRequestIp(c)}`);
+    logger.warn(`App password refused on ${path} from ${c.get("clientIp")}`);
     throw new HTTPException(403, {
       message: "App passwords cannot be used here — sign in for this",
     });

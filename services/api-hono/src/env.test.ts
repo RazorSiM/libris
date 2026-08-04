@@ -69,6 +69,29 @@ describe("parseEnv", () => {
     });
   });
 
+  describe("trusted proxies", () => {
+    it("requires an explicit proxy IP or CIDR when forwarded headers are enabled", () => {
+      expect(() => parseEnv({ ...VALID_ENV, TRUST_PROXY_HEADERS: "1" })).toThrow(
+        /LIBRIS_TRUSTED_PROXIES/,
+      );
+    });
+
+    it("accepts validated IPv4 and IPv6 proxy networks", () => {
+      const env = parseEnv({
+        ...VALID_ENV,
+        TRUST_PROXY_HEADERS: "1",
+        LIBRIS_TRUSTED_PROXIES: "10.0.0.0/24, 2001:db8::/48",
+      });
+      expect(env.LIBRIS_TRUSTED_PROXIES).toEqual(["10.0.0.0/24", "2001:db8::/48"]);
+    });
+
+    it("rejects malformed proxy networks", () => {
+      expect(() => parseEnv({ ...VALID_ENV, LIBRIS_TRUSTED_PROXIES: "10.0.0.0/99" })).toThrow(
+        /Invalid trusted-proxy/,
+      );
+    });
+  });
+
   describe("BETTER_AUTH_SECRET", () => {
     it("is required", () => {
       const { BETTER_AUTH_SECRET: _omitted, ...withoutSecret } = VALID_ENV;

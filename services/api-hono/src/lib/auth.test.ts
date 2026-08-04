@@ -15,6 +15,7 @@ import { createAuth, type CreateAuthDeps } from "./auth.js";
 const BASE_ENV = {
   NODE_ENV: "test",
   TRUST_PROXY_HEADERS: "0",
+  LIBRIS_TRUSTED_PROXIES: [],
   COOKIE_DOMAIN: "",
   LIBRIS_COOKIE_SECURE: "0",
 } as unknown as Env;
@@ -152,23 +153,10 @@ describe("createAuth", () => {
   });
 
   describe("client ip resolution", () => {
-    it("ignores forwarded headers when no proxy is trusted", () => {
+    it("reads only the internally resolved client header", () => {
       const { options } = build();
-
-      // Otherwise a client could rotate its apparent IP per request and walk
-      // straight through the rate limiter.
-      expect(options.advanced?.ipAddress?.ipAddressHeaders).toBeUndefined();
-    });
-
-    it("honours the same header precedence as request-ip when a proxy is trusted", () => {
-      const { options } = build({
-        env: { ...BASE_ENV, TRUST_PROXY_HEADERS: "1" } as Env,
-      });
-
-      expect(options.advanced?.ipAddress?.ipAddressHeaders).toEqual([
-        "x-real-ip",
-        "x-forwarded-for",
-      ]);
+      expect(options.advanced?.ipAddress?.ipAddressHeaders).toEqual(["x-libris-client-ip"]);
+      expect(options.advanced?.ipAddress?.ipv6Subnet).toBe(64);
     });
   });
 

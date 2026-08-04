@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { resolveDatabaseUrl } from "./lib/resolve-database-url";
 import { resolveRedisUrl } from "./lib/resolve-redis-url";
+import { isValidProxyCidr } from "./shared/request-ip.js";
 
 const CoverFetchAllowlistSchema = z
   .string()
@@ -48,6 +49,22 @@ const ApiSecretSchema = z
     "API_SECRET_KEY has too little character diversity; generate one with: openssl rand -hex 32",
   );
 
+const TrustedProxiesSchema = z
+  .string()
+  .default("")
+  .transform((value, ctx): string[] => {
+    const entries = value
+      .split(",")
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+    for (const entry of entries) {
+      if (!isValidProxyCidr(entry)) {
+        ctx.addIssue({ code: "custom", message: `Invalid trusted-proxy IP or CIDR: ${entry}` });
+      }
+    }
+    return entries;
+  });
+
 const RawEnvSchema = z.object({
   NODE_ENV: z.enum(["development", "production", "test"]),
   PORT: z.coerce.number().default(3000),
@@ -79,6 +96,7 @@ const RawEnvSchema = z.object({
   LIBRIS_COOKIE_SECURE: z.enum(["0", "1"]).default("1"),
   MIGRATIONS_PATH: z.string().default("./migrations"),
   TRUST_PROXY_HEADERS: z.enum(["0", "1"]).default("0"),
+  LIBRIS_TRUSTED_PROXIES: TrustedProxiesSchema,
   E2E_TEST: z.string().default(""),
   TEST_ROUTE_TOKEN: z.string().optional(),
   LOG_LEVEL: z.enum(["trace", "debug", "info", "warn", "error", "fatal"]).default("info"),
@@ -95,6 +113,14 @@ const RawEnvSchema = z.object({
 });
 
 const EnvSchema = RawEnvSchema.transform((raw, ctx) => {
+  if (raw.TRUST_PROXY_HEADERS === "1" && raw.LIBRIS_TRUSTED_PROXIES.length === 0) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["LIBRIS_TRUSTED_PROXIES"],
+      message: "LIBRIS_TRUSTED_PROXIES must contain the reverse proxy IP or CIDR",
+    });
+    return z.NEVER;
+  }
   const databaseUrl = resolveDatabaseUrl(raw);
   if (!databaseUrl) {
     ctx.addIssue({

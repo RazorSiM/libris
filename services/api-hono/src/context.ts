@@ -24,6 +24,8 @@ export interface Queues {
 }
 
 export type AppVariables = HonoLogLayerVariables & {
+  /** Trusted client address resolved from the TCP peer and proxy policy. */
+  clientIp: string;
   /** The authenticated person. Set from the Better Auth session, or undefined. */
   userId: string | undefined;
   /** Display name, for logs and responses. */

@@ -76,7 +76,8 @@ books.example.com/_docs/*  → Hono API (OpenAPI docs)
 | `COOKIE_DOMAIN`                  | Parent domain for auth cookie (e.g., `.example.com`). Leave empty for same-origin.                                                                                                                  |
 | `LIBRIS_COOKIE_SECURE`           | Auth cookie `Secure` attribute. Defaults to `1`; set to `0` only when intentionally serving Libris over plain HTTP. Independent of `NODE_ENV`.                                                      |
 | `MIGRATIONS_PATH`                | Path to migration files directory. Default: `./migrations`.                                                                                                                                         |
-| `TRUST_PROXY_HEADERS`            | Set to `1` behind a trusted reverse proxy so `X-Real-IP` / `X-Forwarded-For` drive auth logging and rate limiting. Default: `0`. See _Reverse Proxy_ below.                                         |
+| `TRUST_PROXY_HEADERS`            | Set to `1` behind a reverse proxy only together with `LIBRIS_TRUSTED_PROXIES`. Default: `0`. See _Reverse Proxy_ below.                                                                             |
+| `LIBRIS_TRUSTED_PROXIES`         | Exact IPs or narrow CIDRs for reverse proxies allowed to supply client-IP headers. Required when `TRUST_PROXY_HEADERS=1`.                                                                           |
 | `LOG_LEVEL`                      | Log level for the production Pino logger only: `trace`, `debug`, `info`, `warn`, `error`, `fatal`. Default: `info`. Validated as an enum in the env schema. Does not change the OTel SDK log level. |
 | `LIBRIS_COVER_FETCH_ALLOWLIST`   | Comma-separated exact HTTP(S) origins allowed to serve covers from private or special-use networks, such as `http://covers.lan:8080`. Redirect destinations need their own entry.                   |
 | `LIBRIS_HTTP_HEADERS_TIMEOUT_MS` | Time allowed to receive complete request headers. Default: `10000`.                                                                                                                                 |
@@ -106,8 +107,8 @@ Request-path Redis commands have a 250 ms bound. If Redis is unavailable, the
 `auth` and `keyCreation` tiers fall back to an in-memory limiter and the `general`
 tier fails open. Existing browser sessions fail closed until Redis recovers;
 `/api/health` remains responsive and reports the degraded dependency. Set
-`TRUST_PROXY_HEADERS=1` behind a reverse proxy so limits key off the real client
-IP. See _Reverse Proxy_ below.
+`TRUST_PROXY_HEADERS=1` with `LIBRIS_TRUSTED_PROXIES` behind a reverse proxy so
+limits key off the real client IP. See _Reverse Proxy_ below.
 
 ### OpenTelemetry
 
@@ -195,7 +196,16 @@ volumes:
 
 ## Reverse Proxy
 
-By default, Libris ignores `X-Forwarded-For` and `X-Real-IP` for auth logging and rate limiting and uses the real TCP peer address instead. When running behind a trusted reverse proxy (nginx, Caddy, Traefik), set `TRUST_PROXY_HEADERS=1` and configure the proxy to pass the client IP headers:
+By default, Libris ignores `X-Forwarded-For` and `X-Real-IP` for auth logging and rate limiting and uses the real TCP peer address instead. When running behind nginx, Caddy, or Traefik, enable forwarded headers and name the immediate proxy address or narrow container-network allocation explicitly:
+
+```env
+TRUST_PROXY_HEADERS=1
+LIBRIS_TRUSTED_PROXIES=172.18.0.5/32
+```
+
+Do not use an entire LAN or a network that includes clients. Libris first verifies the direct TCP peer against this list, then walks `X-Forwarded-For` from right to left past trusted proxy hops. A client-supplied leftmost value therefore cannot select its own rate-limit bucket. Keep the API origin unreachable except through the proxy as an additional deployment boundary.
+
+Configure the proxy to replace or append the client IP headers:
 
 **nginx:**
 

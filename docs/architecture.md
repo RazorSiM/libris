@@ -307,7 +307,7 @@ Reading and revoking your own credentials sits in `general`: those probe nothing
 
 If exposing Libris publicly, lower the defaults via env vars (e.g. `LIBRIS_RATELIMIT_GENERAL_LIMIT=100`, `LIBRIS_RATELIMIT_AUTH_LIMIT=10`).
 
-Each app-owned window starts on that client's first request, avoiding the double burst possible at global wall-clock boundaries. IP extraction (`getRequestIp`) reads the direct connection address by default. When `TRUST_PROXY_HEADERS=1` is set, it prefers `X-Real-IP` or the first entry in `X-Forwarded-For` — use this when running behind a reverse proxy. Rate limiting stays enabled in development through the in-memory store; only the explicit E2E switch disables it.
+Each app-owned window starts on that client's first request, avoiding the double burst possible at global wall-clock boundaries. IP extraction reads the direct connection address by default. Forwarded headers are honored only when enabled and the immediate peer belongs to `LIBRIS_TRUSTED_PROXIES`; the chain is walked right-to-left past trusted hops. IPv6 addresses share a `/64` bucket. Credential checks also receive a hashed per-credential budget alongside their address budget, preventing source-address rotation from resetting guesses against one account. The same resolved address is injected into Better Auth and access logs, so authentication, limiting, and incident records cannot disagree. Rate limiting stays enabled in development through the in-memory store; only the explicit E2E switch disables it.
 
 ## Book Ingestion Pipeline
 

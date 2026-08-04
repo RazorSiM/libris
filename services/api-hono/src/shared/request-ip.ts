@@ -1,31 +1,163 @@
+import { BlockList, isIP, SocketAddress } from "node:net";
+import { createHash } from "node:crypto";
 import { getConnInfo } from "@hono/node-server/conninfo";
 import type { Context } from "hono";
+import { HTTPException } from "hono/http-exception";
 import type { AppVariables } from "../context.js";
 
 type AppContext = Context<{ Variables: AppVariables }>;
 
-function getConnectionIp(c: AppContext): string | undefined {
+const INTERNAL_CLIENT_IP_HEADER = "x-libris-client-ip";
+const trustedProxyCache = new Map<string, BlockList>();
+
+function stripAddressDecorations(address: string): string {
+  const unbracketed =
+    address.startsWith("[") && address.endsWith("]") ? address.slice(1, -1) : address;
+  return unbracketed.split("%")[0] ?? unbracketed;
+}
+
+export function normalizeIpAddress(address: string): string | null {
+  const bare = stripAddressDecorations(address.trim());
+  const family = isIP(bare);
+  if (family === 4) return SocketAddress.parse(`${bare}:0`)?.address ?? null;
+  if (family === 6) return SocketAddress.parse(`[${bare}]:0`)?.address ?? null;
+  return null;
+}
+
+export function isValidProxyCidr(value: string): boolean {
+  const [address, prefixText, ...extra] = value.split("/");
+  if (!address || extra.length > 0) return false;
+  const normalized = normalizeIpAddress(address);
+  if (!normalized) return false;
+  const family = isIP(normalized);
+  if (prefixText === undefined) return true;
+  if (!/^\d+$/.test(prefixText)) return false;
+  const prefix = Number(prefixText);
+  if (prefix < 0 || prefix > (family === 4 ? 32 : 128)) return false;
   try {
-    return getConnInfo(c).remote.address;
+    const probe = new BlockList();
+    probe.addSubnet(normalized, prefix, family === 4 ? "ipv4" : "ipv6");
+    return true;
   } catch {
-    return undefined;
+    return false;
   }
 }
 
-function getForwardedIp(c: AppContext): string | undefined {
-  const realIp = c.req.header("x-real-ip")?.trim();
-  if (realIp) return realIp;
+function getTrustedProxyBlockList(entries: readonly string[]): BlockList {
+  const cacheKey = entries.join(",");
+  const cached = trustedProxyCache.get(cacheKey);
+  if (cached) return cached;
+
+  const blockList = new BlockList();
+  for (const entry of entries) {
+    const [rawAddress, rawPrefix] = entry.split("/");
+    const address = normalizeIpAddress(rawAddress ?? "");
+    if (!address) continue;
+    const family = isIP(address);
+    const type = family === 4 ? "ipv4" : "ipv6";
+    const prefix = rawPrefix === undefined ? (family === 4 ? 32 : 128) : Number(rawPrefix);
+    blockList.addSubnet(address, prefix, type);
+  }
+  trustedProxyCache.set(cacheKey, blockList);
+  return blockList;
+}
+
+function isTrustedProxy(address: string, entries: readonly string[]): boolean {
+  const normalized = normalizeIpAddress(address);
+  if (!normalized || entries.length === 0) return false;
+  return getTrustedProxyBlockList(entries).check(
+    normalized,
+    isIP(normalized) === 4 ? "ipv4" : "ipv6",
+  );
+}
+
+function getConnectionIp(c: AppContext): string | null {
+  try {
+    const address = getConnInfo(c).remote.address;
+    return address ? normalizeIpAddress(address) : null;
+  } catch {
+    return null;
+  }
+}
+
+function resolveForwardedIp(
+  c: AppContext,
+  peerIp: string,
+  trustedProxies: readonly string[],
+): string {
+  if (!isTrustedProxy(peerIp, trustedProxies)) return peerIp;
 
   const forwardedFor = c.req.header("x-forwarded-for");
-  return forwardedFor?.split(",")[0]?.trim() || undefined;
+  if (forwardedFor) {
+    const chain = forwardedFor.split(",").map((entry) => normalizeIpAddress(entry));
+    if (chain.some((entry) => entry === null)) return peerIp;
+    for (let index = chain.length - 1; index >= 0; index--) {
+      const hop = chain[index];
+      if (hop && !isTrustedProxy(hop, trustedProxies)) return hop;
+    }
+    return peerIp;
+  }
+
+  const realIp = normalizeIpAddress(c.req.header("x-real-ip") ?? "");
+  return realIp ?? peerIp;
 }
 
 export function getRequestIp(c: AppContext): string {
   const env = c.get("env");
-
-  if (env.TRUST_PROXY_HEADERS === "1") {
-    return getForwardedIp(c) || getConnectionIp(c) || "unknown";
+  const peerIp = getConnectionIp(c);
+  if (!peerIp) {
+    // Hono's in-memory app.request() adapter has no socket. Production traffic
+    // through @hono/node-server always does; tests get a deterministic local
+    // identity while a real unidentifiable request fails closed.
+    if (env.NODE_ENV === "test") return "127.0.0.1";
+    throw new HTTPException(400, { message: "Unable to determine client address" });
   }
-
-  return getConnectionIp(c) || "unknown";
+  if (env.TRUST_PROXY_HEADERS !== "1") return peerIp;
+  return resolveForwardedIp(c, peerIp, env.LIBRIS_TRUSTED_PROXIES);
 }
+
+function expandIpv6(address: string): number[] | null {
+  let value = address;
+  const ipv4Match = value.match(/(\d+\.\d+\.\d+\.\d+)$/);
+  if (ipv4Match) {
+    const bytes = ipv4Match[1]!.split(".").map(Number);
+    if (bytes.length !== 4 || bytes.some((byte) => byte < 0 || byte > 255)) return null;
+    value =
+      value.slice(0, -ipv4Match[1]!.length) +
+      `${((bytes[0] ?? 0) << 8) | (bytes[1] ?? 0)}:${((bytes[2] ?? 0) << 8) | (bytes[3] ?? 0)}`;
+  }
+  const halves = value.split("::");
+  if (halves.length > 2) return null;
+  const left = halves[0] ? halves[0].split(":").filter(Boolean) : [];
+  const right = halves[1] ? halves[1].split(":").filter(Boolean) : [];
+  const missing = 8 - left.length - right.length;
+  if ((halves.length === 1 && missing !== 0) || missing < 0) return null;
+  const parts = [...left, ...Array.from({ length: missing }, () => "0"), ...right];
+  if (parts.length !== 8) return null;
+  return parts.map((part) => Number.parseInt(part, 16));
+}
+
+/** Aggregate IPv6 callers by their routinely delegated /64 network. */
+export function getIpRateLimitKey(address: string): string {
+  const normalized = normalizeIpAddress(address);
+  if (!normalized || isIP(normalized) === 4) return normalized ?? address;
+  const parts = expandIpv6(normalized);
+  if (!parts) return normalized;
+  return `${parts
+    .slice(0, 4)
+    .map((part) => part.toString(16))
+    .join(":")}::/64`;
+}
+
+export function getCredentialRateLimitKey(identifier: string): string {
+  return `credential:${createHash("sha256").update(identifier.trim().toLowerCase()).digest("hex")}`;
+}
+
+/** Better Auth must only see the address resolved from the trusted TCP peer. */
+export function withTrustedClientIp(headers: Headers, clientIp: string): Headers {
+  const trusted = new Headers(headers);
+  trusted.set(INTERNAL_CLIENT_IP_HEADER, clientIp);
+  return trusted;
+}
+
+export const betterAuthClientIpHeader = INTERNAL_CLIENT_IP_HEADER;

@@ -19,6 +19,7 @@ const TEST_ENV = {
   NODE_ENV: "test",
   E2E_TEST: "1",
   TRUST_PROXY_HEADERS: "0",
+  LIBRIS_TRUSTED_PROXIES: [],
   COOKIE_DOMAIN: "",
   LIBRIS_COOKIE_SECURE: "0",
 } as unknown as Env;

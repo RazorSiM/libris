@@ -14,6 +14,9 @@ import { lastAdminMiddleware } from "./middleware/last-admin.js";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { createRouter } from "./routes/index.js";
 import { root, getLogger } from "./lib/logger.js";
+import { clientIpMiddleware } from "./middleware/client-ip.js";
+import { accessLogMiddleware } from "./middleware/access-log.js";
+import { withTrustedClientIp } from "./shared/request-ip.js";
 
 export interface CreateAppOptions {
   services: AppServices;
@@ -47,17 +50,17 @@ export function createApp({ services, env }: CreateAppOptions) {
 
   // Middleware stack (order matters)
   app.use("*", compress());
+  app.use("*", clientIpMiddleware);
   app.use(
     "*",
     honoLogLayer({
       instance: root,
-      autoLogging: {
-        request: { logLevel: "debug" },
-        response: { logLevel: "info" },
-        ignore: ["/api/health"],
-      },
+      // Built-in auto-logging unconditionally trusts X-Forwarded-For. The
+      // middleware below logs the address resolved from the TCP peer instead.
+      autoLogging: false,
     }),
   );
+  app.use("*", accessLogMiddleware);
   app.use("*", securityHeaders);
   app.use("*", rateLimitMiddleware);
   app.use("*", bodyLimitMiddleware);
@@ -99,7 +102,12 @@ export function createApp({ services, env }: CreateAppOptions) {
   app.use("/api/auth/admin/set-role", lastAdminMiddleware);
   app.use("/api/auth/admin/ban-user", lastAdminMiddleware);
   app.use("/api/auth/admin/remove-user", lastAdminMiddleware);
-  app.on(["GET", "POST"], "/api/auth/*", (c) => services.auth.handler(c.req.raw));
+  app.on(["GET", "POST"], "/api/auth/*", (c) => {
+    const request = new Request(c.req.raw, {
+      headers: withTrustedClientIp(c.req.raw.headers, c.get("clientIp")),
+    });
+    return services.auth.handler(request);
+  });
 
   // Mount routes
   const router = createRouter(upgradeWebSocket, {

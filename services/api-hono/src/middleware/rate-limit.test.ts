@@ -1,5 +1,9 @@
+import { Hono } from "hono";
 import { describe, expect, it } from "vite-plus/test";
-import { resolveRateLimitTiers } from "./rate-limit.js";
+import type { AppVariables } from "../context.js";
+import type { Env } from "../env.js";
+import { createMemoryKVStore } from "../services/kv-store.js";
+import { rateLimitMiddleware, resolveRateLimitTiers } from "./rate-limit.js";
 
 describe("resolveRateLimitTiers", () => {
   it("stands aside for the whole /api/auth/ prefix", () => {
@@ -58,5 +62,39 @@ describe("resolveRateLimitTiers", () => {
     expect(resolveRateLimitTiers("/", "GET")).toEqual(["general"]);
     expect(resolveRateLimitTiers("/assets/app.js", "GET")).toEqual(["general"]);
     expect(resolveRateLimitTiers("/future-server-namespace", "POST")).toEqual(["general"]);
+  });
+
+  it("limits one sign-in identity across changing source addresses", async () => {
+    const app = new Hono<{ Variables: AppVariables }>();
+    const env = {
+      NODE_ENV: "production",
+      E2E_TEST: "",
+      LIBRIS_RATELIMIT_GENERAL_LIMIT: 100,
+      LIBRIS_RATELIMIT_GENERAL_WINDOW_SECONDS: 60,
+      LIBRIS_RATELIMIT_AUTH_LIMIT: 2,
+      LIBRIS_RATELIMIT_AUTH_WINDOW_SECONDS: 60,
+      LIBRIS_RATELIMIT_KEY_CREATION_LIMIT: 100,
+      LIBRIS_RATELIMIT_KEY_CREATION_WINDOW_SECONDS: 60,
+    } as Env;
+    const storage = createMemoryKVStore();
+    app.use("*", async (c, next) => {
+      c.set("env", env);
+      c.set("redisStorage", storage);
+      c.set("clientIp", c.req.header("x-test-source") ?? "192.0.2.1");
+      await next();
+    });
+    app.use("*", rateLimitMiddleware);
+    app.post("/api/auth/sign-in/email", (c) => c.json({ ok: true }));
+
+    const attempt = (source: string) =>
+      app.request("/api/auth/sign-in/email", {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-test-source": source },
+        body: JSON.stringify({ email: "reader@example.com", password: "wrong" }),
+      });
+
+    expect((await attempt("192.0.2.1")).status).toBe(200);
+    expect((await attempt("192.0.2.2")).status).toBe(200);
+    expect((await attempt("192.0.2.3")).status).toBe(429);
   });
 });
