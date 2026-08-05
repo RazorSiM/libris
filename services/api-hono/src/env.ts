@@ -92,7 +92,6 @@ const RawEnvSchema = z.object({
   // while Traefik terminates https, so any hardcoded value would be wrong.
   // Set it only when the public URL cannot be inferred.
   BETTER_AUTH_URL: z.string().default(""),
-  COOKIE_DOMAIN: z.string().default(""),
   LIBRIS_COOKIE_SECURE: z.enum(["0", "1"]).default("1"),
   MIGRATIONS_PATH: z.string().default("./migrations"),
   TRUST_PROXY_HEADERS: z.enum(["0", "1"]).default("0"),

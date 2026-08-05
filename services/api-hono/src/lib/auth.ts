@@ -211,9 +211,11 @@ export function createAuth({ db, secondaryStorage, env, secret, baseURL }: Creat
       // the TCP peer and trusted-proxy CIDRs. Better Auth never reads raw
       // forwarded headers, so its session tracking and limiter cannot diverge.
       ipAddress: { ipAddressHeaders: [betterAuthClientIpHeader], ipv6Subnet: 64 },
-      ...(env.COOKIE_DOMAIN
-        ? { crossSubDomainCookies: { enabled: true, domain: env.COOKIE_DOMAIN } }
-        : {}),
+      // No crossSubDomainCookies: the session cookie is host-only, which is what
+      // keeps a sibling subdomain from shadowing or fixing it. COOKIE_DOMAIN was
+      // dropped in the security audit (libris-7h7.56) for the same reason —
+      // __Host- would be the stronger guarantee but Better Auth only emits
+      // __Secure-, and a host-only __Secure- cookie already denies subdomains.
     },
 
     // Production is same-origin: the API serves the built SPA from ./public.

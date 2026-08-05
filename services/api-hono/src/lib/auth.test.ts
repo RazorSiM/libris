@@ -16,7 +16,6 @@ const BASE_ENV = {
   NODE_ENV: "test",
   TRUST_PROXY_HEADERS: "0",
   LIBRIS_TRUSTED_PROXIES: [],
-  COOKIE_DOMAIN: "",
   LIBRIS_COOKIE_SECURE: "0",
 } as unknown as Env;
 
@@ -160,14 +159,13 @@ describe("createAuth", () => {
     });
   });
 
-  it("carries COOKIE_DOMAIN over from the previous cookie implementation when set", () => {
-    const { options } = build({
-      env: { ...BASE_ENV, COOKIE_DOMAIN: ".example.com" } as Env,
-    });
+  it("keeps the session cookie host-only (no cross-subdomain cookies)", () => {
+    const { options } = build();
 
-    expect(options.advanced?.crossSubDomainCookies).toEqual({
-      enabled: true,
-      domain: ".example.com",
-    });
+    // COOKIE_DOMAIN was dropped in the security audit (libris-7h7.56): a Domain
+    // attribute is what lets a sibling subdomain shadow or fix the session
+    // cookie. Host-only __Secure- denies that. The absence is structural now —
+    // Better Auth's advanced config carries no crossSubDomainCookies key.
+    expect("crossSubDomainCookies" in (options.advanced ?? {})).toBe(false);
   });
 });

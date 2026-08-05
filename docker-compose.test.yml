@@ -64,7 +64,6 @@ services:
       API_SECRET_KEY: e2e-test-secret-key-minimum-32-chars!
       TEST_ROUTE_TOKEN: e2e-test-route-token-minimum-32-chars!
       BETTER_AUTH_SECRET: e2e-better-auth-secret-minimum-32-chars!
-      COOKIE_DOMAIN: ""
       MIGRATIONS_PATH: /repo/services/api-hono/migrations
       E2E_DOCKER: "1"
       # Turns off Better Auth's rate limiting (see lib/auth.ts) and enables the

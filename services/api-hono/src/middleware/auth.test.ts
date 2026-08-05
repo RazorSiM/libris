@@ -34,7 +34,6 @@ const TEST_ENV = {
   API_SECRET_KEY: "test-secret-key-at-least-32-characters-long!!",
   BETTER_AUTH_SECRET: "test-better-auth-secret-at-least-32-chars!!",
   BETTER_AUTH_URL: "",
-  COOKIE_DOMAIN: "",
   LIBRIS_COOKIE_SECURE: "0",
   MIGRATIONS_PATH: "./migrations",
   TRUST_PROXY_HEADERS: "0",
@@ -419,6 +418,24 @@ describe("authMiddleware revocation", () => {
     await auth.api.banUser({ ...(await actingAdmin()), body: { userId } });
 
     expect((await get("/api/books", { cookie })).status).toBe(401);
+  });
+
+  it("treats a malformed session cookie as unauthenticated, not a stuck session", async () => {
+    // The audit's cookie-shadowing finding (libris-7h7.56): a garbage value on
+    // the session cookie must yield a clean unauthenticated response, never a
+    // 500 or a half-resolved session. Better Auth ignores an invalid token.
+    const garbage = "better-auth.session_token=not-a-valid-token";
+    const { status } = await get("/api/books", { cookie: garbage });
+    expect(status).toBe(401);
+  });
+
+  it("a valid session cookie wins over a garbage cookie with the same name", async () => {
+    // Duplicate-cookie ordering: the valid value must authenticate even if a
+    // garbage one is present, matching how browsers surface duplicates.
+    const { cookie } = await signUp("dedupe@example.test");
+    const valid = cookie.split(";")[0];
+    const combined = `${valid}; better-auth.session_token=garbage-value`;
+    expect((await get("/api/books", { cookie: combined })).status).toBe(200);
   });
 });
 

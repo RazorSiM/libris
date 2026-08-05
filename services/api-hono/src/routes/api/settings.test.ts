@@ -41,7 +41,6 @@ const TEST_ENV: Env = {
   API_SECRET_KEY: "test-secret-key-at-least-32-characters-long!!",
   BETTER_AUTH_SECRET: "test-better-auth-secret-at-least-32-chars!!",
   BETTER_AUTH_URL: "",
-  COOKIE_DOMAIN: "",
   LIBRIS_COOKIE_SECURE: "0",
   MIGRATIONS_PATH: "./migrations",
   TRUST_PROXY_HEADERS: "0",
