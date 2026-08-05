@@ -178,6 +178,15 @@ async function get(path: string, headers: Record<string, string> = {}) {
   return { status: res.status, body: (await res.json()) as Probe & { error?: string } };
 }
 
+async function post(path: string, headers: Record<string, string> = {}) {
+  const res = await app.request(path, { method: "POST", headers });
+  const type = res.headers.get("content-type") ?? "";
+  const body = type.includes("application/json")
+    ? ((await res.json()) as Probe & { error?: string })
+    : ({ error: `non-json (${type})` } as Probe & { error?: string });
+  return { status: res.status, body };
+}
+
 /** The Authorization value an OPDS reader sends. */
 function basic(username: string, password: string): string {
   return `Basic ${Buffer.from(`${username}:${password}`).toString("base64")}`;
@@ -567,5 +576,71 @@ describe("app password rate limiting", () => {
       const { status } = await get("/api/books", { "x-api-key": key });
       expect(status, `request ${i + 1} of 25`).toBe(200);
     }
+  });
+});
+
+// ── CSRF defence-in-depth (libris-7h7.33) ──────────────────────────
+
+describe("cross-site cookie mutation rejection", () => {
+  const MUTATION = "/api/books/00000000-0000-0000-0000-000000000000/reorganize";
+
+  // The bare Hono test app carries no Host header, so origin comparison
+  // needs one to work against — set it to match the trusted origin.
+  const SAME_ORIGIN = { host: "localhost", origin: "http://localhost" };
+
+  it("accepts a same-origin cookie-authenticated mutation", async () => {
+    const { cookie } = await signUp("sameorigin@example.test");
+    // The route itself 404s on the fake id, which proves the CSRF check passed.
+    const { status } = await post(MUTATION, { cookie, ...SAME_ORIGIN });
+    expect(status).toBe(404);
+  });
+
+  it("rejects a foreign-Origin cookie-authenticated mutation", async () => {
+    const { cookie } = await signUp("foreignorigin@example.test");
+    const { status, body } = await post(MUTATION, {
+      cookie,
+      host: "localhost",
+      origin: "https://evil.example.com",
+    });
+    expect(status).toBe(403);
+    expect(body.error).toBe("Cross-site request rejected");
+  });
+
+  it("rejects a Sec-Fetch-Site: cross-site cookie-authenticated mutation", async () => {
+    const { cookie } = await signUp("fetchsite@example.test");
+    const { status } = await post(MUTATION, {
+      cookie,
+      "sec-fetch-site": "cross-site",
+    });
+    expect(status).toBe(403);
+  });
+
+  it("allows a same-site Sec-Fetch-Site cookie-authenticated mutation", async () => {
+    const { cookie } = await signUp("samesite@example.test");
+    const { status } = await post(MUTATION, {
+      cookie,
+      host: "localhost",
+      "sec-fetch-site": "same-origin",
+    });
+    expect(status).toBe(404);
+  });
+
+  it("leaves headerless app-password clients untouched", async () => {
+    // OPDS and API-key clients send no cookie, so the CSRF check must not
+    // interfere: the request falls through to the route (404 on the fake id),
+    // never rejected by the origin check even with a hostile Origin header.
+    const { userId } = await signUp("apikeycsrf@example.test");
+    const key = await createAppPassword(userId, "CSRF");
+    expect(
+      (await post(MUTATION, { "x-api-key": key, origin: "https://evil.example.com" })).status,
+    ).toBe(404);
+  });
+
+  it("does not reject a foreign Origin on a GET (reads are exempt)", async () => {
+    const { cookie } = await signUp("getcsrf@example.test");
+    const res = await app.request("/api/books", {
+      headers: { cookie, host: "localhost", origin: "https://evil.example.com" },
+    });
+    expect(res.status).toBe(200);
   });
 });

@@ -11,6 +11,85 @@ import { apiKeyFromHeaders } from "../lib/auth.js";
 
 const logger = getLogger("auth");
 
+/** Unsafe methods that can mutate server state and therefore matter for CSRF. */
+const UNSAFE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+
+/**
+ * Development-only origins the SPA legitimately sends requests from. In dev the
+ * browser runs on the Vite server (3100) and reaches the API through its /api
+ * proxy. Production is same-origin only, so this list is empty there.
+ */
+const DEV_TRUSTED_ORIGINS = new Set(["http://localhost:3100", "http://localhost:3000"]);
+
+function isProductionEnv(env: unknown): boolean {
+  return (env as { NODE_ENV?: string })?.NODE_ENV === "production";
+}
+
+/**
+ * Whether an Origin header is one this server should accept for a
+ * cookie-authenticated mutation.
+ *
+ * Production is same-origin: the API serves the SPA from ./public, so the only
+ * legitimate Origin is the server's own (scheme from x-forwarded-proto when a
+ * TLS-terminating proxy is in front, host from the Host header). In dev the SPA
+ * runs on the Vite server, so the two localhost origins are allowed too.
+ */
+export function isTrustedOrigin(
+  origin: string,
+  c: { req: { header(name: string): string | undefined } },
+  env: unknown,
+): boolean {
+  if (DEV_TRUSTED_ORIGINS.has(origin) && !isProductionEnv(env)) return true;
+
+  let parsed: URL;
+  try {
+    parsed = new URL(origin);
+  } catch {
+    return false;
+  }
+
+  const host = c.req.header("host");
+  if (!host) return false;
+
+  // Scheme-insensitive host comparison: the browser may reach the API over
+  // plain http on a LAN while the proxy presents https, or vice versa. The
+  // hostname being the same origin is what matters.
+  return parsed.hostname.toLowerCase() === host.split(":")[0].toLowerCase();
+}
+
+/**
+ * CSRF defence-in-depth for cookie-authenticated unsafe requests (libris-7h7.33).
+ *
+ * Existing controls (SameSite=Lax cookies, JSON-only bodies on most routes, no
+ * permissive CORS, no state-changing GETs) already make the residual risk low;
+ * this is the centralised explicit check. It rejects a present foreign Origin
+ * or a Sec-Fetch-Site: cross-site on an unsafe method that carries a cookie.
+ *
+ * Headerless clients are deliberately preserved: an API-key or OPDS request
+ * carries no cookie and no browser Origin, so it falls through untouched.
+ * Better Auth applies its own origin checks on /api/auth/* (policy "skip"), so
+ * those are not re-checked here.
+ */
+export function isForeignCookieMutation(
+  c: {
+    req: { method: string; header(name: string): string | undefined };
+  },
+  env: unknown,
+): boolean {
+  const method = c.req.method.toUpperCase();
+  if (!UNSAFE_METHODS.has(method)) return false;
+  if (!c.req.header("cookie")) return false;
+
+  // Strongest signal: browsers send Sec-Fetch-Site on every request.
+  const fetchSite = c.req.header("sec-fetch-site");
+  if (fetchSite && fetchSite.toLowerCase() === "cross-site") return true;
+
+  // Fallback when Sec-Fetch-Site is absent (non-Fetch-API clients).
+  const origin = c.req.header("origin");
+  if (!origin) return false;
+  return !isTrustedOrigin(origin, c, env);
+}
+
 /**
  * One session lookup for every kind of caller.
  *
@@ -161,6 +240,14 @@ export const authMiddleware = createMiddleware<{ Variables: AppVariables }>(asyn
         throw new HTTPException(403, { message: "Admin access required" });
       }
       break;
+  }
+
+  // CSRF defence-in-depth (libris-7h7.33): reject foreign-origin or
+  // cross-site cookie-authenticated mutations. Headerless API-key/OPDS
+  // requests carry no cookie and are untouched.
+  if (isForeignCookieMutation(c, env)) {
+    logger.warn(`Cross-site cookie mutation refused on ${path} from ${c.get("clientIp")}`);
+    throw new HTTPException(403, { message: "Cross-site request rejected" });
   }
 
   await next();
