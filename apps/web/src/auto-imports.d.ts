@@ -40,15 +40,15 @@ declare global {
   const debouncedWatch: typeof import("@vueuse/core").debouncedWatch;
   const defineAsyncComponent: typeof import("vue").defineAsyncComponent;
   const defineComponent: typeof import("vue").defineComponent;
-  const defineLocale: typeof import("../../../node_modules/.pnpm/@nuxt+ui@4.8.1_@azure+identity@4.13.1_@internationalized+date@3.12.2_@internationalized_c290ff1effd5693eb1e051e07b348ac7/node_modules/@nuxt/ui/dist/runtime/composables/defineLocale").defineLocale;
-  const defineShortcuts: typeof import("../../../node_modules/.pnpm/@nuxt+ui@4.8.1_@azure+identity@4.13.1_@internationalized+date@3.12.2_@internationalized_c290ff1effd5693eb1e051e07b348ac7/node_modules/@nuxt/ui/dist/runtime/composables/defineShortcuts").defineShortcuts;
+  const defineLocale: typeof import("../../../node_modules/.pnpm/@nuxt+ui@4.8.1_@azure+identity@4.13.1_@internationalized+date@3.12.2_@internationalized_71a887ba55d4d8ecff7d54b1ce15108c/node_modules/@nuxt/ui/dist/runtime/composables/defineLocale").defineLocale;
+  const defineShortcuts: typeof import("../../../node_modules/.pnpm/@nuxt+ui@4.8.1_@azure+identity@4.13.1_@internationalized+date@3.12.2_@internationalized_71a887ba55d4d8ecff7d54b1ce15108c/node_modules/@nuxt/ui/dist/runtime/composables/defineShortcuts").defineShortcuts;
   const defineStore: typeof import("pinia").defineStore;
   const describeUserAgent: typeof import("./utils/user-agent").describeUserAgent;
   const eagerComputed: typeof import("@vueuse/core").eagerComputed;
   const effectScope: typeof import("vue").effectScope;
-  const extendLocale: typeof import("../../../node_modules/.pnpm/@nuxt+ui@4.8.1_@azure+identity@4.13.1_@internationalized+date@3.12.2_@internationalized_c290ff1effd5693eb1e051e07b348ac7/node_modules/@nuxt/ui/dist/runtime/composables/defineLocale").extendLocale;
+  const extendLocale: typeof import("../../../node_modules/.pnpm/@nuxt+ui@4.8.1_@azure+identity@4.13.1_@internationalized+date@3.12.2_@internationalized_71a887ba55d4d8ecff7d54b1ce15108c/node_modules/@nuxt/ui/dist/runtime/composables/defineLocale").extendLocale;
   const extendRef: typeof import("@vueuse/core").extendRef;
-  const extractShortcuts: typeof import("../../../node_modules/.pnpm/@nuxt+ui@4.8.1_@azure+identity@4.13.1_@internationalized+date@3.12.2_@internationalized_c290ff1effd5693eb1e051e07b348ac7/node_modules/@nuxt/ui/dist/runtime/composables/defineShortcuts").extractShortcuts;
+  const extractShortcuts: typeof import("../../../node_modules/.pnpm/@nuxt+ui@4.8.1_@azure+identity@4.13.1_@internationalized+date@3.12.2_@internationalized_71a887ba55d4d8ecff7d54b1ce15108c/node_modules/@nuxt/ui/dist/runtime/composables/defineShortcuts").extractShortcuts;
   const fieldGroupInjectionKey: typeof import("../../../node_modules/.pnpm/@nuxt+ui@4.5.1_@azure+identity@4.13.1_@tiptap+extensions@3.20.4_@tiptap+core@3.20.4_@ti_6f01dc82bfdf8523036fdb8ead6c47ba/node_modules/@nuxt/ui/dist/runtime/composables/useFieldGroup.js").fieldGroupInjectionKey;
   const formBusInjectionKey: typeof import("../../../node_modules/.pnpm/@nuxt+ui@4.5.1_@azure+identity@4.13.1_@tiptap+extensions@3.20.4_@tiptap+core@3.20.4_@ti_6f01dc82bfdf8523036fdb8ead6c47ba/node_modules/@nuxt/ui/dist/runtime/composables/useFormField.js").formBusInjectionKey;
   const formErrorsInjectionKey: typeof import("../../../node_modules/.pnpm/@nuxt+ui@4.5.1_@azure+identity@4.13.1_@tiptap+extensions@3.20.4_@tiptap+core@3.20.4_@ti_6f01dc82bfdf8523036fdb8ead6c47ba/node_modules/@nuxt/ui/dist/runtime/composables/useFormField.js").formErrorsInjectionKey;
@@ -155,7 +155,7 @@ declare global {
   const useAnimate: typeof import("@vueuse/core").useAnimate;
   const useApiClient: typeof import("./composables/useApiClient").useApiClient;
   const useApiKeysQuery: typeof import("./composables/mutations/useApiKeyMutations").useApiKeysQuery;
-  const useAppConfig: typeof import("../../../node_modules/.pnpm/@nuxt+ui@4.8.1_@azure+identity@4.13.1_@internationalized+date@3.12.2_@internationalized_c290ff1effd5693eb1e051e07b348ac7/node_modules/@nuxt/ui/dist/runtime/vue/composables/useAppConfig.js").useAppConfig;
+  const useAppConfig: typeof import("../../../node_modules/.pnpm/@nuxt+ui@4.8.1_@azure+identity@4.13.1_@internationalized+date@3.12.2_@internationalized_71a887ba55d4d8ecff7d54b1ce15108c/node_modules/@nuxt/ui/dist/runtime/vue/composables/useAppConfig.js").useAppConfig;
   const useApplyMetadata: typeof import("./composables/mutations/useBookMutations").useApplyMetadata;
   const useApproveBook: typeof import("./composables/mutations/useBookMutations").useApproveBook;
   const useArrayDifference: typeof import("@vueuse/core").useArrayDifference;
@@ -196,7 +196,7 @@ declare global {
   const useComponentIcons: typeof import("../../../node_modules/.pnpm/@nuxt+ui@4.5.1_@azure+identity@4.13.1_@tiptap+extensions@3.20.4_@tiptap+core@3.20.4_@ti_6f01dc82bfdf8523036fdb8ead6c47ba/node_modules/@nuxt/ui/dist/runtime/composables/useComponentIcons.js").useComponentIcons;
   const useComponentUI: typeof import("../../../node_modules/.pnpm/@nuxt+ui@4.5.1_@azure+identity@4.13.1_@tiptap+extensions@3.20.4_@tiptap+core@3.20.4_@ti_6f01dc82bfdf8523036fdb8ead6c47ba/node_modules/@nuxt/ui/dist/runtime/composables/useComponentUI.js").useComponentUI;
   const useConfirmDialog: typeof import("@vueuse/core").useConfirmDialog;
-  const useContentSearch: typeof import("../../../node_modules/.pnpm/@nuxt+ui@4.8.1_@azure+identity@4.13.1_@internationalized+date@3.12.2_@internationalized_c290ff1effd5693eb1e051e07b348ac7/node_modules/@nuxt/ui/dist/runtime/composables/useContentSearch").useContentSearch;
+  const useContentSearch: typeof import("../../../node_modules/.pnpm/@nuxt+ui@4.8.1_@azure+identity@4.13.1_@internationalized+date@3.12.2_@internationalized_71a887ba55d4d8ecff7d54b1ce15108c/node_modules/@nuxt/ui/dist/runtime/composables/useContentSearch").useContentSearch;
   const useCountdown: typeof import("@vueuse/core").useCountdown;
   const useCounter: typeof import("@vueuse/core").useCounter;
   const useCreateApiKey: typeof import("./composables/mutations/useApiKeyMutations").useCreateApiKey;
@@ -244,10 +244,10 @@ declare global {
   const useFieldGroup: typeof import("../../../node_modules/.pnpm/@nuxt+ui@4.5.1_@azure+identity@4.13.1_@tiptap+extensions@3.20.4_@tiptap+core@3.20.4_@ti_6f01dc82bfdf8523036fdb8ead6c47ba/node_modules/@nuxt/ui/dist/runtime/composables/useFieldGroup.js").useFieldGroup;
   const useFileDialog: typeof import("@vueuse/core").useFileDialog;
   const useFileSystemAccess: typeof import("@vueuse/core").useFileSystemAccess;
-  const useFileUpload: typeof import("../../../node_modules/.pnpm/@nuxt+ui@4.8.1_@azure+identity@4.13.1_@internationalized+date@3.12.2_@internationalized_c290ff1effd5693eb1e051e07b348ac7/node_modules/@nuxt/ui/dist/runtime/composables/useFileUpload").useFileUpload;
+  const useFileUpload: typeof import("../../../node_modules/.pnpm/@nuxt+ui@4.8.1_@azure+identity@4.13.1_@internationalized+date@3.12.2_@internationalized_71a887ba55d4d8ecff7d54b1ce15108c/node_modules/@nuxt/ui/dist/runtime/composables/useFileUpload").useFileUpload;
   const useFocus: typeof import("@vueuse/core").useFocus;
   const useFocusWithin: typeof import("@vueuse/core").useFocusWithin;
-  const useFormField: typeof import("../../../node_modules/.pnpm/@nuxt+ui@4.8.1_@azure+identity@4.13.1_@internationalized+date@3.12.2_@internationalized_c290ff1effd5693eb1e051e07b348ac7/node_modules/@nuxt/ui/dist/runtime/composables/useFormField").useFormField;
+  const useFormField: typeof import("../../../node_modules/.pnpm/@nuxt+ui@4.8.1_@azure+identity@4.13.1_@internationalized+date@3.12.2_@internationalized_71a887ba55d4d8ecff7d54b1ce15108c/node_modules/@nuxt/ui/dist/runtime/composables/useFormField").useFormField;
   const useFps: typeof import("@vueuse/core").useFps;
   const useFullscreen: typeof import("@vueuse/core").useFullscreen;
   const useGamepad: typeof import("@vueuse/core").useGamepad;
@@ -268,7 +268,7 @@ declare global {
   const useInterval: typeof import("@vueuse/core").useInterval;
   const useIntervalFn: typeof import("@vueuse/core").useIntervalFn;
   const useJobsQuery: typeof import("./composables/queries/useJobsQuery").useJobsQuery;
-  const useKbd: typeof import("../../../node_modules/.pnpm/@nuxt+ui@4.8.1_@azure+identity@4.13.1_@internationalized+date@3.12.2_@internationalized_c290ff1effd5693eb1e051e07b348ac7/node_modules/@nuxt/ui/dist/runtime/composables/useKbd").useKbd;
+  const useKbd: typeof import("../../../node_modules/.pnpm/@nuxt+ui@4.8.1_@azure+identity@4.13.1_@internationalized+date@3.12.2_@internationalized_71a887ba55d4d8ecff7d54b1ce15108c/node_modules/@nuxt/ui/dist/runtime/composables/useKbd").useKbd;
   const useKeyModifier: typeof import("@vueuse/core").useKeyModifier;
   const useLastChanged: typeof import("@vueuse/core").useLastChanged;
   const useLibraryFacetsQuery: typeof import("./composables/queries/useLibraryQueries").useLibraryFacetsQuery;
@@ -296,7 +296,7 @@ declare global {
   const useObjectUrl: typeof import("@vueuse/core").useObjectUrl;
   const useOffsetPagination: typeof import("@vueuse/core").useOffsetPagination;
   const useOnline: typeof import("@vueuse/core").useOnline;
-  const useOverlay: typeof import("../../../node_modules/.pnpm/@nuxt+ui@4.8.1_@azure+identity@4.13.1_@internationalized+date@3.12.2_@internationalized_c290ff1effd5693eb1e051e07b348ac7/node_modules/@nuxt/ui/dist/runtime/composables/useOverlay").useOverlay;
+  const useOverlay: typeof import("../../../node_modules/.pnpm/@nuxt+ui@4.8.1_@azure+identity@4.13.1_@internationalized+date@3.12.2_@internationalized_71a887ba55d4d8ecff7d54b1ce15108c/node_modules/@nuxt/ui/dist/runtime/composables/useOverlay").useOverlay;
   const usePageLeave: typeof import("@vueuse/core").usePageLeave;
   const useParallax: typeof import("@vueuse/core").useParallax;
   const useParentElement: typeof import("@vueuse/core").useParentElement;
@@ -326,7 +326,7 @@ declare global {
   const useRemoveUser: typeof import("./composables/mutations/useUserMutations").useRemoveUser;
   const useReorganizeBook: typeof import("./composables/mutations/useBookMutations").useReorganizeBook;
   const useRescanBook: typeof import("./composables/mutations/useBookMutations").useRescanBook;
-  const useResizable: typeof import("../../../node_modules/.pnpm/@nuxt+ui@4.8.1_@azure+identity@4.13.1_@internationalized+date@3.12.2_@internationalized_c290ff1effd5693eb1e051e07b348ac7/node_modules/@nuxt/ui/dist/runtime/composables/useResizable").useResizable;
+  const useResizable: typeof import("../../../node_modules/.pnpm/@nuxt+ui@4.8.1_@azure+identity@4.13.1_@internationalized+date@3.12.2_@internationalized_71a887ba55d4d8ecff7d54b1ce15108c/node_modules/@nuxt/ui/dist/runtime/composables/useResizable").useResizable;
   const useResizeObserver: typeof import("@vueuse/core").useResizeObserver;
   const useResumeQueue: typeof import("./composables/mutations/useJobMutations").useResumeQueue;
   const useRetryJob: typeof import("./composables/mutations/useJobMutations").useRetryJob;
@@ -340,8 +340,8 @@ declare global {
   const useScriptTag: typeof import("@vueuse/core").useScriptTag;
   const useScroll: typeof import("@vueuse/core").useScroll;
   const useScrollLock: typeof import("@vueuse/core").useScrollLock;
-  const useScrollShadow: typeof import("../../../node_modules/.pnpm/@nuxt+ui@4.8.1_@azure+identity@4.13.1_@internationalized+date@3.12.2_@internationalized_c290ff1effd5693eb1e051e07b348ac7/node_modules/@nuxt/ui/dist/runtime/composables/useScrollShadow").useScrollShadow;
-  const useScrollspy: typeof import("../../../node_modules/.pnpm/@nuxt+ui@4.8.1_@azure+identity@4.13.1_@internationalized+date@3.12.2_@internationalized_c290ff1effd5693eb1e051e07b348ac7/node_modules/@nuxt/ui/dist/runtime/composables/useScrollspy").useScrollspy;
+  const useScrollShadow: typeof import("../../../node_modules/.pnpm/@nuxt+ui@4.8.1_@azure+identity@4.13.1_@internationalized+date@3.12.2_@internationalized_71a887ba55d4d8ecff7d54b1ce15108c/node_modules/@nuxt/ui/dist/runtime/composables/useScrollShadow").useScrollShadow;
+  const useScrollspy: typeof import("../../../node_modules/.pnpm/@nuxt+ui@4.8.1_@azure+identity@4.13.1_@internationalized+date@3.12.2_@internationalized_71a887ba55d4d8ecff7d54b1ce15108c/node_modules/@nuxt/ui/dist/runtime/composables/useScrollspy").useScrollspy;
   const useSeriesDetailQuery: typeof import("./composables/queries/useSeriesQueries").useSeriesDetailQuery;
   const useSeriesListQuery: typeof import("./composables/queries/useSeriesQueries").useSeriesListQuery;
   const useServerEvents: typeof import("./composables/useServerEvents").useServerEvents;
@@ -382,7 +382,7 @@ declare global {
   const useTitle: typeof import("@vueuse/core").useTitle;
   const useToNumber: typeof import("@vueuse/core").useToNumber;
   const useToString: typeof import("@vueuse/core").useToString;
-  const useToast: typeof import("../../../node_modules/.pnpm/@nuxt+ui@4.8.1_@azure+identity@4.13.1_@internationalized+date@3.12.2_@internationalized_c290ff1effd5693eb1e051e07b348ac7/node_modules/@nuxt/ui/dist/runtime/composables/useToast").useToast;
+  const useToast: typeof import("../../../node_modules/.pnpm/@nuxt+ui@4.8.1_@azure+identity@4.13.1_@internationalized+date@3.12.2_@internationalized_71a887ba55d4d8ecff7d54b1ce15108c/node_modules/@nuxt/ui/dist/runtime/composables/useToast").useToast;
   const useToggle: typeof import("@vueuse/core").useToggle;
   const useTransition: typeof import("@vueuse/core").useTransition;
   const useTriggerHardcoverSync: typeof import("./composables/mutations/useSettingsMutations").useTriggerHardcoverSync;
@@ -534,10 +534,10 @@ declare module "vue" {
     readonly defineAsyncComponent: UnwrapRef<(typeof import("vue"))["defineAsyncComponent"]>;
     readonly defineComponent: UnwrapRef<(typeof import("vue"))["defineComponent"]>;
     readonly defineLocale: UnwrapRef<
-      (typeof import("../../../node_modules/.pnpm/@nuxt+ui@4.8.1_@azure+identity@4.13.1_@internationalized+date@3.12.2_@internationalized_c290ff1effd5693eb1e051e07b348ac7/node_modules/@nuxt/ui/dist/runtime/composables/defineLocale"))["defineLocale"]
+      (typeof import("../../../node_modules/.pnpm/@nuxt+ui@4.8.1_@azure+identity@4.13.1_@internationalized+date@3.12.2_@internationalized_71a887ba55d4d8ecff7d54b1ce15108c/node_modules/@nuxt/ui/dist/runtime/composables/defineLocale"))["defineLocale"]
     >;
     readonly defineShortcuts: UnwrapRef<
-      (typeof import("../../../node_modules/.pnpm/@nuxt+ui@4.8.1_@azure+identity@4.13.1_@internationalized+date@3.12.2_@internationalized_c290ff1effd5693eb1e051e07b348ac7/node_modules/@nuxt/ui/dist/runtime/composables/defineShortcuts"))["defineShortcuts"]
+      (typeof import("../../../node_modules/.pnpm/@nuxt+ui@4.8.1_@azure+identity@4.13.1_@internationalized+date@3.12.2_@internationalized_71a887ba55d4d8ecff7d54b1ce15108c/node_modules/@nuxt/ui/dist/runtime/composables/defineShortcuts"))["defineShortcuts"]
     >;
     readonly defineStore: UnwrapRef<(typeof import("pinia"))["defineStore"]>;
     readonly describeUserAgent: UnwrapRef<
@@ -546,11 +546,11 @@ declare module "vue" {
     readonly eagerComputed: UnwrapRef<(typeof import("@vueuse/core"))["eagerComputed"]>;
     readonly effectScope: UnwrapRef<(typeof import("vue"))["effectScope"]>;
     readonly extendLocale: UnwrapRef<
-      (typeof import("../../../node_modules/.pnpm/@nuxt+ui@4.8.1_@azure+identity@4.13.1_@internationalized+date@3.12.2_@internationalized_c290ff1effd5693eb1e051e07b348ac7/node_modules/@nuxt/ui/dist/runtime/composables/defineLocale"))["extendLocale"]
+      (typeof import("../../../node_modules/.pnpm/@nuxt+ui@4.8.1_@azure+identity@4.13.1_@internationalized+date@3.12.2_@internationalized_71a887ba55d4d8ecff7d54b1ce15108c/node_modules/@nuxt/ui/dist/runtime/composables/defineLocale"))["extendLocale"]
     >;
     readonly extendRef: UnwrapRef<(typeof import("@vueuse/core"))["extendRef"]>;
     readonly extractShortcuts: UnwrapRef<
-      (typeof import("../../../node_modules/.pnpm/@nuxt+ui@4.8.1_@azure+identity@4.13.1_@internationalized+date@3.12.2_@internationalized_c290ff1effd5693eb1e051e07b348ac7/node_modules/@nuxt/ui/dist/runtime/composables/defineShortcuts"))["extractShortcuts"]
+      (typeof import("../../../node_modules/.pnpm/@nuxt+ui@4.8.1_@azure+identity@4.13.1_@internationalized+date@3.12.2_@internationalized_71a887ba55d4d8ecff7d54b1ce15108c/node_modules/@nuxt/ui/dist/runtime/composables/defineShortcuts"))["extractShortcuts"]
     >;
     readonly formatDate: UnwrapRef<(typeof import("./utils/formatters"))["formatDate"]>;
     readonly formatFileSize: UnwrapRef<(typeof import("./utils/formatters"))["formatFileSize"]>;
@@ -650,7 +650,7 @@ declare module "vue" {
       (typeof import("./composables/mutations/useApiKeyMutations"))["useApiKeysQuery"]
     >;
     readonly useAppConfig: UnwrapRef<
-      (typeof import("../../../node_modules/.pnpm/@nuxt+ui@4.8.1_@azure+identity@4.13.1_@internationalized+date@3.12.2_@internationalized_c290ff1effd5693eb1e051e07b348ac7/node_modules/@nuxt/ui/dist/runtime/vue/composables/useAppConfig.js"))["useAppConfig"]
+      (typeof import("../../../node_modules/.pnpm/@nuxt+ui@4.8.1_@azure+identity@4.13.1_@internationalized+date@3.12.2_@internationalized_71a887ba55d4d8ecff7d54b1ce15108c/node_modules/@nuxt/ui/dist/runtime/vue/composables/useAppConfig.js"))["useAppConfig"]
     >;
     readonly useApplyMetadata: UnwrapRef<
       (typeof import("./composables/mutations/useBookMutations"))["useApplyMetadata"]
@@ -708,7 +708,7 @@ declare module "vue" {
     readonly useColorMode: UnwrapRef<(typeof import("@vueuse/core"))["useColorMode"]>;
     readonly useConfirmDialog: UnwrapRef<(typeof import("@vueuse/core"))["useConfirmDialog"]>;
     readonly useContentSearch: UnwrapRef<
-      (typeof import("../../../node_modules/.pnpm/@nuxt+ui@4.8.1_@azure+identity@4.13.1_@internationalized+date@3.12.2_@internationalized_c290ff1effd5693eb1e051e07b348ac7/node_modules/@nuxt/ui/dist/runtime/composables/useContentSearch"))["useContentSearch"]
+      (typeof import("../../../node_modules/.pnpm/@nuxt+ui@4.8.1_@azure+identity@4.13.1_@internationalized+date@3.12.2_@internationalized_71a887ba55d4d8ecff7d54b1ce15108c/node_modules/@nuxt/ui/dist/runtime/composables/useContentSearch"))["useContentSearch"]
     >;
     readonly useCountdown: UnwrapRef<(typeof import("@vueuse/core"))["useCountdown"]>;
     readonly useCounter: UnwrapRef<(typeof import("@vueuse/core"))["useCounter"]>;
@@ -784,12 +784,12 @@ declare module "vue" {
     readonly useFileDialog: UnwrapRef<(typeof import("@vueuse/core"))["useFileDialog"]>;
     readonly useFileSystemAccess: UnwrapRef<(typeof import("@vueuse/core"))["useFileSystemAccess"]>;
     readonly useFileUpload: UnwrapRef<
-      (typeof import("../../../node_modules/.pnpm/@nuxt+ui@4.8.1_@azure+identity@4.13.1_@internationalized+date@3.12.2_@internationalized_c290ff1effd5693eb1e051e07b348ac7/node_modules/@nuxt/ui/dist/runtime/composables/useFileUpload"))["useFileUpload"]
+      (typeof import("../../../node_modules/.pnpm/@nuxt+ui@4.8.1_@azure+identity@4.13.1_@internationalized+date@3.12.2_@internationalized_71a887ba55d4d8ecff7d54b1ce15108c/node_modules/@nuxt/ui/dist/runtime/composables/useFileUpload"))["useFileUpload"]
     >;
     readonly useFocus: UnwrapRef<(typeof import("@vueuse/core"))["useFocus"]>;
     readonly useFocusWithin: UnwrapRef<(typeof import("@vueuse/core"))["useFocusWithin"]>;
     readonly useFormField: UnwrapRef<
-      (typeof import("../../../node_modules/.pnpm/@nuxt+ui@4.8.1_@azure+identity@4.13.1_@internationalized+date@3.12.2_@internationalized_c290ff1effd5693eb1e051e07b348ac7/node_modules/@nuxt/ui/dist/runtime/composables/useFormField"))["useFormField"]
+      (typeof import("../../../node_modules/.pnpm/@nuxt+ui@4.8.1_@azure+identity@4.13.1_@internationalized+date@3.12.2_@internationalized_71a887ba55d4d8ecff7d54b1ce15108c/node_modules/@nuxt/ui/dist/runtime/composables/useFormField"))["useFormField"]
     >;
     readonly useFps: UnwrapRef<(typeof import("@vueuse/core"))["useFps"]>;
     readonly useFullscreen: UnwrapRef<(typeof import("@vueuse/core"))["useFullscreen"]>;
@@ -830,7 +830,7 @@ declare module "vue" {
       (typeof import("./composables/queries/useJobsQuery"))["useJobsQuery"]
     >;
     readonly useKbd: UnwrapRef<
-      (typeof import("../../../node_modules/.pnpm/@nuxt+ui@4.8.1_@azure+identity@4.13.1_@internationalized+date@3.12.2_@internationalized_c290ff1effd5693eb1e051e07b348ac7/node_modules/@nuxt/ui/dist/runtime/composables/useKbd"))["useKbd"]
+      (typeof import("../../../node_modules/.pnpm/@nuxt+ui@4.8.1_@azure+identity@4.13.1_@internationalized+date@3.12.2_@internationalized_71a887ba55d4d8ecff7d54b1ce15108c/node_modules/@nuxt/ui/dist/runtime/composables/useKbd"))["useKbd"]
     >;
     readonly useKeyModifier: UnwrapRef<(typeof import("@vueuse/core"))["useKeyModifier"]>;
     readonly useLastChanged: UnwrapRef<(typeof import("@vueuse/core"))["useLastChanged"]>;
@@ -867,7 +867,7 @@ declare module "vue" {
     readonly useOffsetPagination: UnwrapRef<(typeof import("@vueuse/core"))["useOffsetPagination"]>;
     readonly useOnline: UnwrapRef<(typeof import("@vueuse/core"))["useOnline"]>;
     readonly useOverlay: UnwrapRef<
-      (typeof import("../../../node_modules/.pnpm/@nuxt+ui@4.8.1_@azure+identity@4.13.1_@internationalized+date@3.12.2_@internationalized_c290ff1effd5693eb1e051e07b348ac7/node_modules/@nuxt/ui/dist/runtime/composables/useOverlay"))["useOverlay"]
+      (typeof import("../../../node_modules/.pnpm/@nuxt+ui@4.8.1_@azure+identity@4.13.1_@internationalized+date@3.12.2_@internationalized_71a887ba55d4d8ecff7d54b1ce15108c/node_modules/@nuxt/ui/dist/runtime/composables/useOverlay"))["useOverlay"]
     >;
     readonly usePageLeave: UnwrapRef<(typeof import("@vueuse/core"))["usePageLeave"]>;
     readonly useParallax: UnwrapRef<(typeof import("@vueuse/core"))["useParallax"]>;
@@ -928,7 +928,7 @@ declare module "vue" {
       (typeof import("./composables/mutations/useBookMutations"))["useRescanBook"]
     >;
     readonly useResizable: UnwrapRef<
-      (typeof import("../../../node_modules/.pnpm/@nuxt+ui@4.8.1_@azure+identity@4.13.1_@internationalized+date@3.12.2_@internationalized_c290ff1effd5693eb1e051e07b348ac7/node_modules/@nuxt/ui/dist/runtime/composables/useResizable"))["useResizable"]
+      (typeof import("../../../node_modules/.pnpm/@nuxt+ui@4.8.1_@azure+identity@4.13.1_@internationalized+date@3.12.2_@internationalized_71a887ba55d4d8ecff7d54b1ce15108c/node_modules/@nuxt/ui/dist/runtime/composables/useResizable"))["useResizable"]
     >;
     readonly useResizeObserver: UnwrapRef<(typeof import("@vueuse/core"))["useResizeObserver"]>;
     readonly useResumeQueue: UnwrapRef<
@@ -954,10 +954,10 @@ declare module "vue" {
     readonly useScroll: UnwrapRef<(typeof import("@vueuse/core"))["useScroll"]>;
     readonly useScrollLock: UnwrapRef<(typeof import("@vueuse/core"))["useScrollLock"]>;
     readonly useScrollShadow: UnwrapRef<
-      (typeof import("../../../node_modules/.pnpm/@nuxt+ui@4.8.1_@azure+identity@4.13.1_@internationalized+date@3.12.2_@internationalized_c290ff1effd5693eb1e051e07b348ac7/node_modules/@nuxt/ui/dist/runtime/composables/useScrollShadow"))["useScrollShadow"]
+      (typeof import("../../../node_modules/.pnpm/@nuxt+ui@4.8.1_@azure+identity@4.13.1_@internationalized+date@3.12.2_@internationalized_71a887ba55d4d8ecff7d54b1ce15108c/node_modules/@nuxt/ui/dist/runtime/composables/useScrollShadow"))["useScrollShadow"]
     >;
     readonly useScrollspy: UnwrapRef<
-      (typeof import("../../../node_modules/.pnpm/@nuxt+ui@4.8.1_@azure+identity@4.13.1_@internationalized+date@3.12.2_@internationalized_c290ff1effd5693eb1e051e07b348ac7/node_modules/@nuxt/ui/dist/runtime/composables/useScrollspy"))["useScrollspy"]
+      (typeof import("../../../node_modules/.pnpm/@nuxt+ui@4.8.1_@azure+identity@4.13.1_@internationalized+date@3.12.2_@internationalized_71a887ba55d4d8ecff7d54b1ce15108c/node_modules/@nuxt/ui/dist/runtime/composables/useScrollspy"))["useScrollspy"]
     >;
     readonly useSeriesDetailQuery: UnwrapRef<
       (typeof import("./composables/queries/useSeriesQueries"))["useSeriesDetailQuery"]
@@ -1024,7 +1024,7 @@ declare module "vue" {
     readonly useToNumber: UnwrapRef<(typeof import("@vueuse/core"))["useToNumber"]>;
     readonly useToString: UnwrapRef<(typeof import("@vueuse/core"))["useToString"]>;
     readonly useToast: UnwrapRef<
-      (typeof import("../../../node_modules/.pnpm/@nuxt+ui@4.8.1_@azure+identity@4.13.1_@internationalized+date@3.12.2_@internationalized_c290ff1effd5693eb1e051e07b348ac7/node_modules/@nuxt/ui/dist/runtime/composables/useToast"))["useToast"]
+      (typeof import("../../../node_modules/.pnpm/@nuxt+ui@4.8.1_@azure+identity@4.13.1_@internationalized+date@3.12.2_@internationalized_71a887ba55d4d8ecff7d54b1ce15108c/node_modules/@nuxt/ui/dist/runtime/composables/useToast"))["useToast"]
     >;
     readonly useToggle: UnwrapRef<(typeof import("@vueuse/core"))["useToggle"]>;
     readonly useTransition: UnwrapRef<(typeof import("@vueuse/core"))["useTransition"]>;
