@@ -17,6 +17,7 @@ import {
   seedBook,
   deleteAllBooks,
   invalidateServerCache,
+  getRegularUserId,
 } from "./helpers";
 
 /**
@@ -34,6 +35,60 @@ async function emitEvent(event: {
     body: JSON.stringify(event),
   });
   if (!res.ok) throw new Error(`Failed to emit event: ${res.status}`);
+}
+
+async function seedBookForUser(createdBy: string, title: string): Promise<string> {
+  const res = await fetch(`${API_BASE}/__test/seed-books`, {
+    method: "POST",
+    headers: { ...testRouteHeaders(), "Content-Type": "application/json" },
+    body: JSON.stringify({
+      createdBy,
+      books: [{ title, author: "WebSocket owner test", status: "inbox" }],
+    }),
+  });
+  if (!res.ok) throw new Error(`Failed to seed user book: ${res.status}`);
+  const body = (await res.json()) as { inserted: Array<{ id: string }> };
+  return body.inserted[0]!.id;
+}
+
+async function openManualWebSocket(page: Page): Promise<void> {
+  await page.evaluate(async () => {
+    await new Promise<void>((resolve, reject) => {
+      const ws = new WebSocket("ws://localhost:3000/api/events");
+      const timeout = setTimeout(() => reject(new Error("WebSocket did not connect")), 10_000);
+      ws.addEventListener("message", (event) => {
+        if (JSON.parse(event.data as string).type !== "connected") return;
+        clearTimeout(timeout);
+        (window as Window & { __testEventsSocket?: WebSocket }).__testEventsSocket = ws;
+        resolve();
+      });
+      ws.addEventListener("error", () => reject(new Error("WebSocket connection failed")));
+    });
+  });
+}
+
+async function listenForBookEvent(page: Page, bookId: string): Promise<void> {
+  await page.evaluate((expectedBookId) => {
+    const ws = (window as Window & { __testEventsSocket?: WebSocket }).__testEventsSocket;
+    if (!ws) throw new Error("Test WebSocket was not opened");
+    const windowWithEvents = window as Window & { __testEventBookIds?: string[] };
+    windowWithEvents.__testEventBookIds ??= [];
+    ws.addEventListener("message", (event) => {
+      if (JSON.parse(event.data as string).bookId === expectedBookId) {
+        windowWithEvents.__testEventBookIds!.push(expectedBookId);
+      }
+    });
+  }, bookId);
+}
+
+async function receivedBookEvent(page: Page, bookId: string): Promise<boolean> {
+  return await page.evaluate(
+    (expectedBookId) =>
+      (window as Window & { __testEventBookIds?: string[] }).__testEventBookIds?.includes(
+        expectedBookId,
+      ) ?? false,
+    bookId,
+  );
 }
 
 /**
@@ -75,6 +130,27 @@ test.describe("WebSocket Real-time Events", () => {
 
     // Page should be functional with WebSocket connected
     await expect(page.getByTestId("empty-inbox")).toBeVisible();
+  });
+
+  test("a regular user receives events only for their own books", async ({ userPage: page }) => {
+    const adminBook = await seedBook("inbox", { title: "Admin-only WebSocket Book" });
+    const userBook = await seedBookForUser(getRegularUserId(), "User-only WebSocket Book");
+
+    await openManualWebSocket(page);
+    try {
+      await listenForBookEvent(page, adminBook.id);
+      await emitEvent({ type: "book:detected", bookId: adminBook.id });
+      await page.waitForTimeout(1_000);
+      expect(await receivedBookEvent(page, adminBook.id)).toBe(false);
+
+      await listenForBookEvent(page, userBook);
+      await emitEvent({ type: "book:detected", bookId: userBook });
+      await expect.poll(() => receivedBookEvent(page, userBook)).toBe(true);
+    } finally {
+      await page.evaluate(() => {
+        (window as Window & { __testEventsSocket?: WebSocket }).__testEventsSocket?.close();
+      });
+    }
   });
 
   test("Inbox list auto-refreshes on book:detected event", async ({ livePage: page }) => {

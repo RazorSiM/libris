@@ -224,13 +224,14 @@ export const testRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
       bookId?: string;
       payload?: Record<string, unknown>;
     }>();
+    const db = c.get("db");
 
-    const { publishEvent } = await import("../../services/event-bus.js");
-    await publishEvent({
-      type: body.type,
-      bookId: body.bookId,
-      payload: body.payload,
-    });
+    const { publishBookEvent, publishEvent } = await import("../../services/event-bus.js");
+    if (body.bookId) {
+      await publishBookEvent(db, { type: body.type, bookId: body.bookId, payload: body.payload });
+    } else {
+      await publishEvent({ type: body.type, payload: body.payload });
+    }
 
     return c.json({ ok: true });
   });

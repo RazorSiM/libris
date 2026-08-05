@@ -4,6 +4,47 @@ import type { getLogger } from "./logger.js";
 
 type Logger = ReturnType<typeof getLogger>;
 
+/** Limits are per process; the total cap protects the event-bus fan-out. */
+export const MAX_EVENT_SOCKET_CONNECTIONS = 100;
+export const MAX_EVENT_SOCKET_CONNECTIONS_PER_PRINCIPAL = 5;
+
+/**
+ * Tracks WebSocket upgrade reservations until their connection closes.
+ *
+ * The route reserves a slot before upgrading, so an over-limit client receives
+ * an HTTP error instead of completing a WebSocket handshake and consuming an
+ * event-bus listener.
+ */
+export class SocketConnectionGuard {
+  private total = 0;
+  private readonly perPrincipal = new Map<string, number>();
+
+  constructor(
+    private readonly maxTotal = MAX_EVENT_SOCKET_CONNECTIONS,
+    private readonly maxPerPrincipal = MAX_EVENT_SOCKET_CONNECTIONS_PER_PRINCIPAL,
+  ) {}
+
+  tryAcquire(principal: string): (() => void) | null {
+    const principalCount = this.perPrincipal.get(principal) ?? 0;
+    if (this.total >= this.maxTotal || principalCount >= this.maxPerPrincipal) return null;
+
+    this.total += 1;
+    this.perPrincipal.set(principal, principalCount + 1);
+
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.total -= 1;
+      const remaining = (this.perPrincipal.get(principal) ?? 1) - 1;
+      if (remaining === 0) this.perPrincipal.delete(principal);
+      else this.perPrincipal.set(principal, remaining);
+    };
+  }
+}
+
+export const eventSocketConnectionGuard = new SocketConnectionGuard();
+
 /**
  * Prevent benign transport-level socket errors from crashing the process.
  *

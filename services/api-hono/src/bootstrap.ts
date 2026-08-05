@@ -22,7 +22,7 @@ import { processHardcoverSync } from "./workers/hardcover-sync.js";
 import { processProgressHistoryCleanup } from "./workers/progress-history-cleanup.js";
 import { createCleanupOrphanedFilesProcessor } from "./workers/cleanup-orphaned-files.js";
 import { createInboxWatcher } from "./shared/inbox-watcher.js";
-import { publishEvent } from "./services/event-bus.js";
+import { publishBookEvent, publishEvent } from "./services/event-bus.js";
 import { parseRedisUrl, type Env } from "./env.js";
 import type { Queues } from "./context.js";
 import { getQueues, registerQueue } from "./services/queue.js";
@@ -483,7 +483,8 @@ export async function bootstrap(env: Env): Promise<AppServices> {
         const eventType = queueEventMap[job.queueName];
         if (eventType) {
           const bookId = (job.data as Record<string, unknown>)?.bookId as string | undefined;
-          publishEvent({ type: eventType, bookId }).catch((e) =>
+          if (!bookId) return;
+          publishBookEvent(db, { type: eventType, bookId }).catch((e) =>
             workerLogger
               .withMetadata({ error: String(e) })
               .warn(`Failed to publish ${eventType} event`),
@@ -496,7 +497,8 @@ export async function bootstrap(env: Env): Promise<AppServices> {
             `Job ${job.id} permanently failed on ${job.queueName} after ${job.attemptsMade} attempts: ${err.message}`,
           );
           const bookId = (job.data as Record<string, unknown>)?.bookId as string | undefined;
-          publishEvent({
+          if (!bookId) return;
+          publishBookEvent(db, {
             type: "job:failed",
             bookId,
             payload: { queue: job.queueName, error: err.message, jobId: job.id },
