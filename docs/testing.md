@@ -2,47 +2,49 @@
 
 ## E2E Tests (Playwright)
 
-~137 spec test bodies across 16 spec files in `tests/e2e/`, running sequentially (1 worker, shared database). 10 OPDS tests are skipped at runtime via `test.describe.skip()` (ported to Vitest integration tests), so ~127 actually execute. Regenerate the exact counts with `vp exec playwright test --list` (run from `tests/e2e/`) rather than hand-counting; the setup projects add 3 more test bodies on top of the spec total.
+169 spec test bodies across 17 spec files in `tests/e2e/`, running sequentially (1 worker, shared database). The setup projects add 3 executions, for 172 tests in a complete run. Regenerate the exact counts with `vp exec playwright test --list` (run from `tests/e2e/`) rather than hand-counting.
 
 ### Test Files
 
-| File                       | Tests | Tags             | Coverage                                                                                                                              |
-| -------------------------- | ----- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `auth.spec.ts`             | 7     | @smoke           | Setup form, login, logout, session persistence                                                                                        |
-| `book-progress.spec.ts`    | 3     | @smoke           | Multi-device progress, empty state, finished badge                                                                                    |
-| `command-palette.spec.ts`  | 3     | —                | Global search modal, navigation, book results                                                                                         |
-| `errors.spec.ts`           | 8     | @smoke / @slow   | Auth Error Handling (3 @smoke), Error Toasts & Edge Cases (4 @smoke); Duplicate File Detection (1 @slow + @external)                  |
-| `hardcover.spec.ts`        | 10    | @smoke           | Token CRUD, status, sync button/log, feature toggles, persistence                                                                     |
-| `home.spec.ts`             | 6     | @smoke           | Dashboard stats, currently reading, recently added, wide-screen card constraints                                                      |
-| `inbox.spec.ts`            | 16    | @smoke           | List, search, pagination, empty state, metadata picker, approve, delete                                                               |
-| `ingestion.spec.ts`        | 1     | @slow @external  | Full EPUB pipeline: detect → parse → review → approve → library                                                                       |
-| `library.spec.ts`          | 18    | @smoke           | Grid/list view, filters, search, pagination, detail page, covers, downloads                                                           |
-| `multi-user-auth.spec.ts`  | 15    | —                | Ownership enforcement, admin vs regular key, cross-user 403s, credential rotation                                                     |
-| `multi-user.spec.ts`       | 11    | —                | Per-user data isolation (reading progress, stats, service credentials)                                                                |
-| `opds.spec.ts`             | 10    | @smoke (skipped) | Feed structure, search, covers, downloads, Basic auth (`test.describe.skip`)                                                          |
-| `reading-status.spec.ts`   | 8     | @smoke           | Sidebar links, status tabs, empty state, wide-screen cards, plus a parametrized loop covering the reading/finished/unread/paused tabs |
-| `settings.spec.ts`         | 8     | @smoke (4)       | Health & diagnostics (@smoke); jobs browser and queue management untagged                                                             |
-| `stats.spec.ts`            | 7     | @smoke           | Books finished, streaks, daily activity, genre distribution                                                                           |
-| `websocket-events.spec.ts` | 6     | —                | Realtime event bus over WebSocket — job status, pipeline events, Hardcover sync updates                                               |
+| File                       | Tests | Tags            | Coverage                                                                                                                              |
+| -------------------------- | ----- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `account.spec.ts`          | 17    | —               | Profile, password changes, session and device management, account access                                                              |
+| `auth.spec.ts`             | 47    | mixed           | Sign-in, sessions, authorization, app passwords, OPDS authentication, user management                                                 |
+| `book-progress.spec.ts`    | 3     | @smoke          | Multi-device progress, empty state, finished badge                                                                                    |
+| `command-palette.spec.ts`  | 3     | —               | Global search modal, navigation, book results                                                                                         |
+| `errors.spec.ts`           | 5     | @smoke / @slow  | Error toasts, conflict handling, network failures, and duplicate file detection                                                       |
+| `first-run-setup.spec.ts`  | 2     | —               | Empty-install setup and first-admin creation                                                                                          |
+| `hardcover.spec.ts`        | 10    | @smoke          | Token CRUD, status, sync button/log, feature toggles, persistence                                                                     |
+| `home.spec.ts`             | 6     | @smoke          | Dashboard stats, currently reading, recently added, wide-screen card constraints                                                      |
+| `inbox.spec.ts`            | 16    | @smoke          | List, search, pagination, empty state, metadata picker, approve, delete                                                               |
+| `ingestion.spec.ts`        | 1     | @slow @external | Full EPUB pipeline: detect → parse → review → approve → library                                                                       |
+| `library.spec.ts`          | 18    | @smoke          | Grid/list view, filters, search, pagination, detail page, covers, downloads                                                           |
+| `isolation.spec.ts`        | 10    | —               | Ownership controls, per-user progress and stats, credential persistence, cache and upload isolation                                   |
+| `opds.spec.ts`             | 2     | @smoke          | Real-filesystem cover and ebook streaming through the live server                                                                     |
+| `reading-status.spec.ts`   | 8     | @smoke          | Sidebar links, status tabs, empty state, wide-screen cards, plus a parametrized loop covering the reading/finished/unread/paused tabs |
+| `settings.spec.ts`         | 8     | @smoke (4)      | Health & diagnostics (@smoke); jobs browser and queue management untagged                                                             |
+| `stats.spec.ts`            | 7     | @smoke          | Books finished, streaks, daily activity, genre distribution                                                                           |
+| `websocket-events.spec.ts` | 6     | —               | Realtime event bus over WebSocket — job status, pipeline events, Hardcover sync updates                                               |
 
-> **Note:** `opds.spec.ts` uses `test.describe.skip()` — the OPDS tests have been ported to
-> Vitest integration tests at `services/api-hono/src/routes/opds.test.ts`. The E2E versions
-> are retained for optional live-server testing but do not run by default.
+> **Note:** Feed structure, search, language filtering, authentication, and content-type
+> contracts live in `services/api-hono/src/routes/opds.test.ts`. `opds.spec.ts` retains only
+> the two cases that require the configured library directory and a running server: cover and
+> ebook streaming.
 
 ### Tags
 
-| Tag         | Count       | Meaning                                                                                                                                     |
-| ----------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `@smoke`    | 96 / 86 run | Critical paths — runs on PRs via `--grep @smoke`. `--list` reports 96 tagged bodies; 10 are the skipped OPDS tests, so 86 actually execute. |
-| `@slow`     | 2           | File processing / queue waits                                                                                                               |
-| `@external` | 2           | Requires external API access (Hardcover in practice)                                                                                        |
-| _untagged_  | 39          | Run on main push (full suite) but skipped on PR smoke runs                                                                                  |
+| Tag         | Meaning                                                                         |
+| ----------- | ------------------------------------------------------------------------------- |
+| `@smoke`    | Critical paths — runs on PRs via `--grep @smoke`                                |
+| `@slow`     | File processing or queue waits                                                  |
+| `@external` | Exercises a boundary normally backed by an external service or filesystem event |
+| _untagged_  | Runs in the complete suite but not the PR smoke selection                       |
 
 Untagged specs (command palette, multi-user flows, WebSocket events) validate behavior that doesn't need to block every PR but must pass on main.
 
 ### Running Tests
 
-Playwright global setup waits for the API, clears BullMQ queue history from Redis, resets the database, and then seeds two API keys so queue/admin diagnostics start from a deterministic state: an admin key (via `POST /api/auth/setup`, exposed as `E2E_API_KEY`) and a non-admin regular-user key (via `POST /api/auth/keys`, exposed as `E2E_USER_API_KEY`). Both seeders fall back to direct database insertion (bcryptjs + `postgres`) when the endpoint is rate-limited (429). The multi-user suites depend on both keys being present.
+Playwright global setup waits for the API, clears BullMQ queue history from Redis, resets the database, bootstraps the admin, creates a regular user, signs both in, and issues each an app password through `POST /api/app-passwords`. Their sessions and app passwords are exposed to the specs through the E2E helper environment so tests can deliberately exercise either cookie or header authentication.
 
 Docker mode runs backing services from `docker-compose.test.yml` on non-default ports to avoid colliding with a local stack: Postgres on `5433` and Redis on `6380`.
 

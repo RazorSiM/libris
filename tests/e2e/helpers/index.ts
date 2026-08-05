@@ -235,25 +235,6 @@ export async function goPath(page: Page, path: string): Promise<void> {
 }
 
 /**
- * Seed OPDS service credentials via the API.
- * Returns the username and password for use in Basic auth headers.
- */
-export async function seedOpdsCredentials(
-  username = "opds-test",
-  password = "opds-test-pass",
-): Promise<{ username: string; password: string }> {
-  const res = await fetch(`${API_BASE}/api/credentials/opds`, {
-    method: "PUT",
-    headers: { ...sessionHeaders(), "Content-Type": "application/json" },
-    body: JSON.stringify({ username, password }),
-  });
-  if (!res.ok) {
-    throw new Error(`Failed to seed OPDS credentials: ${res.status} ${res.statusText}`);
-  }
-  return { username, password };
-}
-
-/**
  * Clear the server route cache so /api/library, /api/inbox etc. serve fresh data.
  * Calls the test-only POST /__test/invalidate-cache endpoint.
  */
