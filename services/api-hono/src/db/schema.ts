@@ -263,6 +263,19 @@ export const readingAggregate = pgTable(
   ],
 );
 
+/**
+ * Per-user credential for an external service. Hardcover is the only remaining
+ * occupant: OPDS credentials were removed with the service, and KoSync moved to
+ * `kosync_credentials`.
+ *
+ * `username` is a LABEL, not an identity. Nothing authenticates against it --
+ * the frontend sends the literal string "hardcover" for every user (see
+ * SettingsHardcover.vue), and the token in `password_hash` is what actually
+ * talks to the API. It is therefore deliberately NOT unique across users; the
+ * global `(service, username)` unique index that used to be here let exactly
+ * one person in the whole install connect Hardcover and 500'd the second
+ * (libris-59m.9). `(service, user_id)` is the constraint that still matters.
+ */
 export const serviceCredentials = pgTable(
   "service_credentials",
   {
@@ -282,7 +295,6 @@ export const serviceCredentials = pgTable(
   (t) => [
     unique("service_credentials_service_user_uniq").on(t.service, t.userId),
     index("service_credentials_user_id_idx").on(t.userId),
-    uniqueIndex("service_credentials_service_username_uniq").on(t.service, t.username),
   ],
 );
 

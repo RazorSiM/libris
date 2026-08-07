@@ -5,6 +5,7 @@ import { hash } from "bcryptjs";
 import { kosyncCredentials, serviceCredentials } from "#db";
 import type { AppVariables } from "../../context.js";
 import { BCRYPT_ROUNDS, md5, sealToken, getUserId } from "../../shared/auth.js";
+import { isUniqueViolation } from "../../shared/db-errors.js";
 import { hashKosyncSecret } from "../../shared/kosync-auth.js";
 import { CredentialServiceParamSchema, CredentialPutBodySchema } from "../../shared/validation.js";
 import {
@@ -94,6 +95,33 @@ const deleteCredentialRoute = createRoute({
   },
 });
 
+/**
+ * Run a credential write, turning any unique-constraint violation into a 409.
+ *
+ * The handlers below check for the collisions they know about up front, but a
+ * uniqueness rule they do NOT know about still reaches Postgres and comes back
+ * as an unhandled 500 with no hint of what went wrong. That is exactly how
+ * libris-59m.9 presented: a stale global `(service, username)` unique index
+ * meant the second user in an install to connect Hardcover got "Internal server
+ * error". The index is gone, but this makes the failure mode legible if any
+ * future constraint change reintroduces one.
+ */
+async function storeCredential(
+  service: string,
+  username: string,
+  write: () => Promise<unknown>,
+): Promise<void> {
+  try {
+    await write();
+  } catch (err) {
+    if (!isUniqueViolation(err)) throw err;
+    throw new HTTPException(409, {
+      message: `Could not save ${service} credentials for "${username}": they conflict with an existing record`,
+      cause: err,
+    });
+  }
+}
+
 // ── Router ───────────────────────────────────────────────────────
 
 export const credentialsRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
@@ -162,13 +190,15 @@ export const credentialsRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
 
       // sha256 of the value KOReader will put on the wire, which is
       // md5(password) — not the plaintext. See shared/kosync-auth.ts.
-      await db
-        .insert(kosyncCredentials)
-        .values({ userId, username, secretHash: hashKosyncSecret(md5(password)) })
-        .onConflictDoUpdate({
-          target: kosyncCredentials.userId,
-          set: { username, secretHash: hashKosyncSecret(md5(password)), updatedAt: new Date() },
-        });
+      await storeCredential(service, username, () =>
+        db
+          .insert(kosyncCredentials)
+          .values({ userId, username, secretHash: hashKosyncSecret(md5(password)) })
+          .onConflictDoUpdate({
+            target: kosyncCredentials.userId,
+            set: { username, secretHash: hashKosyncSecret(md5(password)), updatedAt: new Date() },
+          }),
+      );
 
       return c.json({ service, username, updated: true });
     }
@@ -183,14 +213,16 @@ export const credentialsRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
         ? await sealToken(password, env.API_SECRET_KEY)
         : await hash(password, BCRYPT_ROUNDS);
 
-    await db
-      .insert(serviceCredentials)
-      .values({ service, userId, username, passwordHash })
-      .onConflictDoUpdate({
-        target: [serviceCredentials.service, serviceCredentials.userId],
-        targetWhere: eq(serviceCredentials.userId, userId),
-        set: { username, passwordHash, updatedAt: new Date() },
-      });
+    await storeCredential(service, username, () =>
+      db
+        .insert(serviceCredentials)
+        .values({ service, userId, username, passwordHash })
+        .onConflictDoUpdate({
+          target: [serviceCredentials.service, serviceCredentials.userId],
+          targetWhere: eq(serviceCredentials.userId, userId),
+          set: { username, passwordHash, updatedAt: new Date() },
+        }),
+    );
 
     return c.json({ service, username, updated: true });
   })

@@ -1,0 +1,18 @@
+-- Drop the global (service, username) unique index on service_credentials
+-- (libris-59m.9).
+--
+-- It dates from 20260411131309_init, when this table held OPDS and KoSync login
+-- identities and `username` was something a client actually authenticated as.
+-- Both have since moved out: OPDS credentials were removed with the service,
+-- and KoSync lives in `kosync_credentials` with its own username uniqueness.
+-- Hardcover is the only occupant left and its `username` is a label -- the
+-- frontend sends the literal string "hardcover" for every user, so this index
+-- meant the SECOND person in an install to connect Hardcover hit a unique
+-- violation and got a 500.
+--
+-- Deliberately NOT replaced with (service, user_id, username): that would be
+-- implied by `service_credentials_service_user_uniq`, which already allows at
+-- most one row per (service, user) and is the guarantee that still matters.
+--
+-- IF EXISTS because an operator who hit the 500 may have dropped it by hand.
+DROP INDEX IF EXISTS "service_credentials_service_username_uniq";
