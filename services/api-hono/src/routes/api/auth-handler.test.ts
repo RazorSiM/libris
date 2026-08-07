@@ -7,6 +7,7 @@ import type { Env } from "../../env.js";
 import { createAuth } from "../../lib/auth.js";
 import { createMemorySecondaryStorage } from "../../services/auth-secondary-storage.js";
 import { createMemoryKVStore } from "../../services/kv-store.js";
+import { betterAuthClientIpHeader } from "../../shared/request-ip.js";
 import { eq } from "drizzle-orm";
 import { withLastAdminLock } from "../../middleware/last-admin.js";
 
@@ -66,7 +67,16 @@ const TEST_ENV: Env = {
 let pglite: PGlite;
 let db: TestDb;
 
-function createTestApp() {
+interface TestAppOptions {
+  /**
+   * Called with the headers of every `auth.api.getSession` the request stack
+   * makes. Used to assert what the middleware layer actually hands Better
+   * Auth, which is not observable from the response (libris-59m.42).
+   */
+  onGetSession?: (headers: Headers) => void;
+}
+
+function createTestApp(options: TestAppOptions = {}) {
   const auth = createAuth({
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     db: db as any,
@@ -75,6 +85,17 @@ function createTestApp() {
     secret: TEST_ENV.BETTER_AUTH_SECRET,
     baseURL: "http://localhost:3000",
   });
+
+  if (options.onGetSession) {
+    const { onGetSession } = options;
+    const original = auth.api.getSession;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (auth.api as any).getSession = (input: any) => {
+      onGetSession(new Headers(input?.headers ?? {}));
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-return
+      return original(input);
+    };
+  }
 
   // The auth instance is returned alongside the app: accounts are created
   // server-side through it now, since there is no HTTP sign-up.
@@ -297,6 +318,44 @@ describe("last-admin invariant", () => {
       expect(stored).toMatchObject({ role: "admin", banned: false });
     },
   );
+
+  /**
+   * libris-59m.42. lib/auth.ts tells Better Auth to read the client address
+   * from one private header, on the stated invariant that the app always
+   * overwrites it with the address resolved from the TCP peer and the
+   * trusted-proxy CIDRs. app.ts only does that inside the /api/auth/*
+   * catch-all HANDLER, which runs AFTER this middleware — so passing
+   * `c.req.raw.headers` straight through handed Better Auth whatever the
+   * client sent.
+   */
+  it("never lets a client-supplied private IP header reach Better Auth", async () => {
+    const seen: string[] = [];
+    const { app, auth } = createTestApp({
+      onGetSession: (headers) => seen.push(headers.get(betterAuthClientIpHeader) ?? "<absent>"),
+    });
+    const acting = await createAdmin(auth, "spoof-acting@example.com");
+    const target = await createAdmin(auth, "spoof-target@example.com");
+    seen.length = 0;
+
+    const response = await app.request("/api/auth/admin/set-role", {
+      method: "POST",
+      headers: {
+        cookie: acting.cookie,
+        "content-type": "application/json",
+        origin: "http://localhost:3000",
+        [betterAuthClientIpHeader]: "203.0.113.9",
+      },
+      body: JSON.stringify({ userId: target.id, role: "user" }),
+    });
+
+    expect(response.status).toBe(200);
+    // The middleware really did consult Better Auth — otherwise this asserts
+    // nothing at all.
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen).not.toContain("203.0.113.9");
+    // getRequestIp falls back to the loopback identity when there is no socket.
+    expect(new Set(seen)).toEqual(new Set(["127.0.0.1"]));
+  });
 
   it("allows only one of two concurrent demotions", async () => {
     const { auth } = createTestApp();

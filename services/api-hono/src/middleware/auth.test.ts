@@ -429,6 +429,60 @@ describe("authMiddleware revocation", () => {
     expect((await get("/api/books", { cookie })).status).toBe(401);
   });
 
+  /**
+   * libris-59m.6. The cookie test above passes for the wrong reason: banUser
+   * deletes the user's session rows, so the cookie stops resolving. Better
+   * Auth only consults `banned` when it CREATES a session, and an app password
+   * never creates one — the apiKey plugin looks the user up by referenceId and
+   * synthesises a session without reading the ban fields at all.
+   *
+   * These write the ban straight to the users table rather than going through
+   * banUser, precisely so the assertion is about the middleware's ban check and
+   * not about the ban hook disabling the key.
+   */
+  async function ban(userId: string, banExpires: Date | null): Promise<void> {
+    await db
+      .update(schema.users)
+      .set({ banned: true, banExpires })
+      .where(eq(schema.users.id, userId));
+  }
+
+  it("rejects a banned user's app password", async () => {
+    const { userId } = await signUp("banned-key@example.test");
+    const key = await createAppPassword(userId, "Kobo");
+    expect((await get("/api/books", { "x-api-key": key })).status).toBe(200);
+
+    await ban(userId, null);
+
+    expect((await get("/api/books", { "x-api-key": key })).status).toBe(401);
+    expect((await get("/api/books", { authorization: `Bearer ${key}` })).status).toBe(401);
+  });
+
+  it("challenges a banned user's OPDS reader rather than just erroring", async () => {
+    // An OPDS client that gets a bare 401 shows "broken server"; with the
+    // challenge it shows a login box. Refusing the ban must not cost that.
+    const { userId } = await signUp("banned-opds@example.test");
+    const key = await createAppPassword(userId, "KOReader");
+    await ban(userId, null);
+
+    const res = await app.request("/opds", { headers: { authorization: basic("x", key) } });
+
+    expect(res.status).toBe(401);
+    expect(res.headers.get("www-authenticate")).toMatch(/^Basic realm=/i);
+  });
+
+  it("lets a user back in once the ban has expired", async () => {
+    // `banned` stays true in the row; the expiry is what decides. Failing to
+    // honour it would turn every temporary ban into a permanent one for
+    // e-reader clients, which never sign in again to trigger the auto-unban.
+    const { userId } = await signUp("expired-ban@example.test");
+    const key = await createAppPassword(userId, "Kobo");
+
+    await ban(userId, new Date(Date.now() - 60_000));
+
+    expect((await get("/api/books", { "x-api-key": key })).status).toBe(200);
+  });
+
   it("treats a malformed session cookie as unauthenticated, not a stuck session", async () => {
     // The audit's cookie-shadowing finding (libris-7h7.56): a garbage value on
     // the session cookie must yield a clean unauthenticated response, never a

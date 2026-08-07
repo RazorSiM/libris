@@ -2,11 +2,15 @@ import { describe, expect, it } from "vite-plus/test";
 import { parseEnv, parseRedisUrl } from "./env";
 
 /**
- * BETTER_AUTH_SECRET is a new *required* variable — a deliberate breaking change
- * for deployments, with no fallback to API_SECRET_KEY. It signs session cookies,
- * so a missing or weak value has to stop the process at boot rather than surface
- * later as forgeable sessions.
+ * BETTER_AUTH_SECRET is a *required* variable — a deliberate breaking change for
+ * deployments, with no fallback to API_SECRET_KEY. It signs session cookies, so
+ * a missing, published or low-entropy value has to stop the process at boot
+ * rather than surface later as forgeable sessions.
  */
+
+/** A 32-character secret with real character diversity. */
+const GOOD_BETTER_AUTH_SECRET = "Jq7xW2pL9vRz4Kt1Nb8Hc3Ye6Ma0Sd5F";
+
 const VALID_ENV = {
   NODE_ENV: "production",
   POSTGRES_HOST: "localhost",
@@ -17,7 +21,9 @@ const VALID_ENV = {
   LIBRIS_INBOX_PATH: "/tmp/inbox",
   LIBRIS_LIBRARY_PATH: "/tmp/library",
   API_SECRET_KEY: "0123456789abcdef".repeat(2),
-  BETTER_AUTH_SECRET: "b".repeat(32),
+  BETTER_AUTH_SECRET: GOOD_BETTER_AUTH_SECRET,
+  // Required in production (libris-59m.1) — see the BETTER_AUTH_URL block below.
+  BETTER_AUTH_URL: "https://libris.example.com",
 };
 
 describe("parseEnv", () => {
@@ -30,7 +36,7 @@ describe("parseEnv", () => {
   it("accepts a complete environment", () => {
     const env = parseEnv(VALID_ENV);
 
-    expect(env.BETTER_AUTH_SECRET).toBe("b".repeat(32));
+    expect(env.BETTER_AUTH_SECRET).toBe(GOOD_BETTER_AUTH_SECRET);
     expect(env.DATABASE_URL).toContain("localhost");
     expect(env.LIBRIS_COOKIE_SECURE).toBe("1");
     expect(env.LIBRIS_HTTP_HEADERS_TIMEOUT_MS).toBe(10_000);
@@ -106,9 +112,39 @@ describe("parseEnv", () => {
     });
 
     it("accepts exactly 32 characters", () => {
-      const env = parseEnv({ ...VALID_ENV, BETTER_AUTH_SECRET: "b".repeat(32) });
+      expect(GOOD_BETTER_AUTH_SECRET).toHaveLength(32);
 
-      expect(env.BETTER_AUTH_SECRET).toBe("b".repeat(32));
+      expect(parseEnv({ ...VALID_ENV }).BETTER_AUTH_SECRET).toBe(GOOD_BETTER_AUTH_SECRET);
+    });
+
+    it("rejects the placeholder that used to ship in .env.example", () => {
+      // libris-59m.2: 46 characters, so `min(32)` passed it and every install
+      // that copied .env.example without editing this line signed its sessions
+      // with a secret published in a public repository.
+      expect(() =>
+        parseEnv({
+          ...VALID_ENV,
+          BETTER_AUTH_SECRET: "change-me-generate-with-openssl-rand-base64-32",
+        }),
+      ).toThrow(/placeholder/i);
+    });
+
+    it("rejects a long single-character string", () => {
+      // The suite used to bless "b".repeat(32) as a valid secret.
+      expect(() => parseEnv({ ...VALID_ENV, BETTER_AUTH_SECRET: "b".repeat(32) })).toThrow(
+        /diversity/i,
+      );
+    });
+
+    it("rejects API_SECRET_KEY's placeholder here too", () => {
+      // One shared blocklist: a leaked placeholder is public whichever variable
+      // it was written next to.
+      expect(() =>
+        parseEnv({
+          ...VALID_ENV,
+          BETTER_AUTH_SECRET: "change-me-generate-with-openssl-rand-hex-32",
+        }),
+      ).toThrow(/placeholder/i);
     });
 
     it("does not fall back to API_SECRET_KEY", () => {
@@ -122,16 +158,58 @@ describe("parseEnv", () => {
   });
 
   describe("BETTER_AUTH_URL", () => {
-    it("defaults to empty so Better Auth infers the origin from the request", () => {
-      // Production sits behind Traefik on https while the container listens on
-      // http, so any hardcoded default would be wrong more often than right.
-      expect(parseEnv(VALID_ENV).BETTER_AUTH_URL).toBe("");
+    it("is required in production", () => {
+      // libris-59m.1. Better Auth does NOT read x-forwarded-proto unless
+      // advanced.trustedProxyHeaders is set, so with no baseURL it derives the
+      // container's plain-http socket origin, makes that the only trusted
+      // origin, and answers every browser request carrying `Origin: https://…`
+      // with 403 INVALID_ORIGIN. Nobody can sign in. Refuse to boot instead.
+      const { BETTER_AUTH_URL: _omitted, ...withoutUrl } = VALID_ENV;
+
+      expect(() => parseEnv(withoutUrl)).toThrow(/BETTER_AUTH_URL/);
+      expect(() => parseEnv({ ...VALID_ENV, BETTER_AUTH_URL: "" })).toThrow(/BETTER_AUTH_URL/);
+    });
+
+    it("names the value to set in the failure message", () => {
+      const { BETTER_AUTH_URL: _omitted, ...withoutUrl } = VALID_ENV;
+
+      expect(() => parseEnv(withoutUrl)).toThrow(/https:\/\/libris\.example\.com/);
+    });
+
+    it("stays optional outside production, where the request origin is correct", () => {
+      const env = parseEnv({ ...VALID_ENV, NODE_ENV: "development", BETTER_AUTH_URL: "" });
+
+      expect(env.BETTER_AUTH_URL).toBe("");
     });
 
     it("is used when provided", () => {
       const env = parseEnv({ ...VALID_ENV, BETTER_AUTH_URL: "https://libris.example.com" });
 
       expect(env.BETTER_AUTH_URL).toBe("https://libris.example.com");
+    });
+
+    it("rejects a value that is not a bare http(s) origin", () => {
+      // Better Auth appends its own /api/auth basePath, so a value carrying a
+      // path silently produces the wrong cookie and redirect origin rather
+      // than an error.
+      for (const value of [
+        "libris.example.com",
+        "https://libris.example.com/api/auth",
+        "ftp://libris.example.com",
+        "https://user:pw@libris.example.com",
+        "https://libris.example.com/?x=1",
+      ]) {
+        expect(() => parseEnv({ ...VALID_ENV, BETTER_AUTH_URL: value }), value).toThrow(
+          /BETTER_AUTH_URL/,
+        );
+      }
+    });
+
+    it("accepts a trailing slash and an explicit port", () => {
+      expect(
+        parseEnv({ ...VALID_ENV, BETTER_AUTH_URL: "https://libris.example.com/" }),
+      ).toBeTruthy();
+      expect(parseEnv({ ...VALID_ENV, BETTER_AUTH_URL: "http://192.168.1.10:3000" })).toBeTruthy();
     });
   });
 

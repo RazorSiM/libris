@@ -4,6 +4,7 @@ import type { MiddlewareHandler } from "hono";
 import { appSettings, users } from "#db";
 import type { Db } from "#db";
 import type { AppVariables } from "../context.js";
+import { withTrustedClientIp } from "../shared/request-ip.js";
 
 const LAST_ADMIN_LOCK_KEY = "auth:last-admin-lock";
 
@@ -99,7 +100,16 @@ export const lastAdminMiddleware: MiddlewareHandler<{ Variables: AppVariables }>
 
   // Let Better Auth produce its normal unauthorized/forbidden response. The
   // invariant check must not reveal user or role information to other callers.
-  const session = await c.get("auth").api.getSession({ headers: c.req.raw.headers });
+  //
+  // withTrustedClientIp, not the raw headers (libris-59m.42). lib/auth.ts
+  // configures Better Auth to read the client address from one private header
+  // on the assumption that the app always overwrites it with the address
+  // resolved from the TCP peer — but app.ts only does that inside the
+  // /api/auth/* catch-all HANDLER, which runs after this middleware. Passing
+  // c.req.raw.headers here handed Better Auth whatever the client sent.
+  const session = await c
+    .get("auth")
+    .api.getSession({ headers: withTrustedClientIp(c.req.raw.headers, c.get("clientIp")) });
   if (!hasAdminRole(session?.user.role)) {
     await next();
     return;

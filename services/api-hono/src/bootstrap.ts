@@ -113,8 +113,10 @@ export async function bootstrap(env: Env): Promise<AppServices> {
     secondaryStorage: authStorage,
     env,
     secret: env.BETTER_AUTH_SECRET,
-    // Empty means "infer from the request", which is what production needs
-    // behind a TLS-terminating proxy.
+    // Required in production (env.ts refuses to boot without it) because the
+    // per-request fallback derives the container's plain-http origin and then
+    // rejects the browser's https Origin with 403 INVALID_ORIGIN. Empty is only
+    // reachable in dev/test, where deriving from the request is correct.
     baseURL: env.BETTER_AUTH_URL || undefined,
   });
 

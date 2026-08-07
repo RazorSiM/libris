@@ -1,4 +1,5 @@
 import type { PGlite } from "@electric-sql/pglite";
+import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vite-plus/test";
 import type { Db } from "#db";
 import { createTestDb, type TestDb } from "../db/test-utils.js";
@@ -226,6 +227,77 @@ describe("sessions", () => {
     ).toMatchObject({ user: { id: target.user.id } });
   });
 
+  /**
+   * libris-59m.5. The after-hook in createAuth() must not fire for a call that
+   * failed authorization.
+   *
+   * Better Auth's dispatcher catches the endpoint's APIError, stores it as the
+   * return value and runs after-hooks anyway, so the hook used to read `userId`
+   * straight off the request body of a REJECTED call and delete that user's
+   * sessions. No credential of any kind was needed.
+   */
+  it("does not touch the target's sessions when the caller has no credential", async () => {
+    const target = await auth.api.createUser({
+      body: { email: "victim@example.com", password: PASSWORD, name: "Victim" },
+    });
+    const victimCookie = cookieFrom(
+      await auth.api.signInEmail({
+        body: { email: "victim@example.com", password: PASSWORD },
+        asResponse: true,
+      }),
+    );
+    expect(await auth.api.getSession({ headers: new Headers({ cookie: victimCookie }) })).not.toBe(
+      null,
+    );
+
+    const rejection = await auth.api
+      .setUserPassword({
+        body: { userId: target.user.id, newPassword: "attacker-chosen-password" },
+      })
+      .then(() => null)
+      .catch((err: { statusCode?: number }) => err);
+
+    expect(rejection).toMatchObject({ statusCode: 401 });
+    // The session survives — this is the assertion that fails without the
+    // isAPIError guard.
+    expect(
+      await auth.api.getSession({ headers: new Headers({ cookie: victimCookie }) }),
+    ).not.toBeNull();
+    expect(await db.select().from(schema.sessions)).toHaveLength(1);
+    // ...and the password really was not changed either.
+    const stillWorks = await auth.api.signInEmail({
+      body: { email: "victim@example.com", password: PASSWORD },
+      asResponse: true,
+    });
+    expect(stillWorks.status).toBe(200);
+  });
+
+  it("does not touch the target's sessions when the caller is a plain user", async () => {
+    const target = await auth.api.createUser({
+      body: { email: "victim2@example.com", password: PASSWORD, name: "Victim" },
+    });
+    const victimCookie = cookieFrom(
+      await auth.api.signInEmail({
+        body: { email: "victim2@example.com", password: PASSWORD },
+        asResponse: true,
+      }),
+    );
+    const bystanderCookie = cookieFrom(await signUp("bystander@example.com"));
+
+    const rejection = await auth.api
+      .setUserPassword({
+        body: { userId: target.user.id, newPassword: "attacker-chosen-password" },
+        headers: new Headers({ cookie: bystanderCookie }),
+      })
+      .then(() => null)
+      .catch((err: { statusCode?: number }) => err);
+
+    expect(rejection).toMatchObject({ statusCode: 403 });
+    expect(
+      await auth.api.getSession({ headers: new Headers({ cookie: victimCookie }) }),
+    ).not.toBeNull();
+  });
+
   it("resolves a session cookie back to the user", async () => {
     const res = await signUp("reader@example.com");
     const session = await auth.api.getSession({
@@ -292,6 +364,80 @@ describe("sessions", () => {
     });
 
     expect(session).toBeNull();
+  });
+});
+
+/**
+ * libris-59m.6, part three: a ban must unpair the devices, not just close the
+ * browser sessions.
+ *
+ * middleware/auth.ts refuses a banned user's app-password session on every
+ * request, but the rows themselves have to go inactive too — otherwise an unban
+ * silently re-authorizes whatever was paired at ban time, including the device
+ * that may be the reason for the ban.
+ */
+describe("banning a user", () => {
+  async function banAdmin(email: string): Promise<Headers> {
+    await auth.api.createUser({
+      body: { email, password: PASSWORD, name: "Admin", role: "admin" },
+    });
+    return new Headers({
+      cookie: cookieFrom(
+        await auth.api.signInEmail({ body: { email, password: PASSWORD }, asResponse: true }),
+      ),
+    });
+  }
+
+  async function keysFor(userId: string) {
+    return await db.select().from(schema.apiKeys).where(eq(schema.apiKeys.referenceId, userId));
+  }
+
+  it("disables the banned user's app passwords, and only theirs", async () => {
+    const headers = await banAdmin("ban-admin@example.com");
+    const target = await auth.api.createUser({
+      body: { email: "bannable@example.com", password: PASSWORD, name: "Bannable" },
+    });
+    const bystander = await auth.api.createUser({
+      body: { email: "bystander2@example.com", password: PASSWORD, name: "Bystander" },
+    });
+    const key = await auth.api.createApiKey({ body: { userId: target.user.id, name: "Kobo" } });
+    await auth.api.createApiKey({ body: { userId: bystander.user.id, name: "Kindle" } });
+
+    // Paired and working before the ban.
+    expect(
+      await auth.api.getSession({ headers: new Headers({ "x-api-key": key.key }) }),
+    ).not.toBeNull();
+
+    await auth.api.banUser({ body: { userId: target.user.id }, headers });
+
+    expect(await keysFor(target.user.id)).toMatchObject([{ enabled: false }]);
+    // Kept, not deleted: the user can still see what was cut off.
+    expect(await keysFor(target.user.id)).toHaveLength(1);
+    expect(await keysFor(bystander.user.id)).toMatchObject([{ enabled: true }]);
+
+    // And the plugin itself now refuses the key (KEY_DISABLED), independently
+    // of the middleware's ban check.
+    const afterBan = await auth.api
+      .getSession({ headers: new Headers({ "x-api-key": key.key }) })
+      .catch((err: { statusCode?: number }) => err);
+    expect(afterBan).toMatchObject({ statusCode: 401 });
+  });
+
+  it("leaves app passwords alone when the ban itself is refused", async () => {
+    // The 59m.5 trap again: after-hooks run for a rejected call too, so an
+    // unauthenticated ban attempt must not disable anybody's devices.
+    const target = await auth.api.createUser({
+      body: { email: "not-banned@example.com", password: PASSWORD, name: "Safe" },
+    });
+    await auth.api.createApiKey({ body: { userId: target.user.id, name: "Kobo" } });
+
+    const rejection = await auth.api
+      .banUser({ body: { userId: target.user.id } })
+      .then(() => null)
+      .catch((err: { statusCode?: number }) => err);
+
+    expect(rejection).toMatchObject({ statusCode: 401 });
+    expect(await keysFor(target.user.id)).toMatchObject([{ enabled: true }]);
   });
 });
 
@@ -366,6 +512,97 @@ describe("listing your own devices", () => {
 
     expect(await auth.api.getSession({ headers: new Headers({ cookie: keeping }) })).not.toBeNull();
     expect(await auth.api.getSession({ headers: new Headers({ cookie: other }) })).toBeNull();
+  });
+});
+
+/**
+ * The production configuration branch (libris-59m.1).
+ *
+ * Everything above runs with NODE_ENV=test, which takes the dev
+ * `trustedOrigins` list. Production takes `trustedOrigins: []` and relies
+ * entirely on the origin Better Auth derives from `baseURL` — and with no
+ * baseURL it derives one from `request.url`, which @hono/node-server builds
+ * from the socket. Behind a TLS-terminating proxy that is `http://host`, while
+ * the browser sends `Origin: https://host`, and the mismatch is a 403.
+ */
+describe("production origin handling", () => {
+  const PUBLIC_ORIGIN = "https://libris.example.test";
+  /** What @hono/node-server sees: the container's own plain-http socket. */
+  const SOCKET_URL = "http://libris.example.test/api/auth/sign-in/email";
+
+  const PROD_ENV = {
+    NODE_ENV: "production",
+    // Rate limiting is orthogonal to origin checking, and leaving it on would
+    // let a 429 satisfy a "not 403" assertion.
+    E2E_TEST: "1",
+    TRUST_PROXY_HEADERS: "0",
+    LIBRIS_TRUSTED_PROXIES: [],
+    LIBRIS_COOKIE_SECURE: "1",
+  } as unknown as Env;
+
+  function productionAuth(baseURL: string | undefined): Auth {
+    return createAuth({
+      db: db as unknown as Db,
+      secondaryStorage: createMemorySecondaryStorage(),
+      env: PROD_ENV,
+      secret: "test-only-secret-at-least-32-characters-long",
+      baseURL,
+    });
+  }
+
+  /**
+   * A sign-in exactly as a browser sends it: https Origin, a cookie already in
+   * the jar, and a request URL the node adapter built from the plain-http
+   * socket.
+   *
+   * The cookie is load-bearing, not decoration. `validateOrigin` returns early
+   * unless the request carries one (`origin-check.mjs`: `if (!(forceValidate ||
+   * useCookies)) return`), so a cookie-less POST never reaches the trusted-origin
+   * comparison at all. Any browser that has visited the app once has a cookie,
+   * and every authenticated call — sign-out, revoke-session, mint an app
+   * password — carries the session cookie by definition.
+   */
+  function browserSignIn(instance: Auth, email: string): Promise<Response> {
+    return instance.handler(
+      new Request(SOCKET_URL, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          host: "libris.example.test",
+          origin: PUBLIC_ORIGIN,
+          cookie: "libris.theme=dark",
+        },
+        body: JSON.stringify({ email, password: PASSWORD }),
+      }),
+    );
+  }
+
+  it("signs a browser in over https when BETTER_AUTH_URL names the public origin", async () => {
+    const instance = productionAuth(PUBLIC_ORIGIN);
+    await instance.api.createUser({
+      body: { email: "proxied@example.com", password: PASSWORD, name: "Proxied" },
+    });
+
+    const res = await browserSignIn(instance, "proxied@example.com");
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("set-cookie")).toBeTruthy();
+  });
+
+  it("refuses the same sign-in when no base URL is configured", async () => {
+    // The defect itself, pinned. env.ts now refuses to boot a production
+    // process without BETTER_AUTH_URL precisely so this configuration cannot
+    // be reached; if a Better Auth upgrade ever makes this pass, the boot-time
+    // requirement can be revisited on purpose rather than by accident.
+    const instance = productionAuth(undefined);
+    await instance.api.createUser({
+      body: { email: "unproxied@example.com", password: PASSWORD, name: "Unproxied" },
+    });
+
+    const res = await browserSignIn(instance, "unproxied@example.com");
+
+    expect(res.status).toBe(403);
+    expect(await res.json()).toMatchObject({ code: "INVALID_ORIGIN" });
   });
 });
 

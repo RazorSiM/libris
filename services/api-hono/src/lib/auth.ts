@@ -5,7 +5,7 @@ import { drizzleAdapter } from "better-auth/adapters/drizzle";
 // direct database connections) out of the bundle entirely. Verified absent from
 // the bundle.
 import { betterAuth } from "better-auth/minimal";
-import { createAuthMiddleware } from "better-auth/api";
+import { createAuthMiddleware, isAPIError } from "better-auth/api";
 import { admin } from "better-auth/plugins/admin";
 import type { BetterAuthOptions } from "better-auth/types";
 import type { Db } from "#db";
@@ -35,10 +35,14 @@ export interface CreateAuthDeps {
    */
   secret: string;
   /**
-   * Omit to let Better Auth derive the origin from the incoming request, which
-   * is what production needs: the container listens on http behind a proxy that
-   * terminates https, so a fixed value would produce wrong cookie and redirect
-   * origins.
+   * The public origin users reach, e.g. `https://libris.example.com`.
+   *
+   * MUST be set in production. Omitting it makes Better Auth fall back to
+   * `getOrigin(request.url)` — the container's plain-http socket origin — and
+   * that single derived origin becomes the whole trusted-origin list, so every
+   * browser request carrying `Origin: https://...` is refused with 403
+   * INVALID_ORIGIN (libris-59m.1). env.ts enforces this at boot; only dev and
+   * test may leave it undefined.
    */
   baseURL?: string | undefined;
 }
@@ -171,17 +175,67 @@ export function createAuth({ db, secondaryStorage, env, secret, baseURL }: Creat
 
     hooks: {
       after: createAuthMiddleware(async (ctx) => {
-        if (ctx.path !== "/admin/set-user-password") return;
+        /**
+         * ⚠︎ INSPECT THE OUTCOME BEFORE ACTING. THIS IS NOT OPTIONAL.
+         *
+         * The dispatcher does not skip after-hooks when the endpoint fails.
+         * `dist/api/dispatch.mjs` wraps the endpoint call in a `.catch` that
+         * turns an APIError into `{response, status}`, assigns it to
+         * `ctx.context.returned`, and then runs `runAfterHooks`
+         * unconditionally. The admin plugin's authorization gate is
+         * `use: [adminMiddleware]` on the endpoint, so it runs *inside* that
+         * try block — an unauthorized caller's 401 arrives here as a value, not
+         * as a thrown error, and every line below would otherwise run for them.
+         *
+         * libris-59m.5: without this guard, an anonymous
+         * `POST /api/auth/admin/set-user-password` got its 401 and still
+         * signed the named user out of every device. Looped over admin ids it
+         * was a credential-free denial of service.
+         *
+         * Any future hook added here inherits the same trap.
+         */
+        if (isAPIError(ctx.context.returned)) return;
+
         const userId = (ctx.body as { userId?: unknown } | undefined)?.userId;
         if (typeof userId !== "string") return;
 
-        // An admin-set password is the recovery path for a forgotten or
-        // compromised credential. A captured browser session must not survive
-        // that recovery. Better Auth's own adapter call clears both Redis and
-        // the persisted session rows; deleting rows directly would leave the
-        // Redis-backed sessions valid until expiry. App passwords deliberately
-        // remain valid because they are separately managed device credentials.
-        await ctx.context.internalAdapter.deleteUserSessions(userId);
+        if (ctx.path === "/admin/set-user-password") {
+          // An admin-set password is the recovery path for a forgotten or
+          // compromised credential. A captured browser session must not survive
+          // that recovery. Better Auth's own adapter call clears both Redis and
+          // the persisted session rows; deleting rows directly would leave the
+          // Redis-backed sessions valid until expiry. App passwords deliberately
+          // remain valid because they are separately managed device credentials.
+          await ctx.context.internalAdapter.deleteUserSessions(userId);
+          return;
+        }
+
+        if (ctx.path === "/admin/ban-user") {
+          /**
+           * Unpair the banned user's devices (libris-59m.6).
+           *
+           * The plugin's own ban only deletes sessions, and an app password is
+           * not a session — it resolves into one on each request, so a banned
+           * user's Kobo, KOReader and curl scripts kept working indefinitely.
+           * middleware/auth.ts now refuses a banned user's app-password
+           * session too, but leaving live rows behind would mean an unban
+           * silently re-authorizes every device that was paired at ban time.
+           *
+           * DISABLED, NOT DELETED, and deliberately not re-enabled on unban:
+           * the row stays visible on the devices page so the user can see what
+           * was cut off and mint a replacement, and an unban never resurrects a
+           * credential that may be the reason for the ban. The `enabled` column
+           * is what the apiKey plugin checks (`KEY_DISABLED`), so a disabled
+           * row cannot authenticate even if the ban check were removed.
+           */
+          await ctx.context.adapter.updateMany({
+            // The plugin's model KEY, which the adapter maps to the configured
+            // modelName ("apiKeys") and thence to the api_keys table.
+            model: "apikey",
+            where: [{ field: "referenceId", value: userId }],
+            update: { enabled: false },
+          });
+        }
       }),
     },
 
@@ -207,6 +261,15 @@ export function createAuth({ db, secondaryStorage, env, secret, baseURL }: Creat
       // to NODE_ENV encouraged HTTP/LAN operators to select development mode,
       // which also changes unrelated test and logging behaviour.
       useSecureCookies: env.LIBRIS_COOKIE_SECURE === "1",
+      // Explicit for the same reason useSecureCookies is: left unset, Better
+      // Auth derives it from process.env.NODE_ENV — `disableOriginCheck:
+      // options.advanced?.disableOriginCheck ?? isTest()` in
+      // context/create-context.ts — and `isTest()` reads a NODE_ENV captured at
+      // module load. The whole origin defence therefore switched itself off
+      // under `NODE_ENV=test` and no unit test could ever exercise it, which is
+      // how libris-59m.1 shipped. Pinning it to false means the suite runs the
+      // same check production runs.
+      disableOriginCheck: false,
       // app.ts overwrites this private header with the address resolved from
       // the TCP peer and trusted-proxy CIDRs. Better Auth never reads raw
       // forwarded headers, so its session tracking and limiter cannot diverge.
