@@ -12,7 +12,11 @@ function copyToClipboard(text: string) {
   toast.add({ title: "Copied to clipboard", color: "success" });
 }
 
-const { appSettings, kosyncCredentials } = useSettingsStatusQuery();
+// `credentials.kosync` is the only KoSync signal in the status payload. The
+// `settings` block used to carry a second `kosyncConfigured` flag computed from
+// a table the kosync migration emptied, so this card showed "not configured"
+// however many times you saved (libris-59m.18).
+const { kosyncCredentials } = useSettingsStatusQuery();
 
 const credentialSchema = z.object({
   username: z.string().min(1, "Username is required"),
@@ -81,21 +85,19 @@ async function saveKosyncCredentials() {
     <USeparator class="my-3" />
 
     <UAlert
-      v-if="appSettings?.kosyncConfigured"
+      v-if="kosyncCredentials?.configured"
       icon="i-lucide-circle-check"
-      :title="
-        kosyncCredentials?.configured
-          ? `KoSync credentials configured — username: ${kosyncCredentials.username}`
-          : 'KoSync credentials are configured via environment variables.'
-      "
+      data-testid="kosync-configured-alert"
+      :title="`KoSync credentials configured — username: ${kosyncCredentials.username}`"
       color="success"
       variant="subtle"
     />
     <UAlert
       v-else
       icon="i-lucide-circle-alert"
+      data-testid="kosync-unconfigured-alert"
       title="KoSync is not configured"
-      description="Set credentials below, or use environment variables on the server."
+      description="Set a username and password below to pair a KOReader device."
       color="warning"
       variant="subtle"
     />

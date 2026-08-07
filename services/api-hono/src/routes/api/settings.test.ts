@@ -324,6 +324,57 @@ describe("GET /api/settings/status", () => {
     expect(body.credentials.opds.service).toBe("opds");
     expect(body.credentials.hardcover.service).toBe("hardcover");
   });
+
+  /**
+   * libris-59m.18. The admin payload used to answer the KoSync question twice:
+   * `credentials.kosync.configured`, read from kosync_credentials and correct,
+   * and `settings.kosyncConfigured`, read from service_credentials — a table
+   * the kosync migration emptied and no writer has touched since, so it was
+   * pinned to false. SettingsKosync.vue bound to the second one, so the red
+   * "KoSync is not configured" alert survived every save.
+   *
+   * Non-admins get `settings: null`, which is why the case above could never
+   * catch this: only an admin sees the block that was wrong.
+   */
+  it("reports one KoSync state to an admin, with no second flag to contradict it", async () => {
+    const admin = await seedSession({ label: "KoSync Admin", isAdmin: true });
+    const { app } = createTestApp();
+
+    // Save through the real route rather than seeding the table, so the test
+    // covers the writer and the reader agreeing on where the row lives.
+    const put = await app.request("/api/credentials/kosync", {
+      method: "PUT",
+      headers: {
+        cookie: admin.cookie,
+        "content-type": "application/json",
+        origin: "http://localhost:3000",
+      },
+      body: JSON.stringify({ username: "admin-on-the-kindle", password: "a-long-enough-secret" }),
+    });
+    expect(put.status).toBe(200);
+
+    const response = await app.request("/api/settings/status", {
+      method: "GET",
+      headers: { cookie: admin.cookie },
+    });
+    expect(response.status).toBe(200);
+    const body = await response.json();
+
+    expect(body.settings).not.toBeNull();
+    expect(body.credentials.kosync).toMatchObject({
+      configured: true,
+      username: "admin-on-the-kindle",
+    });
+    // The duplicate is gone, not merely repaired: a second field is a second
+    // chance to desync.
+    expect(body.settings).not.toHaveProperty("kosyncConfigured");
+    expect(Object.keys(body.settings).sort()).toEqual([
+      "hardcoverMetadataEnabled",
+      "hardcoverSyncEnabled",
+      "inboxPath",
+      "libraryPath",
+    ]);
+  });
 });
 
 describe("GET /api/settings", () => {

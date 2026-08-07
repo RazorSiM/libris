@@ -34,7 +34,7 @@ OPDS credentials are per-user, but the catalog itself is shared: every authentic
 
 KoSync syncs your reading position from KOReader devices back into Libris. The server URL is shown here as `<host>/kosync`, with a copy button.
 
-Set a username and password in the **Set KoSync Credentials** form. KOReader sends an md5-hashed password, so Libris stores the password as `bcrypt(md5(password))`. Credentials can also be supplied via environment variables on the server; in that case the tab shows that KoSync is configured via environment variables.
+Set a username and password in the **Set KoSync Credentials** form. This is the only place KoSync credentials can be set — there is no `KOSYNC_*` environment variable, and there never was. Once saved, the tab shows the configured username.
 
 To connect a device, in KOReader go to **Settings -> Cloud sync -> Progress sync -> Custom server** and enter the URL shown on this tab.
 
