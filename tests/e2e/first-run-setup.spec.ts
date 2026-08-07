@@ -34,7 +34,20 @@ async function anonymousApi() {
   return await playwrightRequest.newContext({ storageState: { cookies: [], origins: [] } });
 }
 
-test.describe.serial("first-run setup", { tag: "@smoke" }, () => {
+/**
+ * Deliberately NOT `@smoke`, and it cannot be — see the `first-run` project in
+ * playwright.config.ts.
+ *
+ * That project declares `dependencies: ["chromium"]` to force this file last.
+ * Playwright does not apply `--grep` to a dependency project; it runs the whole
+ * thing. So tagging anything here silently drags the ENTIRE chromium project
+ * into the PR run — measured while writing this, the smoke selection went from
+ * 136 tests to all 175, and the gate stopped being a gate.
+ *
+ * First-run setup therefore runs on main only. If you want it on PRs, the
+ * honest change is to run the whole suite on PRs, not to tag this file.
+ */
+test.describe.serial("first-run setup", () => {
   test("offers setup on an empty install, then closes for good", async ({ page }) => {
     const api = await anonymousApi();
     await api.post(`${API_BASE}/__test/cleanup`, {

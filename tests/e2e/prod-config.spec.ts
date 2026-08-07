@@ -15,13 +15,16 @@
  * cannot sign in" was invisible to all of it.
  *
  * What this covers, and nothing more: an install configured the way a real
- * deployment is — `NODE_ENV=production`, no `E2E_TEST`, no
- * `TEST_ROUTE_TOKEN`, and **no `BETTER_AUTH_URL`**, which is the documented
- * default for a container behind a TLS-terminating proxy that cannot know its
- * own public URL. That last one is the point: with it unset, Better Auth has to
- * derive its trusted origin from the request, and `trustedOrigins` being empty
- * in production is precisely what turns every cookie-bearing POST into a 403
- * INVALID_ORIGIN.
+ * deployment is — `NODE_ENV=production`, no `E2E_TEST`, no `TEST_ROUTE_TOKEN`,
+ * and `BETTER_AUTH_URL` set to the origin the browser actually drives.
+ *
+ * That last one is the crux. `trustedOrigins` is `[]` in production and Better
+ * Auth resolves its trusted origin from `baseURL` ONCE, at startup — so an
+ * absent or wrong `BETTER_AUTH_URL` does not fail to boot, it turns every
+ * cookie-bearing POST into a 403 INVALID_ORIGIN. `env.ts` requires the variable
+ * in production for exactly that reason. What nothing else can check is whether
+ * the required value is SUFFICIENT, and the sign-out below is what proves it:
+ * sign-out is a cookie-bearing POST, so the origin check runs on it in full.
  *
  * There are no support routes here, so this drives everything the way a person
  * would: first-run setup, sign out, sign in, replay the cookie.
@@ -85,10 +88,10 @@ test.describe.serial("production configuration", () => {
   });
 
   test("signing out and back in works against the production origin check", async ({ page }) => {
-    // The assertion that fails when production's trustedOrigins cannot resolve:
-    // sign-out is a cookie-bearing POST, so Better Auth's origin check runs on
-    // it in full. A 403 INVALID_ORIGIN leaves the browser on /settings and this
-    // times out on the URL.
+    // The assertion that fails when production's trusted origin does not
+    // resolve to what the browser sends: sign-out is a cookie-bearing POST, so
+    // Better Auth's origin check runs on it in full. A 403 INVALID_ORIGIN
+    // leaves the browser on /settings and this times out on the URL.
     await signInThroughUi(page, ADMIN.email, ADMIN.password);
     await expect(page.getByRole("link", { name: "Home" })).toBeVisible();
 

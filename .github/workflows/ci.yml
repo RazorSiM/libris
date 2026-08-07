@@ -263,9 +263,13 @@ jobs:
   # split in bootstrap.ts, and the logger transport. This job runs the other
   # side, over the sign-in / sign-out / session-revoke path only.
   #
-  # BETTER_AUTH_URL is deliberately unset: that is the documented default for a
-  # container behind a TLS-terminating proxy, and it is the configuration in
-  # which "production deployments cannot sign in" appears.
+  # BETTER_AUTH_URL is set here and nowhere else in this file. trustedOrigins is
+  # empty under NODE_ENV=production and Better Auth resolves its trusted origin
+  # from baseURL ONCE at startup, so with no baseURL it resolves to nothing and
+  # every cookie-bearing POST becomes a 403 INVALID_ORIGIN — which is how
+  # "production deployments cannot sign in" happened. env.ts now requires the
+  # variable in production for that reason; this job is what proves the required
+  # value is actually sufficient to sign in, sign out and revoke with.
   e2e-prod-config:
     runs-on: ubuntu-latest
     container: mcr.microsoft.com/playwright:v1.60.0-jammy
@@ -295,6 +299,11 @@ jobs:
       NODE_ENV: production
       # No E2E_TEST and no TEST_ROUTE_TOKEN: the support routes must not exist
       # here, and prod-config.spec.ts asserts they do not.
+      #
+      # Required under NODE_ENV=production, and it must be the origin the
+      # browser actually drives — Playwright's baseURL is this same value, since
+      # Hono serves the SPA and the API from one port.
+      BETTER_AUTH_URL: http://localhost:3000
       # Plain HTTP in front of the browser, so the Secure attribute has to come
       # off or Chromium discards the session cookie. This is the one production
       # setting a real HTTPS deployment would leave at its default.

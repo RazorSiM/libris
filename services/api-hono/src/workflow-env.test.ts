@@ -112,11 +112,14 @@ describe("E2E harness environments", () => {
       expect(env.TEST_ROUTE_TOKEN).toBeUndefined();
     });
 
-    it("leaves BETTER_AUTH_URL unset", () => {
-      // Setting it would hand Better Auth the trusted origin it is supposed to
-      // derive from the request, which is the exact branch this job exists to
-      // exercise.
-      expect(parseEnv({ ...read(), PORT: "3000" }).BETTER_AUTH_URL).toBe("");
+    it("points BETTER_AUTH_URL at the origin the browser drives", () => {
+      // trustedOrigins is empty in production and Better Auth resolves its
+      // trusted origin from baseURL once, at startup. A value that disagrees
+      // with the browser's origin does not fail to boot — it 403s every
+      // cookie-bearing POST with INVALID_ORIGIN, which is the shape of the bug
+      // this job exists to catch. Playwright's baseURL is this same value,
+      // because Hono serves the SPA and the API from one port.
+      expect(parseEnv({ ...read(), PORT: "3000" }).BETTER_AUTH_URL).toBe("http://localhost:3000");
     });
   });
 

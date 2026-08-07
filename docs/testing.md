@@ -6,26 +6,26 @@
 
 ### Test Files
 
-| File                       | Tests | Tags            | Coverage                                                                                                                              |
-| -------------------------- | ----- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `account.spec.ts`          | 17    | @smoke (4)      | Profile, password changes, session and device management, account access                                                              |
-| `auth.spec.ts`             | 47    | mostly @smoke   | Sign-in, sessions, authorization, app passwords, OPDS authentication, user management                                                 |
-| `book-progress.spec.ts`    | 3     | @smoke          | Multi-device progress, empty state, finished badge                                                                                    |
-| `command-palette.spec.ts`  | 3     | —               | Global search modal, navigation, book results                                                                                         |
-| `errors.spec.ts`           | 5     | @smoke / @slow  | Error toasts, conflict handling, network failures, and duplicate file detection                                                       |
-| `first-run-setup.spec.ts`  | 2     | @smoke          | Empty-install setup and first-admin creation                                                                                          |
-| `hardcover.spec.ts`        | 10    | @smoke          | Token CRUD, status, sync button/log, feature toggles, persistence                                                                     |
-| `home.spec.ts`             | 6     | @smoke          | Dashboard stats, currently reading, recently added, wide-screen card constraints                                                      |
-| `inbox.spec.ts`            | 16    | @smoke          | List, search, pagination, empty state, metadata picker, approve, delete                                                               |
-| `ingestion.spec.ts`        | 1     | @slow @external | Full EPUB pipeline: detect → parse → review → approve → library                                                                       |
-| `library.spec.ts`          | 18    | @smoke          | Grid/list view, filters, search, pagination, detail page, covers, downloads                                                           |
-| `isolation.spec.ts`        | 10    | @smoke (6)      | Ownership controls, per-user progress and stats, credential persistence, cache and upload isolation                                   |
-| `prod-config.spec.ts`      | 4     | prod-config     | Production-config install: first-run setup, sign-in, sign-out, session revocation. Only runs in the `e2e-prod-config` CI job          |
-| `opds.spec.ts`             | 2     | @smoke          | Real-filesystem cover and ebook streaming through the live server                                                                     |
-| `reading-status.spec.ts`   | 8     | @smoke          | Sidebar links, status tabs, empty state, wide-screen cards, plus a parametrized loop covering the reading/finished/unread/paused tabs |
-| `settings.spec.ts`         | 8     | @smoke (4)      | Health & diagnostics (@smoke); jobs browser and queue management untagged                                                             |
-| `stats.spec.ts`            | 7     | @smoke          | Books finished, streaks, daily activity, genre distribution                                                                           |
-| `websocket-events.spec.ts` | 6     | @smoke (1)      | Realtime event bus over WebSocket — job status, pipeline events, Hardcover sync updates                                               |
+| File                       | Tests | Tags            | Coverage                                                                                                                                    |
+| -------------------------- | ----- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `account.spec.ts`          | 17    | @smoke (4)      | Profile, password changes, session and device management, account access                                                                    |
+| `auth.spec.ts`             | 47    | mostly @smoke   | Sign-in, sessions, authorization, app passwords, OPDS authentication, user management                                                       |
+| `book-progress.spec.ts`    | 3     | @smoke          | Multi-device progress, empty state, finished badge                                                                                          |
+| `command-palette.spec.ts`  | 3     | —               | Global search modal, navigation, book results                                                                                               |
+| `errors.spec.ts`           | 5     | @smoke / @slow  | Error toasts, conflict handling, network failures, and duplicate file detection                                                             |
+| `first-run-setup.spec.ts`  | 2     | — (see below)   | Empty-install setup and first-admin creation. Cannot be tagged — its project depends on `chromium`, and dependency projects ignore `--grep` |
+| `hardcover.spec.ts`        | 10    | @smoke          | Token CRUD, status, sync button/log, feature toggles, persistence                                                                           |
+| `home.spec.ts`             | 6     | @smoke          | Dashboard stats, currently reading, recently added, wide-screen card constraints                                                            |
+| `inbox.spec.ts`            | 16    | @smoke          | List, search, pagination, empty state, metadata picker, approve, delete                                                                     |
+| `ingestion.spec.ts`        | 1     | @slow @external | Full EPUB pipeline: detect → parse → review → approve → library                                                                             |
+| `library.spec.ts`          | 18    | @smoke          | Grid/list view, filters, search, pagination, detail page, covers, downloads                                                                 |
+| `isolation.spec.ts`        | 10    | @smoke (6)      | Ownership controls, per-user progress and stats, credential persistence, cache and upload isolation                                         |
+| `prod-config.spec.ts`      | 4     | prod-config     | Production-config install: first-run setup, sign-in, sign-out, session revocation. Only runs in the `e2e-prod-config` CI job                |
+| `opds.spec.ts`             | 2     | @smoke          | Real-filesystem cover and ebook streaming through the live server                                                                           |
+| `reading-status.spec.ts`   | 8     | @smoke          | Sidebar links, status tabs, empty state, wide-screen cards, plus a parametrized loop covering the reading/finished/unread/paused tabs       |
+| `settings.spec.ts`         | 8     | @smoke (4)      | Health & diagnostics (@smoke); jobs browser and queue management untagged                                                                   |
+| `stats.spec.ts`            | 7     | @smoke          | Books finished, streaks, daily activity, genre distribution                                                                                 |
+| `websocket-events.spec.ts` | 6     | @smoke (1)      | Realtime event bus over WebSocket — job status, pipeline events, Hardcover sync updates                                                     |
 
 > **Note:** Feed structure, search, language filtering, authentication, and content-type
 > contracts live in `services/api-hono/src/routes/opds.test.ts`. `opds.spec.ts` retains only
@@ -47,7 +47,7 @@ Untagged specs (command palette, jobs browser, most WebSocket cases) validate be
 `--grep @smoke` on pull requests and the full suite only on pushes to main, so an
 untagged spec first executes _after_ the merge that broke it. That is not a
 theoretical cost: the auth work on this branch initially left `account.spec.ts`,
-`isolation.spec.ts`, `first-run-setup.spec.ts` and every `auth.spec.ts` block
+`isolation.spec.ts`, `websocket-events.spec.ts` and every `auth.spec.ts` block
 except `sign-in` untagged, which meant app passwords, app-password scoping, OPDS
 Basic auth, the admin user-management walk and the last-admin 409 were not
 gating anything.
@@ -55,25 +55,36 @@ gating anything.
 The rule now: **anything that pins an authentication, authorization, ownership or
 session invariant carries `@smoke`.** Concretely that is the sign-in,
 post-sign-in redirect, session, authorization, app-password, app-password-scope,
-OPDS and user-management blocks of `auth.spec.ts`; all of
-`first-run-setup.spec.ts`; the ownership, per-user stats, sign-out cache and
-upload-collision blocks of `isolation.spec.ts`; the WebSocket per-user event
-scoping case; and the password-change, session-token-leak, device-revocation and
-non-admin-access cases in `account.spec.ts`. Presentation and convenience
-coverage stays untagged so the gate stays a gate.
+OPDS and user-management blocks of `auth.spec.ts`; the ownership, per-user
+stats, sign-out cache and upload-collision blocks of `isolation.spec.ts`; the
+WebSocket per-user event scoping case; and the password-change,
+session-token-leak, device-revocation and non-admin-access cases in
+`account.spec.ts`. Presentation and convenience coverage stays untagged so the
+gate stays a gate. That takes the PR selection from 89 tests to 136.
+
+::: warning `first-run-setup.spec.ts` cannot be tagged
+Its `first-run` project declares `dependencies: ["chromium"]` so it sorts last —
+it wipes every account, so nothing may follow it. Playwright does **not** apply
+`--grep` to a dependency project: it runs the whole thing. Tagging anything in
+that file therefore drags the entire `chromium` project into the PR run (136
+tests becomes all 175) and the gate silently stops being a gate.
+
+First-run setup runs on main only. If you want it on PRs, the honest change is
+to run the full suite on PRs, not to tag the file.
+:::
 
 ### What CI actually exercises
 
 Green does not mean "every configuration works" — it means the configurations
 below were tried.
 
-| Config branch                                     | Exercised by                                  | Notes                                                                                                                                |
-| ------------------------------------------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `NODE_ENV=development` + `E2E_TEST=1`, plain HTTP | `e2e` job (3 shards), `./scripts/test-e2e.sh` | The main suite. Dev `trustedOrigins`, in-memory KV and secondary storage, `/__test/*` mounted, Better Auth rate limiting relaxed.    |
-| `NODE_ENV=production`, no `E2E_TEST`, plain HTTP  | `e2e-prod-config` job (`prod-config.spec.ts`) | Empty `trustedOrigins` with `BETTER_AUTH_URL` unset, Redis-backed KV and secondary storage, no support routes, Pino logging.         |
-| `NODE_ENV=test`                                   | `vp run test` (Vitest, PGlite)                | Unit and integration only — never boots a real server.                                                                               |
-| Real HTTPS / a TLS-terminating reverse proxy      | **Nothing**                                   | `LIBRIS_COOKIE_SECURE=1`, `Secure` cookies, `TRUST_PROXY_HEADERS=1` and forwarded-header handling are covered by unit tests at best. |
-| `NODE_ENV=development` without `E2E_TEST`         | **Nothing**                                   | The interactive dev path, including the pretty-terminal logger transport.                                                            |
+| Config branch                                     | Exercised by                                  | Notes                                                                                                                                      |
+| ------------------------------------------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `NODE_ENV=development` + `E2E_TEST=1`, plain HTTP | `e2e` job (3 shards), `./scripts/test-e2e.sh` | The main suite. Dev `trustedOrigins`, in-memory KV and secondary storage, `/__test/*` mounted, Better Auth rate limiting relaxed.          |
+| `NODE_ENV=production`, no `E2E_TEST`, plain HTTP  | `e2e-prod-config` job (`prod-config.spec.ts`) | Empty `trustedOrigins` resolved from a required `BETTER_AUTH_URL`, Redis-backed KV and secondary storage, no support routes, Pino logging. |
+| `NODE_ENV=test`                                   | `vp run test` (Vitest, PGlite)                | Unit and integration only — never boots a real server.                                                                                     |
+| Real HTTPS / a TLS-terminating reverse proxy      | **Nothing**                                   | `LIBRIS_COOKIE_SECURE=1`, `Secure` cookies, `TRUST_PROXY_HEADERS=1` and forwarded-header handling are covered by unit tests at best.       |
+| `NODE_ENV=development` without `E2E_TEST`         | **Nothing**                                   | The interactive dev path, including the pretty-terminal logger transport.                                                                  |
 
 The last two rows are the standing gap. Read them before concluding that a green
 matrix clears a deployment change.

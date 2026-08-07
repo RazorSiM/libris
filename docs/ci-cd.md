@@ -114,7 +114,7 @@ The production configuration branch — runs on both PRs and pushes to main, dep
 
 **What it runs.** `vp exec playwright test --project=prod-config`, with `E2E_PROD_CONFIG=1`. That variable reshapes `tests/e2e/playwright.config.ts` into a one-project run over `prod-config.spec.ts`, and short-circuits `global-setup.ts` after the database reset — there are no support routes and no seeded accounts, so the spec drives first-run setup, sign-out, sign-in and cookie replay through the browser.
 
-**The configuration under test:** `NODE_ENV=production`, no `E2E_TEST`, no `TEST_ROUTE_TOKEN`, and **`BETTER_AUTH_URL` deliberately unset** — the documented default for a container behind a TLS-terminating proxy, and the configuration in which the origin check has to resolve a trusted origin from the request. `LIBRIS_COOKIE_SECURE=0` is the single concession to running over plain HTTP; Chromium would otherwise discard the session cookie.
+**The configuration under test:** `NODE_ENV=production`, no `E2E_TEST`, no `TEST_ROUTE_TOKEN`, and `BETTER_AUTH_URL` set to the origin the browser drives. That last one is the crux: `trustedOrigins` is `[]` in production and Better Auth resolves its trusted origin from `baseURL` **once, at startup**, so an absent or wrong `BETTER_AUTH_URL` does not fail to boot — it turns every cookie-bearing POST into a 403 `INVALID_ORIGIN`. `env.ts` requires the variable in production for that reason; this job is what proves the required value is _sufficient_ to sign in, sign out and revoke with. `LIBRIS_COOKIE_SECURE=0` is the single concession to running over plain HTTP; Chromium would otherwise discard the session cookie.
 
 It gets its own `libris_prod_test` database and its own Redis so it cannot disturb the sharded suite.
 
@@ -201,8 +201,9 @@ LIBRIS_API_LOG=/tmp/e2e-prod-api.log
 Three variables are **absent on purpose** and the job is pointless without that:
 `E2E_TEST` (would be refused by `bootstrap.ts`, and would mount support routes a
 production build must not have), `TEST_ROUTE_TOKEN` (same), and
-`BETTER_AUTH_URL` (setting it hands Better Auth the trusted origin it is
-supposed to derive from the request, which is the branch under test).
+`BETTER_AUTH_URL` — present here and nowhere else, because `env.ts` requires it
+under `NODE_ENV=production` and the whole point of the job is to check the
+required value actually works.
 
 ## Release (release.yml)
 
