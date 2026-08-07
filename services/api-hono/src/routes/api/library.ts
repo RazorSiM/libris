@@ -1,4 +1,5 @@
-import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
+import { createRoute, z } from "@hono/zod-openapi";
+import { createOpenApiRouter } from "../../shared/openapi.js";
 import { HTTPException } from "hono/http-exception";
 import { and, asc, count, desc, eq, ilike, inArray, isNotNull, ne, or, sql } from "drizzle-orm";
 import { createReadStream, existsSync, realpathSync } from "node:fs";
@@ -411,7 +412,7 @@ function formatUploader(row: { uploaderId: string | null; uploaderLabel: string 
   return { id: row.uploaderId, label: row.uploaderLabel };
 }
 
-export const libraryRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
+export const libraryRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
   // --- GET / (list) ---
   .openapi(listRoute, async (c) => {
     const { page, limit, author, genre, language, series, uploaderId, q, sort } =

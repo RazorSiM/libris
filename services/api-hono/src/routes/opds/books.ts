@@ -1,4 +1,5 @@
-import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
+import { createRoute, z } from "@hono/zod-openapi";
+import { createOpenApiRouter } from "../../shared/openapi.js";
 import { eq, count, inArray, and } from "drizzle-orm";
 import { HTTPException } from "hono/http-exception";
 import { books, bookColumns, bookFiles } from "#db";
@@ -74,7 +75,7 @@ const getBookRoute = createRoute({
 
 // ── Handlers ────────────────────────────────────────────────────────
 
-export const opdsBooksRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
+export const opdsBooksRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
   .openapi(listBooksRoute, async (c) => {
     const { page: rawPage } = c.req.valid("query");
     const page = rawPage ?? 1;

@@ -1,4 +1,5 @@
-import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
+import { createRoute, z } from "@hono/zod-openapi";
+import { createOpenApiRouter } from "../../shared/openapi.js";
 import { and, desc, eq } from "drizzle-orm";
 import { HTTPException } from "hono/http-exception";
 import { apiKeys } from "#db";
@@ -57,13 +58,25 @@ const AppPasswordCreatedSchema = AppPasswordSchema.extend({
   }),
 }).openapi("AppPasswordCreated");
 
+/**
+ * The apiKey plugin enforces its own `maximumNameLength`, 32 by default, and
+ * `lib/auth.ts` does not raise it. This schema used to allow 200, so a label
+ * of 33 to 200 characters passed validation and was then rejected inside the
+ * plugin — an APIError the handler did not catch, i.e. a 500 for ordinary user
+ * input typed straight into the form. Keep this number, the plugin's limit and
+ * the Vue form's limit equal; raise all three together if 32 proves too short.
+ */
+export const MAX_APP_PASSWORD_NAME_LENGTH = 32;
+
 const CreateBodySchema = z
   .object({
     name: z
       .string()
       .min(1)
-      .max(200)
-      .openapi({ description: "Label for the device or script this is for" }),
+      .max(MAX_APP_PASSWORD_NAME_LENGTH)
+      .openapi({
+        description: `Label for the device or script this is for, at most ${MAX_APP_PASSWORD_NAME_LENGTH} characters`,
+      }),
   })
   .openapi("AppPasswordCreate");
 
@@ -123,7 +136,7 @@ const deleteRoute = createRoute({
   },
 });
 
-export const appPasswordRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
+export const appPasswordRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
   .openapi(listRoute, async (c) => {
     const db = c.get("db");
     const userId = getUserId(c);

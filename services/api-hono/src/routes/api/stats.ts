@@ -1,4 +1,5 @@
-import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
+import { createRoute, z } from "@hono/zod-openapi";
+import { createOpenApiRouter } from "../../shared/openapi.js";
 import { sql } from "drizzle-orm";
 import { books, readingAggregate, readingProgress, readingProgressHistory } from "#db";
 import type { AppVariables } from "../../context.js";
@@ -115,7 +116,7 @@ const statsRoute = createRoute({
 
 // ── Router ───────────────────────────────────────────────────────
 
-const router = new OpenAPIHono<{ Variables: AppVariables }>();
+const router = createOpenApiRouter<{ Variables: AppVariables }>();
 router.use("/", cachedRoute({ maxAge: 60 }));
 
 /**

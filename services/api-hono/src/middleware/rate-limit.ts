@@ -5,9 +5,17 @@ import type { RateLimitTier } from "../services/rate-limit.js";
 import { getCredentialRateLimitKey, getIpRateLimitKey } from "../shared/request-ip.js";
 
 export function resolveRateLimitTiers(path: string, method: string): RateLimitTier[] {
-  // Liveness must remain observable when Redis is unavailable. The handler
-  // reports Redis as degraded using the bounded request-path connection.
-  if (path === "/api/health") return [];
+  // /api/health takes the general tier like everything else.
+  //
+  // It used to be exempt, justified as "liveness must remain observable when
+  // Redis is unavailable" — but the general tier already provides exactly that:
+  // services/rate-limit.ts catches a store failure, logs "Rate limit check
+  // failed, allowing request" and allows the request for every tier that is not
+  // auth/keyCreation. The exemption bought nothing and removed the only bound
+  // on an unauthenticated endpoint that costs a "SELECT 1" round-trip and a
+  // Redis PING per call, and that access-log.ts also skips — so a flood of it
+  // saturated the connection pool leaving no trace. 600/min per source is three
+  // orders of magnitude above any orchestrator probe interval.
 
   // Better Auth rate-limits its own prefix, with per-endpoint windows far
   // tighter than anything here (three requests per ten seconds on sign-in,
@@ -39,12 +47,40 @@ export function resolveRateLimitTiers(path: string, method: string): RateLimitTi
   if (isCredentialCheck) {
     tiers.push("auth");
   } else {
-    // Default closed: static files, unknown paths and any future namespace are
-    // bounded too. Explicitly exempt only health and Better Auth above.
+    // Default closed: health, static files, unknown paths and any future
+    // namespace are bounded too. Only Better Auth's own prefix is exempt.
     tiers.push("general");
   }
 
   return tiers;
+}
+
+/**
+ * Ceiling on a body this middleware is willing to parse.
+ *
+ * The only fields it reads are a username and an email, so a few kilobytes is
+ * already generous. bodyLimitMiddleware runs first (app.ts) and caps every body
+ * at 1 MB, so this is defence in depth: if the two are ever reordered, the
+ * limiter still refuses to buffer something large.
+ *
+ * A caller that pads its body past this loses its per-credential bucket and
+ * falls back to the per-IP tiers, which is the safe direction — refusing the
+ * request outright would turn a rate-limit detail into a new way to reject
+ * legitimate traffic.
+ */
+const MAX_CREDENTIAL_BODY_BYTES = 8192;
+
+async function readCredentialBody(c: {
+  req: { header: (name: string) => string | undefined; raw: Request };
+}): Promise<Record<string, unknown> | null> {
+  const declared = c.req.header("content-length");
+  if (declared !== undefined && Number(declared) > MAX_CREDENTIAL_BODY_BYTES) return null;
+
+  const body: unknown = await c.req.raw
+    .clone()
+    .json()
+    .catch(() => null);
+  return typeof body === "object" && body !== null ? (body as Record<string, unknown>) : null;
 }
 
 export const rateLimitMiddleware = createMiddleware<{ Variables: AppVariables }>(
@@ -79,12 +115,18 @@ export const rateLimitMiddleware = createMiddleware<{ Variables: AppVariables }>
     // source addresses cannot reset attempts against one account.
     let credentialIdentifier: string | undefined;
     if (path === "/kosync/users/auth") {
+      // Two shapes for one credential check. GET carries the username in
+      // x-auth-user; POST carries it in the JSON body — and takes the PLAINTEXT
+      // password, so it is the better oracle of the two and needs the budget
+      // more. Without reading the body, POST attempts accumulated only per
+      // source address and an attacker rotating addresses never spent one.
       credentialIdentifier = c.req.header("x-auth-user");
+      if (!credentialIdentifier && method === "POST") {
+        const body = await readCredentialBody(c);
+        if (typeof body?.username === "string") credentialIdentifier = body.username;
+      }
     } else if (path === "/api/auth/sign-in/email" && method === "POST") {
-      const body = (await c.req.raw
-        .clone()
-        .json()
-        .catch(() => null)) as { email?: unknown } | null;
+      const body = await readCredentialBody(c);
       if (typeof body?.email === "string") credentialIdentifier = body.email;
     }
     if (credentialIdentifier) {

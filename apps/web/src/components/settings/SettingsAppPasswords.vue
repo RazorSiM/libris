@@ -13,8 +13,15 @@ const deletingKeyId = ref<string | null>(null);
 const pendingDeleteKeyId = ref<string | null>(null);
 
 // New key form
+// 32 is the server's limit (routes/api/app-passwords.ts, and the apiKey
+// plugin's own maximumNameLength behind it). A longer label used to pass this
+// form, pass the API's zod schema, and come back as a 500.
+const MAX_LABEL_LENGTH = 32;
 const createSchema = z.object({
-  label: z.string().min(1, "Label is required").max(50, "Max 50 characters"),
+  label: z
+    .string()
+    .min(1, "Label is required")
+    .max(MAX_LABEL_LENGTH, `Max ${MAX_LABEL_LENGTH} characters`),
 });
 const createForm = reactive({ label: "" });
 
@@ -120,6 +127,7 @@ function dismissRevealedKey() {
           <UInput
             v-model="createForm.label"
             placeholder="e.g. Kobo Clara, laptop script"
+            :maxlength="MAX_LABEL_LENGTH"
             class="w-full"
             data-testid="field-new-key-label"
           />

@@ -1,4 +1,5 @@
-import { OpenAPIHono, createRoute } from "@hono/zod-openapi";
+import { createRoute } from "@hono/zod-openapi";
+import { createOpenApiRouter } from "../../shared/openapi.js";
 import { HTTPException } from "hono/http-exception";
 import { and, eq } from "drizzle-orm";
 import { hash } from "bcryptjs";
@@ -96,7 +97,7 @@ const deleteCredentialRoute = createRoute({
 
 // ── Router ───────────────────────────────────────────────────────
 
-export const credentialsRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
+export const credentialsRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
   .openapi(getCredentialRoute, async (c) => {
     const { service } = c.req.valid("param");
     const db = c.get("db");

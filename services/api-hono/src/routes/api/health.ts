@@ -1,4 +1,5 @@
-import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
+import { createRoute, z } from "@hono/zod-openapi";
+import { createOpenApiRouter } from "../../shared/openapi.js";
 import { sql } from "drizzle-orm";
 import type { AppVariables } from "../../context.js";
 import { isRedisHealthy } from "../../services/redis.js";
@@ -60,7 +61,7 @@ const healthRoute = createRoute({
   },
 });
 
-export const healthRoutes = new OpenAPIHono<{ Variables: AppVariables }>().openapi(
+export const healthRoutes = createOpenApiRouter<{ Variables: AppVariables }>().openapi(
   healthRoute,
   async (c) => {
     const db = c.get("db");

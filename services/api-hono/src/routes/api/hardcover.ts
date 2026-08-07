@@ -1,4 +1,5 @@
-import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
+import { createRoute, z } from "@hono/zod-openapi";
+import { createOpenApiRouter } from "../../shared/openapi.js";
 import { HTTPException } from "hono/http-exception";
 import { and, eq, desc } from "drizzle-orm";
 import { serviceCredentials, hardcoverSyncLog, books } from "#db";
@@ -135,7 +136,7 @@ const searchRoute = createRoute({
 
 // ── Router ───────────────────────────────────────────────────────
 
-export const hardcoverRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
+export const hardcoverRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
   .openapi(statusRoute, async (c) => {
     const db = c.get("db");
     const env = c.get("env");

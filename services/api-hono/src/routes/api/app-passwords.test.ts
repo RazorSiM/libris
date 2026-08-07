@@ -10,14 +10,14 @@
  */
 import type { PGlite } from "@electric-sql/pglite";
 import { Hono } from "hono";
-import { HTTPException } from "hono/http-exception";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vite-plus/test";
 import type { AppVariables } from "../../context.js";
 import { createTestAuth, createTestDb, seedUser, type TestDb } from "../../db/test-utils.js";
 import * as schema from "../../db/schema.js";
 import type { Env } from "../../env.js";
 import { createMemoryKVStore } from "../../services/kv-store.js";
-import { appPasswordRoutes } from "./app-passwords.js";
+import { toErrorResponse } from "../../shared/openapi.js";
+import { appPasswordRoutes, MAX_APP_PASSWORD_NAME_LENGTH } from "./app-passwords.js";
 
 const TEST_ENV = {
   NODE_ENV: "test",
@@ -57,11 +57,9 @@ beforeAll(async () => {
     await next();
   });
   app.route("/api/app-passwords", appPasswordRoutes);
-  app.onError((err, c) =>
-    err instanceof HTTPException
-      ? c.json({ error: err.message }, err.status)
-      : c.json({ error: String(err) }, 500),
-  );
+  // The same mapping app.ts installs, so a plugin rejection is answered here
+  // exactly as it would be in production.
+  app.onError((err, c) => toErrorResponse(err, c));
 });
 
 afterAll(async () => {
@@ -112,6 +110,54 @@ describe("POST /api/app-passwords", () => {
   it("rejects a missing name", async () => {
     actingUserId = await seedUser(db);
     expect((await req("", { method: "POST", body: JSON.stringify({}) })).status).toBe(400);
+  });
+
+  it("accepts a name at the plugin's limit and refuses a longer one with 400", async () => {
+    // The apiKey plugin caps names at 32. This schema used to allow 200, so a
+    // 33-to-200 character label reached the plugin, threw an APIError the
+    // handler never caught, and came back as 500 "Internal server error" for a
+    // label the UI happily accepted.
+    actingUserId = await seedUser(db);
+
+    const atLimit = "K".repeat(MAX_APP_PASSWORD_NAME_LENGTH);
+    const created = await req("", { method: "POST", body: JSON.stringify({ name: atLimit }) });
+    expect(created.status).toBe(201);
+
+    const tooLong = await req("", {
+      method: "POST",
+      body: JSON.stringify({ name: "Kobo Clara Colour in the living room" }),
+    });
+    expect(tooLong.status).toBe(400);
+    expect(tooLong.body.error).toBe("Validation failed");
+  });
+});
+
+describe("better-auth APIError mapping", () => {
+  it("maps the plugin's own rejection to its status instead of 500", async () => {
+    // Defence in depth for every other auth.api.* call: if a zod schema and the
+    // plugin ever disagree again, the error carries a 400 and must arrive as a
+    // 400. This uses the real object the plugin throws rather than a hand-built
+    // one, which is what pins the mapper's duck-typing to reality.
+    const userId = await seedUser(db);
+    const thrown: unknown = await auth.api
+      .createApiKey({ body: { userId, name: "N".repeat(MAX_APP_PASSWORD_NAME_LENGTH + 8) } })
+      .then(
+        () => null,
+        (err: unknown) => err,
+      );
+
+    expect(thrown, "the plugin rejected the over-long name").toBeInstanceOf(Error);
+    expect((thrown as Error).name).toBe("APIError");
+
+    const probe = new Hono();
+    probe.get("/boom", () => {
+      throw thrown;
+    });
+    probe.onError((err, c) => toErrorResponse(err, c));
+
+    const res = await probe.request("/boom");
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toBeTruthy();
   });
 });
 

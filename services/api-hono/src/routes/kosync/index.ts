@@ -1,4 +1,5 @@
-import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
+import { createRoute, z } from "@hono/zod-openapi";
+import { createOpenApiRouter } from "../../shared/openapi.js";
 import { HTTPException } from "hono/http-exception";
 import { readingProgress, readingProgressHistory } from "#db";
 import { and, eq, desc } from "drizzle-orm";
@@ -183,7 +184,7 @@ const putProgressRoute = createRoute({
 
 // ── Router ───────────────────────────────────────────────────────
 
-export const kosyncRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
+export const kosyncRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
   // GET /users/auth — KOReader sends md5(password) via x-auth-user / x-auth-key headers
   .openapi(getAuthRoute, async (c) => {
     const username = c.req.header("x-auth-user");

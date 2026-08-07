@@ -1,4 +1,5 @@
-import { OpenAPIHono, createRoute } from "@hono/zod-openapi";
+import { createRoute } from "@hono/zod-openapi";
+import { createOpenApiRouter } from "../../shared/openapi.js";
 import type { AppVariables } from "../../context.js";
 import { getReadingStatusCounts, getBooksByReadingStatus } from "../../lib/reading-status.js";
 import { getUserId } from "../../shared/auth.js";
@@ -57,7 +58,7 @@ const listByStatusRoute = createRoute({
 
 // ── Router ───────────────────────────────────────────────────────
 
-export const readingStatusRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
+export const readingStatusRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
   .openapi(countsRoute, async (c) => {
     const db = c.get("db");
     const userId = getUserId(c);
