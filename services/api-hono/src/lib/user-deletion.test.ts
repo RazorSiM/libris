@@ -108,8 +108,15 @@ function createTestApp({ withMiddleware = true } = {}) {
     env: TEST_ENV,
   });
 
-  if (!withMiddleware) return { app: inner, auth };
+  // The real app now registers reassignBooksOnRemoveUser itself (app.ts, on
+  // POST /api/auth/admin/remove-user, ahead of Better Auth's catch-all), so the
+  // fixed case IS createApp's output — nothing to wrap.
+  if (withMiddleware) return { app: inner, auth };
 
+  // The pre-fix wiring, rebuilt deliberately: context vars plus Better Auth's
+  // catch-all and no precondition middleware. It cannot be produced by asking
+  // createApp to leave the middleware out, because that is exactly what the fix
+  // removed as an option — so reproducing the bug means bypassing createApp.
   const app = new Hono<{ Variables: AppVariables }>();
   app.use("*", async (c, next) => {
     c.set("db", db as never);
@@ -117,8 +124,7 @@ function createTestApp({ withMiddleware = true } = {}) {
     c.set("auth", auth);
     await next();
   });
-  app.use("/api/auth/admin/remove-user", reassignBooksOnRemoveUser);
-  app.route("/", inner);
+  app.on(["GET", "POST"], "/api/auth/*", (c) => auth.handler(c.req.raw));
   return { app, auth };
 }
 
