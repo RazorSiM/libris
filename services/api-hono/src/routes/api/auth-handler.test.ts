@@ -9,6 +9,7 @@ import { createMemorySecondaryStorage } from "../../services/auth-secondary-stor
 import { createMemoryKVStore } from "../../services/kv-store.js";
 import { betterAuthClientIpHeader } from "../../shared/request-ip.js";
 import { eq } from "drizzle-orm";
+import { admin as adminPlugin } from "better-auth/plugins";
 import { withLastAdminLock } from "../../middleware/last-admin.js";
 
 vi.mock("../../services/redis.js", () => ({
@@ -198,6 +199,28 @@ async function adminActionOverHttp(
   });
 }
 
+/**
+ * /admin/update-user nests the privilege fields under `data`, which is the
+ * whole of 59m.12: the guard read `body.role`, found undefined, and stood
+ * aside while Better Auth wrote `data.role` to the database.
+ */
+async function updateUserOverHttp(
+  app: ReturnType<typeof createTestApp>["app"],
+  cookie: string,
+  userId: string,
+  data: Record<string, unknown>,
+) {
+  return await app.request("/api/auth/admin/update-user", {
+    method: "POST",
+    headers: {
+      cookie,
+      "content-type": "application/json",
+      origin: "http://localhost:3000",
+    },
+    body: JSON.stringify({ userId, data }),
+  });
+}
+
 describe("GET /api/auth/ok", () => {
   it("answers without any credentials", async () => {
     const { app } = createTestApp();
@@ -356,6 +379,101 @@ describe("last-admin invariant", () => {
     // getRequestIp falls back to the loopback identity when there is no socket.
     expect(new Set(seen)).toEqual(new Set(["127.0.0.1"]));
   });
+
+  // ── /admin/update-user (59m.12) ────────────────────────────────────
+  //
+  // The guard used to be three paths listed in app.ts, and update-user was not
+  // one of them. It performs the same writes: `data.role` and the ban fields.
+  // Against that code the first test below returned 200 and left the install
+  // with zero admins — /api/jobs, PATCH /api/settings and create-user all 403
+  // for everyone, recoverable only by hand-editing the database.
+
+  it("refuses to demote the sole admin through update-user's nested data.role", async () => {
+    const { app, auth } = createTestApp();
+    const admin = await createAdmin(auth, "nested-demotion@example.com");
+
+    const response = await updateUserOverHttp(app, admin.cookie, admin.id, { role: "user" });
+
+    expect(response.status).toBe(409);
+    const [stored] = await db.select().from(schema.users).where(eq(schema.users.id, admin.id));
+    expect(stored?.role).toBe("admin");
+  });
+
+  it("refuses to ban the sole admin through update-user's nested data.banned", async () => {
+    const { app, auth } = createTestApp();
+    const admin = await createAdmin(auth, "nested-ban@example.com");
+
+    const response = await updateUserOverHttp(app, admin.cookie, admin.id, { banned: true });
+
+    // 409, not the 400 Better Auth's own YOU_CANNOT_BAN_YOURSELF produces. The
+    // distinction is the point: that check only knows about self, while the
+    // invariant is about the last admin, so it is our guard that has to answer.
+    expect(response.status).toBe(409);
+    const [stored] = await db.select().from(schema.users).where(eq(schema.users.id, admin.id));
+    expect(stored).toMatchObject({ role: "admin", banned: false });
+  });
+
+  it("still allows an ordinary profile edit on the sole admin", async () => {
+    // The guard must not have become "the last admin is immutable".
+    const { app, auth } = createTestApp();
+    const admin = await createAdmin(auth, "renamed-admin@example.com");
+
+    const response = await updateUserOverHttp(app, admin.cookie, admin.id, { name: "Renamed" });
+
+    expect(response.status).toBe(200);
+    const [stored] = await db.select().from(schema.users).where(eq(schema.users.id, admin.id));
+    expect(stored).toMatchObject({ name: "Renamed", role: "admin" });
+  });
+
+  it("still allows demotion through update-user while another admin remains", async () => {
+    const { app, auth } = createTestApp();
+    const acting = await createAdmin(auth, "acting-updater@example.com");
+    const target = await createAdmin(auth, "target-updatee@example.com");
+
+    const response = await updateUserOverHttp(app, acting.cookie, target.id, { role: "user" });
+
+    expect(response.status).toBe(200);
+    const admins = await db.select().from(schema.users).where(eq(schema.users.role, "admin"));
+    expect(admins.map(({ id }) => id)).toEqual([acting.id]);
+  });
+
+  // ── The whole admin surface, not the endpoints we happened to think of ──
+
+  const adminPostEndpoints = Object.values(
+    adminPlugin().endpoints as Record<string, { path: string; options?: { method?: string } }>,
+  )
+    .filter(({ options }) => options?.method === "POST")
+    .map(({ path }) => path);
+
+  it.each(adminPostEndpoints)(
+    "leaves the sole admin an active admin after POST %s",
+    async (pluginPath) => {
+      // Sweeps every mutating endpoint the installed admin plugin exposes with
+      // the most demotion-shaped body each of them could accept, in both the
+      // flat and the nested shape. Whatever the endpoint answers — 409 from the
+      // guard, 400 from Better Auth's validation, 200 for the harmless ones —
+      // the one thing that must hold is that the install still has an admin.
+      const { app, auth } = createTestApp();
+      const admin = await createAdmin(auth, "sweep@example.com");
+
+      await app.request(`/api/auth${pluginPath}`, {
+        method: "POST",
+        headers: {
+          cookie: admin.cookie,
+          "content-type": "application/json",
+          origin: "http://localhost:3000",
+        },
+        body: JSON.stringify({ userId: admin.id, role: "user", data: { role: "user" } }),
+      });
+
+      const [stored] = await db.select().from(schema.users).where(eq(schema.users.id, admin.id));
+      expect(stored, `${pluginPath} deleted the last admin`).toBeDefined();
+      expect(stored, `${pluginPath} stripped the last admin`).toMatchObject({
+        role: "admin",
+        banned: false,
+      });
+    },
+  );
 
   it("allows only one of two concurrent demotions", async () => {
     const { auth } = createTestApp();

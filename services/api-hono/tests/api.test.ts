@@ -230,10 +230,19 @@ describe("GET /api/health", () => {
 
 // ── Settings ───────────────────────────────────────────────────────
 
+/**
+ * Sessions, not app passwords (59m.13).
+ *
+ * The whole /api/settings prefix is scoped out of app-password reach: PATCH is
+ * admin-gated in the handler, and both GETs widen for admins — filesystem
+ * paths here, queue counts and every failed job's payload on /status. None of
+ * that is expressible in the path-only policy table, so the credential is
+ * refused instead.
+ */
 describe("settings", () => {
   it("GET /api/settings — returns current paths and Hardcover toggles", async () => {
     const { data, status } = await $fetchRaw("/api/settings", {
-      headers: auth(),
+      headers: session(),
     });
     expect(status).toBe(200);
     expect(data).toHaveProperty("libraryPath");
@@ -249,14 +258,14 @@ describe("settings", () => {
     const { data, status } = await $fetchRaw("/api/settings", {
       method: "PATCH",
       body: { hardcoverSyncEnabled: false },
-      headers: auth(),
+      headers: session(),
     });
     expect(status).toBe(200);
     expect(data.updated).toContain("hardcoverSyncEnabled");
 
     // Verify it persisted
     const { data: get } = await $fetchRaw("/api/settings", {
-      headers: auth(),
+      headers: session(),
     });
     expect(get.hardcoverSyncEnabled).toBe(false);
 
@@ -264,7 +273,7 @@ describe("settings", () => {
     await $fetchRaw("/api/settings", {
       method: "PATCH",
       body: { hardcoverSyncEnabled: true },
-      headers: auth(),
+      headers: session(),
     });
   });
 
@@ -272,9 +281,25 @@ describe("settings", () => {
     const { status } = await $fetchRaw("/api/settings", {
       method: "PATCH",
       body: {},
-      headers: auth(),
+      headers: session(),
     });
     expect(status).toBe(400);
+  });
+
+  it("refuses the admin's own app password on the whole prefix", async () => {
+    // The credential that lives in plaintext in a KOReader config. Its owner is
+    // an admin; the route is not one an app password may speak to.
+    expect((await $fetchRaw("/api/settings", { headers: auth() })).status).toBe(403);
+    expect((await $fetchRaw("/api/settings/status", { headers: auth() })).status).toBe(403);
+    expect(
+      (
+        await $fetchRaw("/api/settings", {
+          method: "PATCH",
+          body: { hardcoverSyncEnabled: false },
+          headers: auth(),
+        })
+      ).status,
+    ).toBe(403);
   });
 });
 

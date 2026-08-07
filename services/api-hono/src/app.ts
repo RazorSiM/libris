@@ -99,9 +99,11 @@ export function createApp({ services, env }: CreateAppOptions) {
   // Consequence: a catch-all contributes nothing to Hono's RPC type graph, so
   // there is no typed client for these paths. The frontend talks to them
   // through the Better Auth client instead.
-  app.use("/api/auth/admin/set-role", lastAdminMiddleware);
-  app.use("/api/auth/admin/ban-user", lastAdminMiddleware);
-  app.use("/api/auth/admin/remove-user", lastAdminMiddleware);
+  // The whole admin subtree, not a list of endpoint names: /admin/update-user
+  // writes the same role and ban fields as /admin/set-role and /admin/ban-user,
+  // and an enumerated list had already missed it (59m.12). The middleware
+  // classifies each endpoint itself — see ADMIN_ENDPOINT_EFFECTS.
+  app.use("/api/auth/admin/*", lastAdminMiddleware);
   app.on(["GET", "POST"], "/api/auth/*", (c) => {
     const request = new Request(c.req.raw, {
       headers: withTrustedClientIp(c.req.raw.headers, c.get("clientIp")),

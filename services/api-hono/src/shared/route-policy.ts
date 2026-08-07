@@ -93,9 +93,13 @@ export function resolvePolicy(path: string): AuthPolicy {
  * The three that were genuinely reachable, and are the reason this exists:
  * /api/jobs as a full admin, /api/app-passwords, and /api/credentials.
  *
- * Admin routes are not listed here. They are refused by policy in the
- * middleware, so a route added to the admin section of ROUTE_TABLE is scoped
- * the moment it is added, without a second edit here.
+ * A route whose admin requirement lives in ROUTE_TABLE does not need an entry
+ * here: the middleware refuses app passwords on policy "admin", so /api/jobs is
+ * scoped by its policy alone. That covers only the routes the TABLE knows are
+ * admin, though — a handler that calls requireAdmin() or branches on isAdmin()
+ * internally resolves to plain "api-key" and the refusal never fires. Those
+ * paths must be listed here, and route-policy.test.ts enforces it by scanning
+ * the routes directory.
  *
  * What this must NOT touch, because they are the entire reason app passwords
  * exist: /opds (catalogue and downloads), /kosync, and the ordinary
@@ -114,6 +118,22 @@ const APP_PASSWORD_DENIED: PathRule[] = [
   // Sets the KoSync password and the Hardcover token — same class of thing:
   // one credential rewriting another.
   { pattern: "/api/credentials", match: "prefix" },
+
+  // Admin authority that ROUTE_TABLE cannot express (59m.13).
+  //
+  // PATCH /api/settings calls requireAdmin() in its handler, and
+  // GET /api/settings/status widens its payload for admins — queue counts,
+  // every failed job's arguments, LIBRIS_LIBRARY_PATH, LIBRIS_INBOX_PATH, live
+  // DB and Redis health. Both resolved to "api-key", so an admin's app
+  // password — the one pasted into a KOReader OPDS config — reached them with
+  // the full authority of its owner while being correctly refused on
+  // /api/jobs.
+  //
+  // Neither can move to policy "admin" instead: the table matches on path
+  // only, and GET /api/settings and GET /api/settings/status are legitimately
+  // user-visible. So the prefix is scoped by credential here rather than by
+  // authority there. Cookie sessions, admin and reader alike, are untouched.
+  { pattern: "/api/settings", match: "prefix" },
 ];
 
 /**

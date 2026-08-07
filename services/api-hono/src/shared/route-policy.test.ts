@@ -1,3 +1,6 @@
+import { readFileSync, readdirSync } from "node:fs";
+import { join, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vite-plus/test";
 import { deniesAppPasswords, resolvePolicy } from "./route-policy";
 
@@ -134,11 +137,154 @@ describe("deniesAppPasswords", () => {
     expect(deniesAppPasswords("/api/credential-report")).toBe(false);
   });
 
-  it("says nothing about admin routes — the middleware decides those by policy", () => {
+  it("says nothing about admin routes declared in the policy table", () => {
     // /api/jobs IS refused to app passwords, but via `policy === "admin"` in
-    // authMiddleware, so a new admin route is scoped the moment it is added to
-    // the policy table rather than needing a second edit here.
+    // authMiddleware, so an admin route added to the policy table is scoped the
+    // moment it is added rather than needing a second edit here.
     expect(deniesAppPasswords("/api/jobs/status")).toBe(false);
     expect(resolvePolicy("/api/jobs/status")).toBe("admin");
+  });
+
+  it("refuses the settings surface, whose admin check lives in the handler", () => {
+    // 59m.13. PATCH /api/settings calls requireAdmin() and
+    // GET /api/settings/status returns filesystem paths and every failed job's
+    // payload to admins. Neither is expressible in the path-only policy table,
+    // because GET /api/settings is user-visible on the same prefix.
+    expect(deniesAppPasswords("/api/settings")).toBe(true);
+    expect(deniesAppPasswords("/api/settings/status")).toBe(true);
+  });
+});
+
+// ── The class of bug, not the instance (59m.13) ──────────────────────
+
+/**
+ * Two ways a route can demand admin authority, and only one of them is visible
+ * to the policy table.
+ *
+ * ROUTE_TABLE scopes app passwords for anything it marks "admin". A handler
+ * that instead calls requireAdmin() or branches on isAdmin() is invisible to
+ * it: the path resolves to plain "api-key", the middleware's refusal never
+ * fires, and the app password resolves into a full admin session. That is
+ * exactly how PATCH /api/settings and GET /api/settings/status stayed reachable
+ * from a credential sitting in plaintext on an e-reader.
+ *
+ * So this walks the routers, finds every in-handler admin check, and insists
+ * the path be declared somewhere. A new one fails here rather than shipping.
+ */
+describe("in-handler admin checks are declared in the policy", () => {
+  const routesDir = fileURLToPath(new URL("../routes/", import.meta.url));
+
+  /** requireAdmin(c) — an authorization gate. Never exempt. */
+  const ADMIN_GATE = /\brequireAdmin\s*\(/;
+  /** isAdmin(c) — sometimes a gate, sometimes a row filter. See below. */
+  const ADMIN_PREDICATE = /\bisAdmin\s*\(\s*c\b/;
+
+  /**
+   * Files where isAdmin() only widens what the caller sees of their OWN
+   * surface, rather than unlocking a privileged one. These routes are meant to
+   * work from an app password — they are half the reason it exists — so
+   * denying them would break e-readers and cron jobs.
+   *
+   * Adding a file here is a deliberate claim that its isAdmin() calls are row
+   * scoping. requireAdmin() is never exempt, whatever is listed here.
+   */
+  const ISADMIN_ROW_SCOPING_ONLY: Record<string, string> = {
+    "api/inbox.ts": "widens a WHERE clause from own rows to all rows",
+    "api/library.ts": "the uploader filter on the library listing",
+    "api/events.ts": "chooses which per-user topics the socket subscribes to",
+  };
+
+  function listSourceFiles(dir: string): string[] {
+    return readdirSync(dir, { recursive: true, encoding: "utf8" })
+      .filter((entry) => entry.endsWith(".ts") && !entry.endsWith(".test.ts"))
+      .map((entry) => entry.split(sep).join("/"));
+  }
+
+  /**
+   * Where each router module is mounted, read out of routes/index.ts rather
+   * than assumed from the directory layout — if the two ever disagree, an
+   * assumed mapping would quietly check the wrong path.
+   */
+  function readMounts(): Map<string, string> {
+    const source = readFileSync(join(routesDir, "index.ts"), "utf8");
+
+    const moduleByIdent = new Map<string, string>();
+    for (const [, idents, spec] of source.matchAll(
+      /import\s*\{([^}]+)\}\s*from\s*"\.\/([^"]+)\.js"/g,
+    )) {
+      for (const ident of idents.split(",").map((value) => value.trim())) {
+        if (ident) moduleByIdent.set(ident, `${spec}.ts`);
+      }
+    }
+
+    const mounts = new Map<string, string>();
+    for (const [, mount, ident] of source.matchAll(/\.route\(\s*"([^"]+)",\s*([A-Za-z0-9_]+)/g)) {
+      const module = moduleByIdent.get(ident);
+      if (module) mounts.set(module, mount);
+    }
+    return mounts;
+  }
+
+  const mounts = readMounts();
+
+  it("knows where every router module is mounted", () => {
+    // Guards the two tests below against passing vacuously: an unparsed module
+    // is a module whose admin checks were never looked at.
+    const unmapped = listSourceFiles(routesDir).filter(
+      (file) => file !== "index.ts" && !mounts.has(file),
+    );
+
+    expect(unmapped).toEqual([]);
+  });
+
+  function stripComments(source: string): string {
+    return source.replaceAll(/\/\*[\s\S]*?\*\//g, "").replaceAll(/^\s*\/\/.*$/gm, "");
+  }
+
+  function isDeclared(mount: string): boolean {
+    return resolvePolicy(mount) === "admin" || deniesAppPasswords(mount);
+  }
+
+  it("declares every path whose handler calls requireAdmin()", () => {
+    // The strict half: requireAdmin() IS the authorization decision, so there
+    // is no such thing as a benign use of it on an undeclared path.
+    const undeclared = [...mounts]
+      .filter(([file]) =>
+        ADMIN_GATE.test(stripComments(readFileSync(join(routesDir, file), "utf8"))),
+      )
+      .filter(([, mount]) => !isDeclared(mount))
+      .map(([file, mount]) => `${file} -> ${mount}`);
+
+    expect(undeclared).toEqual([]);
+  });
+
+  it("declares every path whose handler branches on isAdmin(), or classifies it as row scoping", () => {
+    const undeclared = [...mounts]
+      .filter(([file]) =>
+        ADMIN_PREDICATE.test(stripComments(readFileSync(join(routesDir, file), "utf8"))),
+      )
+      .filter(([file, mount]) => !isDeclared(mount) && !(file in ISADMIN_ROW_SCOPING_ONLY))
+      .map(([file, mount]) => `${file} -> ${mount}`);
+
+    expect(undeclared).toEqual([]);
+  });
+
+  it("does not carry a row-scoping exemption for a file that no longer needs one", () => {
+    // A stale exemption is a hole waiting for the next edit to that file.
+    const stale = Object.keys(ISADMIN_ROW_SCOPING_ONLY).filter((file) => {
+      if (!mounts.has(file)) return true;
+      return !ADMIN_PREDICATE.test(stripComments(readFileSync(join(routesDir, file), "utf8")));
+    });
+
+    expect(stale).toEqual([]);
+  });
+
+  it("still lets the routes app passwords exist for through", () => {
+    // The exemptions above are load-bearing in the other direction: if inbox,
+    // library or the OPDS surface ever started refusing app passwords, every
+    // e-reader in the house would stop syncing.
+    for (const path of ["/api/inbox", "/api/library", "/api/books", "/opds", "/kosync/syncs"]) {
+      expect(deniesAppPasswords(path), path).toBe(false);
+    }
   });
 });

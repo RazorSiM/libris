@@ -61,9 +61,54 @@ const TEST_ENV: Env = {
 let pglite: PGlite;
 let db: TestDb;
 
+/**
+ * One shared Better Auth instance for the suite.
+ *
+ * Sessions are the credential these tests need now (see seedSession), and a
+ * session minted by one instance is not visible to another: secondaryStorage is
+ * per-instance and in memory. The app and the fixtures have to share.
+ */
+let auth: ReturnType<typeof createTestAuth>;
+
+const SESSION_PASSWORD = "correct-horse-battery";
+let seq = 0;
+
+/**
+ * A signed-in browser session.
+ *
+ * These routes used to be driven with an app password. They cannot be any
+ * more: PATCH /api/settings is admin-gated in its handler and
+ * GET /api/settings/status hands admins the queue counts, every failed job's
+ * payload and the server's filesystem paths, so the whole prefix now refuses
+ * app-password credentials (59m.13, shared/route-policy.ts).
+ */
+async function seedSession(options: { label: string; isAdmin: boolean }) {
+  seq += 1;
+  const email = `settings-${seq}@example.test`;
+  const created = await auth.api.createUser({
+    body: {
+      email,
+      password: SESSION_PASSWORD,
+      name: options.label,
+      role: options.isAdmin ? "admin" : "user",
+    },
+  });
+  const { headers } = await auth.api.signInEmail({
+    body: { email, password: SESSION_PASSWORD },
+    returnHeaders: true,
+  });
+  return {
+    userId: created.user.id,
+    cookie: headers
+      .getSetCookie()
+      .map((value) => value.split(";")[0])
+      .join("; "),
+  };
+}
+
 async function seedApiKey(options: { label: string; isAdmin: boolean }) {
   // isAdmin is a role on the USER now, not a flag on the credential.
-  return await seedAppPassword(createTestAuth(db, TEST_ENV), db, {
+  return await seedAppPassword(auth, db, {
     name: options.label,
     role: options.isAdmin ? "admin" : "user",
   });
@@ -83,7 +128,7 @@ function createTestApp() {
       },
       redisStorage: createMemoryKVStore(),
       cacheStorage: createMemoryKVStore(),
-      auth: createTestAuth(db, TEST_ENV),
+      auth,
       shutdown: async () => {},
     },
     env: TEST_ENV,
@@ -94,6 +139,7 @@ beforeAll(async () => {
   const testDb = await createTestDb();
   pglite = testDb.pglite;
   db = testDb.db;
+  auth = createTestAuth(db, TEST_ENV);
 });
 
 afterAll(async () => {
@@ -128,12 +174,12 @@ describe("GET /api/settings/status", () => {
   });
 
   it("returns full diagnostics for admin users", async () => {
-    const { rawKey } = await seedApiKey({ label: "Admin Key", isAdmin: true });
+    const { cookie } = await seedSession({ label: "Admin", isAdmin: true });
     const { app } = createTestApp();
 
     const response = await app.request("/api/settings/status", {
       method: "GET",
-      headers: { Authorization: `Bearer ${rawKey}` },
+      headers: { cookie },
     });
 
     expect(response.status).toBe(200);
@@ -156,7 +202,7 @@ describe("GET /api/settings/status", () => {
   });
 
   it("surfaces counts and failed jobs from all registered queues, not just pipeline", async () => {
-    const { rawKey } = await seedApiKey({ label: "Admin Key", isAdmin: true });
+    const { cookie } = await seedSession({ label: "Admin", isAdmin: true });
 
     // Seed the registry with a pipeline queue plus scheduler/maintenance queues.
     const bookDetected = makeFakeQueue("book-detected", {
@@ -197,7 +243,7 @@ describe("GET /api/settings/status", () => {
 
     const response = await app.request("/api/settings/status", {
       method: "GET",
-      headers: { Authorization: `Bearer ${rawKey}` },
+      headers: { cookie },
     });
 
     expect(response.status).toBe(200);
@@ -220,12 +266,12 @@ describe("GET /api/settings/status", () => {
   });
 
   it("returns only credentials for non-admin users", async () => {
-    const { rawKey } = await seedApiKey({ label: "Regular Key", isAdmin: false });
+    const { cookie } = await seedSession({ label: "Regular", isAdmin: false });
     const { app } = createTestApp();
 
     const response = await app.request("/api/settings/status", {
       method: "GET",
-      headers: { Authorization: `Bearer ${rawKey}` },
+      headers: { cookie },
     });
 
     expect(response.status).toBe(200);
@@ -252,7 +298,7 @@ describe("GET /api/settings/status", () => {
     // are rows in service_credentials keyed by (user, service). Reading KoSync
     // from the wrong one answers "not configured" no matter what the user has
     // saved, and the settings form then renders permanently blank.
-    const { userId, rawKey } = await seedApiKey({ label: "KoSync Owner", isAdmin: false });
+    const { userId, cookie } = await seedSession({ label: "KoSync Owner", isAdmin: false });
     await db.insert(schema.kosyncCredentials).values({
       userId,
       username: "reader-on-the-kobo",
@@ -262,7 +308,7 @@ describe("GET /api/settings/status", () => {
     const { app } = createTestApp();
     const response = await app.request("/api/settings/status", {
       method: "GET",
-      headers: { Authorization: `Bearer ${rawKey}` },
+      headers: { cookie },
     });
 
     expect(response.status).toBe(200);
@@ -282,12 +328,12 @@ describe("GET /api/settings/status", () => {
 
 describe("GET /api/settings", () => {
   it("shows filesystem paths only to admins", async () => {
-    const admin = await seedApiKey({ label: "Settings Admin", isAdmin: true });
-    const member = await seedApiKey({ label: "Settings Member", isAdmin: false });
+    const admin = await seedSession({ label: "Settings Admin", isAdmin: true });
+    const member = await seedSession({ label: "Settings Member", isAdmin: false });
     const { app } = createTestApp();
 
     const adminResponse = await app.request("/api/settings", {
-      headers: { Authorization: `Bearer ${admin.rawKey}` },
+      headers: { cookie: admin.cookie },
     });
     expect(adminResponse.status).toBe(200);
     await expect(adminResponse.json()).resolves.toMatchObject({
@@ -296,11 +342,69 @@ describe("GET /api/settings", () => {
     });
 
     const memberResponse = await app.request("/api/settings", {
-      headers: { Authorization: `Bearer ${member.rawKey}` },
+      headers: { cookie: member.cookie },
     });
     expect(memberResponse.status).toBe(200);
     const memberBody = await memberResponse.json();
     expect(memberBody).not.toHaveProperty("libraryPath");
     expect(memberBody).not.toHaveProperty("inboxPath");
+  });
+});
+
+// ── App passwords are not admin credentials (59m.13) ────────────────
+
+/**
+ * The settings prefix carries admin authority that ROUTE_TABLE could not see.
+ *
+ * PATCH / gates on requireAdmin() in the handler and both GETs widen for
+ * admins — filesystem paths on /api/settings, and on /status the queue counts,
+ * every failed job's arguments and live DB/Redis health. All three resolved to
+ * policy "api-key", so `curl -u any:<app-password>` against a household install
+ * returned the lot to whoever read the OPDS password off the e-reader.
+ */
+describe("app passwords on the settings surface", () => {
+  it("refuses an ADMIN's app password on every settings route", async () => {
+    const { rawKey } = await seedApiKey({ label: "Leaked Admin Key", isAdmin: true });
+    const { app } = createTestApp();
+    const headers = { Authorization: `Bearer ${rawKey}` };
+
+    // 403, not 401: the credential is valid, the route just does not take it.
+    expect((await app.request("/api/settings", { headers })).status).toBe(403);
+    expect((await app.request("/api/settings/status", { headers })).status).toBe(403);
+    expect(
+      (
+        await app.request("/api/settings", {
+          method: "PATCH",
+          headers: { ...headers, "content-type": "application/json" },
+          body: JSON.stringify({ hardcoverSyncEnabled: false }),
+        })
+      ).status,
+    ).toBe(403);
+  });
+
+  it("leaves the setting it tried to change untouched", async () => {
+    const { rawKey } = await seedApiKey({ label: "Leaked Admin Key 2", isAdmin: true });
+    const admin = await seedSession({ label: "Real Admin", isAdmin: true });
+    const { app } = createTestApp();
+    const read = async () =>
+      (await (
+        await app.request("/api/settings", { headers: { cookie: admin.cookie } })
+      ).json()) as {
+        hardcoverSyncEnabled: boolean;
+      };
+
+    const before = await read();
+
+    await app.request("/api/settings", {
+      method: "PATCH",
+      headers: {
+        Authorization: `Bearer ${rawKey}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ hardcoverSyncEnabled: !before.hardcoverSyncEnabled }),
+    });
+
+    // A 403 that still wrote would be the worst of both worlds.
+    expect((await read()).hardcoverSyncEnabled).toBe(before.hardcoverSyncEnabled);
   });
 });
