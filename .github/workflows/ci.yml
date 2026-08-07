@@ -255,6 +255,118 @@ jobs:
           path: tests/e2e/playwright-report/
           retention-days: 7
 
+  # The production configuration branch, which the `e2e` job structurally
+  # cannot reach: bootstrap.ts refuses E2E_TEST=1 under NODE_ENV=production,
+  # and without E2E_TEST the /__test/* support routes the suite depends on are
+  # not mounted. So every ordinary shard runs the development side of every
+  # NODE_ENV branch — lib/auth.ts trustedOrigins, the Redis vs memory store
+  # split in bootstrap.ts, and the logger transport. This job runs the other
+  # side, over the sign-in / sign-out / session-revoke path only.
+  #
+  # BETTER_AUTH_URL is deliberately unset: that is the documented default for a
+  # container behind a TLS-terminating proxy, and it is the configuration in
+  # which "production deployments cannot sign in" appears.
+  e2e-prod-config:
+    runs-on: ubuntu-latest
+    container: mcr.microsoft.com/playwright:v1.60.0-jammy
+    needs: [build]
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: libris_prod_test
+          POSTGRES_USER: libris_test
+          POSTGRES_PASSWORD: libris_test
+        options: >-
+          --health-cmd "pg_isready -U libris_test -d libris_prod_test"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 15
+      redis:
+        image: redis:7
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      CI: "true"
+      E2E_PROD_CONFIG: "1"
+      NODE_ENV: production
+      # No E2E_TEST and no TEST_ROUTE_TOKEN: the support routes must not exist
+      # here, and prod-config.spec.ts asserts they do not.
+      # Plain HTTP in front of the browser, so the Secure attribute has to come
+      # off or Chromium discards the session cookie. This is the one production
+      # setting a real HTTPS deployment would leave at its default.
+      LIBRIS_COOKIE_SECURE: "0"
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: libris_test
+      POSTGRES_PASSWORD: libris_test
+      POSTGRES_DB: libris_prod_test
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      LIBRIS_INBOX_PATH: /tmp/e2e-prod-inbox
+      LIBRIS_LIBRARY_PATH: /tmp/e2e-prod-library
+      API_SECRET_KEY: d4a4f0525b6289795830c9ff81db3c1ecc0c607fcb4a542c1140c50a8382470e
+      BETTER_AUTH_SECRET: d3a2a9acaad54534363860456f2169271c0eb9c97e358904bf50fa0ff47d6819
+      MIGRATIONS_PATH: ./services/api-hono/migrations
+      LIBRIS_API_LOG: /tmp/e2e-prod-api.log
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: build-output-${{ github.sha }}
+
+      - name: Extract build artifact
+        run: |
+          tar -xzf build-output.tar.gz
+          rm build-output.tar.gz
+
+      - uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: .node-version
+          run-install: false
+
+      - name: Prepare test environment
+        run: |
+          mkdir -p $LIBRIS_INBOX_PATH $LIBRIS_LIBRARY_PATH
+          cp -r apps/web/dist public
+
+      - name: Run E2E production-config checks
+        run: |
+          cd tests/e2e
+          vp exec playwright test --project=prod-config
+
+      - name: Upload test results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-prod-config-test-results
+          path: tests/e2e/test-results/
+          retention-days: 7
+
+      - name: Upload API server log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-prod-config-api-log
+          path: ${{ env.LIBRIS_API_LOG }}
+          retention-days: 7
+          if-no-files-found: warn
+
+      - name: Upload HTML report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-prod-config-report
+          path: tests/e2e/playwright-report/
+          retention-days: 7
+
   deploy-docs:
     runs-on: ubuntu-latest
     needs: [check]

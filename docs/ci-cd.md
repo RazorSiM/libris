@@ -94,16 +94,33 @@ Playwright end-to-end tests — runs on both PRs and pushes to main, depends on 
 - On `pull_request` — the `@smoke` subset, for fast feedback.
 - On `push` to main — the full suite, no tag filter.
 
+`@smoke` is therefore the PR gate's whole definition of "covered". Everything that pins an authentication or authorization invariant carries the tag — see [testing.md § Tags](testing.md#tags) for what that includes and why. When you add a security-relevant spec, tag it, or it first runs post-merge.
+
 **Artifacts:**
 
 - Playwright HTML report — `e2e-report-<idx>` (always uploaded, 7-day retention).
 - Test results (screenshots, videos, traces) — `e2e-test-results-<idx>` (uploaded on failure, 7-day retention).
+- API server log — `e2e-api-log-<idx>` (uploaded on failure, 7-day retention). The trace shows the 401; this shows why the API sent it.
 
 `<idx>` is `strategy.job-index`. Artifacts use `actions/upload-artifact@v4`, whose names must be unique within a run — hence the per-shard index.
 
 Pass/fail is surfaced by GitHub's native checks UI on the PR; there is no bot comment.
 
-### 5. deploy-docs
+### 5. e2e-prod-config
+
+The production configuration branch — runs on both PRs and pushes to main, depends on `build`, one runner, no sharding.
+
+**Why it is a separate job.** The `e2e` job structurally cannot reach production config: `bootstrap.ts` throws `E2E_TEST=1 is not allowed in NODE_ENV=production`, and without `E2E_TEST` the `/__test/*` support routes the suite depends on are never mounted. So every ordinary shard exercises the _development_ side of every `NODE_ENV` branch — `trustedOrigins` in `lib/auth.ts`, the Redis-vs-memory store split in `bootstrap.ts`, and the logger transport. A 150-test green suite consequently missed "production HTTPS deployments cannot sign in" entirely.
+
+**What it runs.** `vp exec playwright test --project=prod-config`, with `E2E_PROD_CONFIG=1`. That variable reshapes `tests/e2e/playwright.config.ts` into a one-project run over `prod-config.spec.ts`, and short-circuits `global-setup.ts` after the database reset — there are no support routes and no seeded accounts, so the spec drives first-run setup, sign-out, sign-in and cookie replay through the browser.
+
+**The configuration under test:** `NODE_ENV=production`, no `E2E_TEST`, no `TEST_ROUTE_TOKEN`, and **`BETTER_AUTH_URL` deliberately unset** — the documented default for a container behind a TLS-terminating proxy, and the configuration in which the origin check has to resolve a trusted origin from the request. `LIBRIS_COOKIE_SECURE=0` is the single concession to running over plain HTTP; Chromium would otherwise discard the session cookie.
+
+It gets its own `libris_prod_test` database and its own Redis so it cannot disturb the sharded suite.
+
+**Artifacts:** `e2e-prod-config-report` (always), `e2e-prod-config-test-results` and `e2e-prod-config-api-log` (on failure).
+
+### 6. deploy-docs
 
 Deploys VitePress documentation to Cloudflare Pages — runs on push to main only, depends on `check` passing.
 
@@ -160,6 +177,32 @@ Four of those are easy to get wrong and each one is fatal rather than flaky:
 - **`LIBRIS_API_LOG`** is Libris-specific, not a framework variable. When it is
   set, `tests/e2e/playwright.config.ts` tees the API process's stdout/stderr to
   that path so a failing shard can upload it (`e2e-api-log-<idx>`).
+
+`services/api-hono/src/workflow-env.test.ts` parses these blocks straight out of
+`ci.yml` and runs them through the real `parseEnv()`, so a variable that goes
+missing fails in `vp run test` rather than in a 60-second webServer timeout.
+
+Set on the `e2e-prod-config` job — the same shape, inverted where it matters:
+
+```
+CI=true
+E2E_PROD_CONFIG=1
+NODE_ENV=production
+LIBRIS_COOKIE_SECURE=0
+POSTGRES_DB=libris_prod_test          # its own database
+LIBRIS_INBOX_PATH=/tmp/e2e-prod-inbox
+LIBRIS_LIBRARY_PATH=/tmp/e2e-prod-library
+API_SECRET_KEY=<openssl rand -hex 32>
+BETTER_AUTH_SECRET=<openssl rand -hex 32>
+MIGRATIONS_PATH=./services/api-hono/migrations
+LIBRIS_API_LOG=/tmp/e2e-prod-api.log
+```
+
+Three variables are **absent on purpose** and the job is pointless without that:
+`E2E_TEST` (would be refused by `bootstrap.ts`, and would mount support routes a
+production build must not have), `TEST_ROUTE_TOKEN` (same), and
+`BETTER_AUTH_URL` (setting it hands Better Auth the trusted origin it is
+supposed to derive from the request, which is the branch under test).
 
 ## Release (release.yml)
 

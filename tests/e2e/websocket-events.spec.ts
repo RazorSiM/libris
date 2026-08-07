@@ -132,26 +132,30 @@ test.describe("WebSocket Real-time Events", () => {
     await expect(page.getByTestId("empty-inbox")).toBeVisible();
   });
 
-  test("a regular user receives events only for their own books", async ({ userPage: page }) => {
-    const adminBook = await seedBook("inbox", { title: "Admin-only WebSocket Book" });
-    const userBook = await seedBookForUser(getRegularUserId(), "User-only WebSocket Book");
+  test(
+    "a regular user receives events only for their own books",
+    { tag: "@smoke" },
+    async ({ userPage: page }) => {
+      const adminBook = await seedBook("inbox", { title: "Admin-only WebSocket Book" });
+      const userBook = await seedBookForUser(getRegularUserId(), "User-only WebSocket Book");
 
-    await openManualWebSocket(page);
-    try {
-      await listenForBookEvent(page, adminBook.id);
-      await emitEvent({ type: "book:detected", bookId: adminBook.id });
-      await page.waitForTimeout(1_000);
-      expect(await receivedBookEvent(page, adminBook.id)).toBe(false);
+      await openManualWebSocket(page);
+      try {
+        await listenForBookEvent(page, adminBook.id);
+        await emitEvent({ type: "book:detected", bookId: adminBook.id });
+        await page.waitForTimeout(1_000);
+        expect(await receivedBookEvent(page, adminBook.id)).toBe(false);
 
-      await listenForBookEvent(page, userBook);
-      await emitEvent({ type: "book:detected", bookId: userBook });
-      await expect.poll(() => receivedBookEvent(page, userBook)).toBe(true);
-    } finally {
-      await page.evaluate(() => {
-        (window as Window & { __testEventsSocket?: WebSocket }).__testEventsSocket?.close();
-      });
-    }
-  });
+        await listenForBookEvent(page, userBook);
+        await emitEvent({ type: "book:detected", bookId: userBook });
+        await expect.poll(() => receivedBookEvent(page, userBook)).toBe(true);
+      } finally {
+        await page.evaluate(() => {
+          (window as Window & { __testEventsSocket?: WebSocket }).__testEventsSocket?.close();
+        });
+      }
+    },
+  );
 
   test("Inbox list auto-refreshes on book:detected event", async ({ livePage: page }) => {
     await reloadWithWebSocket(page);

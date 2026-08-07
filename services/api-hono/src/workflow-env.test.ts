@@ -95,6 +95,31 @@ describe("E2E harness environments", () => {
     });
   }
 
+  describe("ci.yml e2e-prod-config job", () => {
+    const read = () => readFlatBlock(CI_WORKFLOW, ["jobs", "e2e-prod-config", "env"]);
+
+    it("parses with the schema the server boots with", () => {
+      expect(() => parseEnv({ ...read(), PORT: "3000" })).not.toThrow();
+    });
+
+    it("actually runs the production branch, with no test switches on", () => {
+      // The job's entire reason to exist. bootstrap.ts throws on
+      // E2E_TEST=1 + production, and a TEST_ROUTE_TOKEN here would mount
+      // support routes the production build must not have.
+      const env = parseEnv({ ...read(), PORT: "3000" });
+      expect(env.NODE_ENV).toBe("production");
+      expect(env.E2E_TEST).not.toBe("1");
+      expect(env.TEST_ROUTE_TOKEN).toBeUndefined();
+    });
+
+    it("leaves BETTER_AUTH_URL unset", () => {
+      // Setting it would hand Better Auth the trusted origin it is supposed to
+      // derive from the request, which is the exact branch this job exists to
+      // exercise.
+      expect(parseEnv({ ...read(), PORT: "3000" }).BETTER_AUTH_URL).toBe("");
+    });
+  });
+
   it("keeps the two harnesses on the same NODE_ENV", () => {
     // Divergence here means CI and local Docker take different branches in
     // lib/auth.ts, bootstrap.ts and lib/logger.ts, which is how a config bug

@@ -124,7 +124,7 @@ async function seedFinishedBook(ownerId: string, title: string, genre: string): 
 
 // ── Ownership is visible in the UI, not just enforced by the API ────
 
-test.describe("book ownership controls", () => {
+test.describe("book ownership controls", { tag: "@smoke" }, () => {
   test.describe.configure({ mode: "serial" });
 
   let adminBookId: string;
@@ -219,7 +219,7 @@ test.describe("reading progress is per person", () => {
 
 // ── Stats: the only place per-user scoping is checked for real ──────
 
-test.describe("stats are per person", () => {
+test.describe("stats are per person", { tag: "@smoke" }, () => {
   test.describe.configure({ mode: "serial" });
 
   test.beforeAll(async () => {
@@ -312,7 +312,7 @@ test.describe("credential form", () => {
 
 // ── Signing out must not leave one person's data in another's cache ─
 
-test.describe("sign-out clears the query cache", () => {
+test.describe("sign-out clears the query cache", { tag: "@smoke" }, () => {
   // Anonymous, and signs in for itself. See the warning at the top of this
   // file: logging out a shared fixture revokes the suite's session.
   test.use({ storageState: { cookies: [], origins: [] } });
@@ -357,7 +357,7 @@ test.describe("sign-out clears the query cache", () => {
 
 // ── Upload collisions ───────────────────────────────────────────────
 
-test.describe("upload collision safety", () => {
+test.describe("upload collision safety", { tag: "@smoke" }, () => {
   test.afterAll(async () => {
     await deleteAllBooks();
   });

@@ -34,7 +34,7 @@ async function anonymousApi() {
   return await playwrightRequest.newContext({ storageState: { cookies: [], origins: [] } });
 }
 
-test.describe.serial("first-run setup", () => {
+test.describe.serial("first-run setup", { tag: "@smoke" }, () => {
   test("offers setup on an empty install, then closes for good", async ({ page }) => {
     const api = await anonymousApi();
     await api.post(`${API_BASE}/__test/cleanup`, {

@@ -157,7 +157,7 @@ test.describe("sign-in", { tag: "@smoke" }, () => {
 
 // ── Where you land afterwards ────────────────────────────────────────
 
-test.describe("post-sign-in redirect", () => {
+test.describe("post-sign-in redirect", { tag: "@smoke" }, () => {
   test.use(ANONYMOUS);
 
   test("sends an anonymous visitor to /login", async ({ page }) => {
@@ -204,7 +204,7 @@ test.describe("post-sign-in redirect", () => {
 
 // ── Session lifetime ─────────────────────────────────────────────────
 
-test.describe("session", () => {
+test.describe("session", { tag: "@smoke" }, () => {
   test("survives a full page reload", async ({ page }) => {
     await page.goto("/");
     await expect(page.getByRole("link", { name: "Home" })).toBeVisible();
@@ -274,7 +274,7 @@ test.describe("session", () => {
 
 // ── Authorization ────────────────────────────────────────────────────
 
-test.describe("authorization", () => {
+test.describe("authorization", { tag: "@smoke" }, () => {
   test("a non-admin cannot reach an admin-only endpoint", async () => {
     // Sessions, not app passwords, so this stays a test about ROLE. A Bearer
     // key is refused on admin routes whoever owns it, which would make this
@@ -314,7 +314,7 @@ test.describe("authorization", () => {
 
 // ── App passwords, end to end ────────────────────────────────────────
 
-test.describe("app passwords", () => {
+test.describe("app passwords", { tag: "@smoke" }, () => {
   test("a credential the API issues works in every header form a client uses", async () => {
     // The point of the feature: one credential, whether it arrives from an
     // OPDS reader (Basic), a script (Bearer) or the plugin's own header.
@@ -417,7 +417,7 @@ test.describe("app passwords", () => {
  * same person's SESSION is not. A one-sided version of this suite would still
  * pass if the fix had accidentally become "nobody may use these routes".
  */
-test.describe("app password scope", () => {
+test.describe("app password scope", { tag: "@smoke" }, () => {
   test("an admin's app password cannot reach admin routes, but their session can", async () => {
     const api = await anonymousApi();
 
@@ -600,7 +600,7 @@ test.describe("app passwords in the UI", () => {
 
 // ── OPDS, which is why Basic auth exists at all ──────────────────────
 
-test.describe("OPDS", () => {
+test.describe("OPDS", { tag: "@smoke" }, () => {
   test("challenges an anonymous reader so it prompts for credentials", async () => {
     // Without WWW-Authenticate, KOReader shows an error instead of a login box
     // and the user concludes Libris is broken.
@@ -669,7 +669,7 @@ test.describe("OPDS", () => {
 // created, promoted, password reset, banned, demoted. Splitting them into
 // independent tests would mean re-creating the account five times and would
 // stop them covering the transitions, which is where the bugs live.
-test.describe.serial("user management", () => {
+test.describe.serial("user management", { tag: "@smoke" }, () => {
   // Each of these opens a second browser context and signs in through it, on a
   // Vite dev server that compiles on demand. Two full page loads plus a
   // sign-in does not fit the 30s default.

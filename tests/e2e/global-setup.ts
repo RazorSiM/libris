@@ -150,6 +150,13 @@ export default async function globalSetup(): Promise<void> {
   await resetBullMqState(requireRedisUrl());
   await resetDatabase();
 
+  // The production-config run stops here. It has no support routes, no app
+  // passwords and no seeded accounts on purpose: prod-config.spec.ts drives
+  // first-run setup and sign-in through the browser, which is the only way to
+  // exercise the cookie and origin handling that only production configures.
+  // Bootstrapping over bare fetch here would skip exactly that.
+  if (process.env.E2E_PROD_CONFIG === "1") return;
+
   const adminId = await bootstrapAdmin();
   const adminCookie = await signIn(ADMIN.email, ADMIN.password);
   const userId = await createRegularUser(adminCookie);
