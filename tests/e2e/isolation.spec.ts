@@ -31,13 +31,14 @@
  * uses its own anonymous context and signs in for itself.
  */
 
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Page } from "@playwright/test";
 import { test, expect } from "./fixtures";
 import {
   API_BASE,
   authHeaders,
+  cleanInboxDir,
   deleteAllBooks,
   getAdminUserId,
   getRegularUserId,
@@ -124,7 +125,7 @@ async function seedFinishedBook(ownerId: string, title: string, genre: string): 
 
 // ── Ownership is visible in the UI, not just enforced by the API ────
 
-test.describe("book ownership controls", () => {
+test.describe("book ownership controls", { tag: "@smoke" }, () => {
   test.describe.configure({ mode: "serial" });
 
   let adminBookId: string;
@@ -219,7 +220,7 @@ test.describe("reading progress is per person", () => {
 
 // ── Stats: the only place per-user scoping is checked for real ──────
 
-test.describe("stats are per person", () => {
+test.describe("stats are per person", { tag: "@smoke" }, () => {
   test.describe.configure({ mode: "serial" });
 
   test.beforeAll(async () => {
@@ -312,7 +313,7 @@ test.describe("credential form", () => {
 
 // ── Signing out must not leave one person's data in another's cache ─
 
-test.describe("sign-out clears the query cache", () => {
+test.describe("sign-out clears the query cache", { tag: "@smoke" }, () => {
   // Anonymous, and signs in for itself. See the warning at the top of this
   // file: logging out a shared fixture revokes the suite's session.
   test.use({ storageState: { cookies: [], origins: [] } });
@@ -357,8 +358,19 @@ test.describe("sign-out clears the query cache", () => {
 
 // ── Upload collisions ───────────────────────────────────────────────
 
-test.describe("upload collision safety", () => {
+test.describe("upload collision safety", { tag: "@smoke" }, () => {
+  const UPLOAD_NAME = "collision-test.epub";
+
+  /** Everything the two uploads could have produced, by the rename rule. */
+  async function collisionFiles(inboxPath: string): Promise<string[]> {
+    const entries = await readdir(inboxPath);
+    return entries.filter((name) => /^collision-test(-\d+)?\.epub$/.test(name)).sort();
+  }
+
+  test.beforeAll(cleanInboxDir);
+
   test.afterAll(async () => {
+    await cleanInboxDir();
     await deleteAllBooks();
   });
 
@@ -367,13 +379,23 @@ test.describe("upload collision safety", () => {
     // one impatient one) sending "book.epub" at the same moment must not have
     // the second overwrite the first on disk. inbox.test.ts covers the rename
     // itself; this covers the concurrent case end to end.
+    //
+    // The assertions look at the INBOX DIRECTORY, not the response body. The
+    // upload route echoes `file.name` — the CLIENT-supplied name, never the one
+    // actually written — so the two responses are byte-identical whether the
+    // second write took the collision-safe rename or truncated the first file.
+    // Replace writeInboxFile with a plain writeFile and only the directory
+    // assertions below notice.
+    const inboxPath = process.env.LIBRIS_INBOX_PATH;
+    expect(inboxPath, "LIBRIS_INBOX_PATH must point at the server's inbox").toBeTruthy();
+
     const fixturePath = join(import.meta.dirname, "fixtures", "test-book.epub");
     const fileBuffer = await readFile(fixturePath);
     const blob = new Blob([fileBuffer], { type: "application/epub+zip" });
 
     const upload = async () => {
       const form = new FormData();
-      form.append("file", blob, "collision-test.epub");
+      form.append("file", blob, UPLOAD_NAME);
       return fetch(`${API_BASE}/api/inbox/upload`, {
         method: "POST",
         headers: authHeaders(),
@@ -389,5 +411,17 @@ test.describe("upload collision safety", () => {
     const data2 = (await res2.json()) as { uploaded: Array<{ filename: string }> };
     expect(data1.uploaded).toHaveLength(1);
     expect(data2.uploaded).toHaveLength(1);
+
+    // Two accepted uploads must be two files, under two distinct names.
+    const written = await collisionFiles(inboxPath!);
+    expect(written, `inbox held ${JSON.stringify(written)}`).toHaveLength(2);
+    expect(new Set(written).size).toBe(2);
+
+    // And both are intact. A truncating write would leave a short or empty
+    // file behind rather than removing one.
+    for (const name of written) {
+      const onDisk = await readFile(join(inboxPath!, name));
+      expect(onDisk.equals(fileBuffer), `${name} does not match the fixture`).toBe(true);
+    }
   });
 });

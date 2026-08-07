@@ -118,26 +118,30 @@ test.describe("profile", () => {
 test.describe("password change", () => {
   test.slow();
 
-  test("the old password stops working and the new one signs in", async ({ browser }) => {
-    const account = await createDisposableAccount("pw-swap");
-    const NEXT = "a-brand-new-password-99";
-    const context = await freshContext(browser);
-    const page = await context.newPage();
-    await signInThroughUi(page, account.email, account.password);
-    await openAccountTab(page);
+  test(
+    "the old password stops working and the new one signs in",
+    { tag: "@smoke" },
+    async ({ browser }) => {
+      const account = await createDisposableAccount("pw-swap");
+      const NEXT = "a-brand-new-password-99";
+      const context = await freshContext(browser);
+      const page = await context.newPage();
+      await signInThroughUi(page, account.email, account.password);
+      await openAccountTab(page);
 
-    await fillPasswordChange(page, { current: account.password, next: NEXT });
+      await fillPasswordChange(page, { current: account.password, next: NEXT });
 
-    // The form empties on success, which is the UI's only durable signal —
-    // the toast has usually expired by the time an assertion reaches it.
-    await expect(page.getByTestId("current-password-input")).toHaveValue("");
-    await expect(page.getByTestId("new-password-input")).toHaveValue("");
+      // The form empties on success, which is the UI's only durable signal —
+      // the toast has usually expired by the time an assertion reaches it.
+      await expect(page.getByTestId("current-password-input")).toHaveValue("");
+      await expect(page.getByTestId("new-password-input")).toHaveValue("");
 
-    expect(await canSignIn(account.email, account.password)).toBe(false);
-    expect(await canSignIn(account.email, NEXT)).toBe(true);
+      expect(await canSignIn(account.email, account.password)).toBe(false);
+      expect(await canSignIn(account.email, NEXT)).toBe(true);
 
-    await context.close();
-  });
+      await context.close();
+    },
+  );
 
   test("a wrong current password is refused, and nothing changes", async ({ browser }) => {
     // The dangerous failure is a form that reports an error but has already
@@ -319,7 +323,7 @@ test.describe("signed-in devices", () => {
     await elsewhere.close();
   });
 
-  test("never puts a session token in the page", async ({ browser }) => {
+  test("never puts a session token in the page", { tag: "@smoke" }, async ({ browser }) => {
     // revokeSession is keyed by token, and a token IS the cookie value that
     // authenticates that device. Rendering one — as text, an attribute or a
     // testid — would undo the httpOnly cookie for every session at once.
@@ -341,39 +345,41 @@ test.describe("signed-in devices", () => {
     await context.close();
   });
 
-  test("signing out one device kills that session and leaves this one alone", async ({
-    browser,
-  }) => {
-    const account = await createDisposableAccount("revoke-one");
+  test(
+    "signing out one device kills that session and leaves this one alone",
+    { tag: "@smoke" },
+    async ({ browser }) => {
+      const account = await createDisposableAccount("revoke-one");
 
-    const here = await freshContext(browser);
-    const herePage = await here.newPage();
-    await signInThroughUi(herePage, account.email, account.password);
+      const here = await freshContext(browser);
+      const herePage = await here.newPage();
+      await signInThroughUi(herePage, account.email, account.password);
 
-    const elsewhere = await freshContext(browser);
-    const elsewherePage = await elsewhere.newPage();
-    await signInThroughUi(elsewherePage, account.email, account.password);
+      const elsewhere = await freshContext(browser);
+      const elsewherePage = await elsewhere.newPage();
+      await signInThroughUi(elsewherePage, account.email, account.password);
 
-    await openAccountTab(herePage);
-    await expect(deviceRows(herePage)).toHaveCount(2);
+      await openAccountTab(herePage);
+      await expect(deviceRows(herePage)).toHaveCount(2);
 
-    // The row that is NOT this browser.
-    const other = deviceRows(herePage).filter({ hasNotText: "This browser" });
-    await other.getByRole("button", { name: "Sign out" }).click();
-    await herePage.getByTestId("confirm-revoke-session-btn").click();
+      // The row that is NOT this browser.
+      const other = deviceRows(herePage).filter({ hasNotText: "This browser" });
+      await other.getByRole("button", { name: "Sign out" }).click();
+      await herePage.getByTestId("confirm-revoke-session-btn").click();
 
-    await expect(deviceRows(herePage)).toHaveCount(1);
+      await expect(deviceRows(herePage)).toHaveCount(1);
 
-    // Gone from the list is not the claim; gone from the server is. With
-    // secondaryStorage in play these can disagree, which is the whole reason
-    // this goes through the Better Auth API rather than a DELETE.
-    await elsewherePage.reload();
-    await expect(elsewherePage).toHaveURL(/\/login/);
-    await expect(herePage.getByTestId("account-panel")).toBeVisible();
+      // Gone from the list is not the claim; gone from the server is. With
+      // secondaryStorage in play these can disagree, which is the whole reason
+      // this goes through the Better Auth API rather than a DELETE.
+      await elsewherePage.reload();
+      await expect(elsewherePage).toHaveURL(/\/login/);
+      await expect(herePage.getByTestId("account-panel")).toBeVisible();
 
-    await here.close();
-    await elsewhere.close();
-  });
+      await here.close();
+      await elsewhere.close();
+    },
+  );
 
   test("a revoke asks first, and cancelling changes nothing", async ({ browser }) => {
     const account = await createDisposableAccount("revoke-cancel");
@@ -475,27 +481,29 @@ test.describe("signed-in devices", () => {
 test.describe("access", () => {
   test.slow();
 
-  test("a non-admin manages their own account, and is told how to recover it", async ({
-    browser,
-  }) => {
-    // Nothing here is an admin concern. A regular user who cannot change their
-    // own password has to ask someone else to do it for them every time.
-    const account = await createDisposableAccount("plain-user");
-    const context = await freshContext(browser);
-    const page = await context.newPage();
-    await signInThroughUi(page, account.email, account.password);
-    await openAccountTab(page);
+  test(
+    "a non-admin manages their own account, and is told how to recover it",
+    { tag: "@smoke" },
+    async ({ browser }) => {
+      // Nothing here is an admin concern. A regular user who cannot change their
+      // own password has to ask someone else to do it for them every time.
+      const account = await createDisposableAccount("plain-user");
+      const context = await freshContext(browser);
+      const page = await context.newPage();
+      await signInThroughUi(page, account.email, account.password);
+      await openAccountTab(page);
 
-    await expect(page.getByRole("tab", { name: "Users" })).toHaveCount(0);
-    await expect(page.getByTestId("account-recovery-note")).toContainText(/admin/i);
-    // Devices are yours too — a user who cannot see where they are signed in
-    // cannot notice that somebody else is.
-    await expect(page.getByTestId("account-sessions-card")).toBeVisible();
+      await expect(page.getByRole("tab", { name: "Users" })).toHaveCount(0);
+      await expect(page.getByTestId("account-recovery-note")).toContainText(/admin/i);
+      // Devices are yours too — a user who cannot see where they are signed in
+      // cannot notice that somebody else is.
+      await expect(page.getByTestId("account-sessions-card")).toBeVisible();
 
-    await fillPasswordChange(page, { current: account.password, next: "chosen-by-me-alone-2" });
-    await expect(page.getByTestId("current-password-input")).toHaveValue("");
-    expect(await canSignIn(account.email, "chosen-by-me-alone-2")).toBe(true);
+      await fillPasswordChange(page, { current: account.password, next: "chosen-by-me-alone-2" });
+      await expect(page.getByTestId("current-password-input")).toHaveValue("");
+      expect(await canSignIn(account.email, "chosen-by-me-alone-2")).toBe(true);
 
-    await context.close();
-  });
+      await context.close();
+    },
+  );
 });

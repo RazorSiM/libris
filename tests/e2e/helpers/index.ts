@@ -102,6 +102,41 @@ export async function createDisposableAccount(
 }
 
 /**
+ * Delete an account by address, if one exists. Returns whether it did.
+ *
+ * For specs that use a FIXED account rather than a disposable one. Playwright
+ * restarts a serial group from its first test on retry and CI runs with
+ * `retries: 2`, so a leftover account from the previous attempt is the normal
+ * case, not the exceptional one — and a silent one, because a `create-user`
+ * that 409s still leaves behind the list row such a spec tends to assert on.
+ *
+ * Goes through the admin plugin rather than SQL: `remove-user` also drops the
+ * account's sessions and app passwords, which a bare `DELETE FROM users` would
+ * leave pointing at nothing.
+ */
+export async function deleteUserByEmail(email: string): Promise<boolean> {
+  const listed = await fetch(`${API_BASE}/api/auth/admin/list-users?limit=200`, {
+    headers: sessionHeaders(),
+  });
+  if (!listed.ok) {
+    throw new Error(`Could not list users: ${listed.status} ${await listed.text()}`);
+  }
+  const { users } = (await listed.json()) as { users: Array<{ id: string; email: string }> };
+  const match = users.find((user) => user.email === email);
+  if (!match) return false;
+
+  const removed = await fetch(`${API_BASE}/api/auth/admin/remove-user`, {
+    method: "POST",
+    headers: { ...sessionHeaders(), "Content-Type": "application/json", origin: API_BASE },
+    body: JSON.stringify({ userId: match.id }),
+  });
+  if (!removed.ok) {
+    throw new Error(`Could not remove ${email}: ${removed.status} ${await removed.text()}`);
+  }
+  return true;
+}
+
+/**
  * Reset DB between tests by calling POST /__test/cleanup.
  * Deletes all books, files, metadata candidates, reading progress, and API keys.
  * Also clears Redis storage.

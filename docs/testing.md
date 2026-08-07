@@ -2,29 +2,30 @@
 
 ## E2E Tests (Playwright)
 
-169 spec test bodies across 17 spec files in `tests/e2e/`, running sequentially (1 worker, shared database). The setup projects add 3 executions, for 172 tests in a complete run. Regenerate the exact counts with `vp exec playwright test --list` (run from `tests/e2e/`) rather than hand-counting.
+173 spec test bodies across 18 spec files in `tests/e2e/`, running sequentially (1 worker, shared database). The setup projects add 3 executions, and `prod-config.spec.ts` (4 tests) runs only in its own CI job, so a complete ordinary run is 172 tests. Regenerate the exact counts with `vp exec playwright test --list` (run from `tests/e2e/`) rather than hand-counting.
 
 ### Test Files
 
-| File                       | Tests | Tags            | Coverage                                                                                                                              |
-| -------------------------- | ----- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `account.spec.ts`          | 17    | —               | Profile, password changes, session and device management, account access                                                              |
-| `auth.spec.ts`             | 47    | mixed           | Sign-in, sessions, authorization, app passwords, OPDS authentication, user management                                                 |
-| `book-progress.spec.ts`    | 3     | @smoke          | Multi-device progress, empty state, finished badge                                                                                    |
-| `command-palette.spec.ts`  | 3     | —               | Global search modal, navigation, book results                                                                                         |
-| `errors.spec.ts`           | 5     | @smoke / @slow  | Error toasts, conflict handling, network failures, and duplicate file detection                                                       |
-| `first-run-setup.spec.ts`  | 2     | —               | Empty-install setup and first-admin creation                                                                                          |
-| `hardcover.spec.ts`        | 10    | @smoke          | Token CRUD, status, sync button/log, feature toggles, persistence                                                                     |
-| `home.spec.ts`             | 6     | @smoke          | Dashboard stats, currently reading, recently added, wide-screen card constraints                                                      |
-| `inbox.spec.ts`            | 16    | @smoke          | List, search, pagination, empty state, metadata picker, approve, delete                                                               |
-| `ingestion.spec.ts`        | 1     | @slow @external | Full EPUB pipeline: detect → parse → review → approve → library                                                                       |
-| `library.spec.ts`          | 18    | @smoke          | Grid/list view, filters, search, pagination, detail page, covers, downloads                                                           |
-| `isolation.spec.ts`        | 10    | —               | Ownership controls, per-user progress and stats, credential persistence, cache and upload isolation                                   |
-| `opds.spec.ts`             | 2     | @smoke          | Real-filesystem cover and ebook streaming through the live server                                                                     |
-| `reading-status.spec.ts`   | 8     | @smoke          | Sidebar links, status tabs, empty state, wide-screen cards, plus a parametrized loop covering the reading/finished/unread/paused tabs |
-| `settings.spec.ts`         | 8     | @smoke (4)      | Health & diagnostics (@smoke); jobs browser and queue management untagged                                                             |
-| `stats.spec.ts`            | 7     | @smoke          | Books finished, streaks, daily activity, genre distribution                                                                           |
-| `websocket-events.spec.ts` | 6     | —               | Realtime event bus over WebSocket — job status, pipeline events, Hardcover sync updates                                               |
+| File                       | Tests | Tags            | Coverage                                                                                                                                    |
+| -------------------------- | ----- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `account.spec.ts`          | 17    | @smoke (4)      | Profile, password changes, session and device management, account access                                                                    |
+| `auth.spec.ts`             | 47    | mostly @smoke   | Sign-in, sessions, authorization, app passwords, OPDS authentication, user management                                                       |
+| `book-progress.spec.ts`    | 3     | @smoke          | Multi-device progress, empty state, finished badge                                                                                          |
+| `command-palette.spec.ts`  | 3     | —               | Global search modal, navigation, book results                                                                                               |
+| `errors.spec.ts`           | 5     | @smoke / @slow  | Error toasts, conflict handling, network failures, and duplicate file detection                                                             |
+| `first-run-setup.spec.ts`  | 2     | — (see below)   | Empty-install setup and first-admin creation. Cannot be tagged — its project depends on `chromium`, and dependency projects ignore `--grep` |
+| `hardcover.spec.ts`        | 10    | @smoke          | Token CRUD, status, sync button/log, feature toggles, persistence                                                                           |
+| `home.spec.ts`             | 6     | @smoke          | Dashboard stats, currently reading, recently added, wide-screen card constraints                                                            |
+| `inbox.spec.ts`            | 16    | @smoke          | List, search, pagination, empty state, metadata picker, approve, delete                                                                     |
+| `ingestion.spec.ts`        | 1     | @slow @external | Full EPUB pipeline: detect → parse → review → approve → library                                                                             |
+| `library.spec.ts`          | 18    | @smoke          | Grid/list view, filters, search, pagination, detail page, covers, downloads                                                                 |
+| `isolation.spec.ts`        | 10    | @smoke (6)      | Ownership controls, per-user progress and stats, credential persistence, cache and upload isolation                                         |
+| `prod-config.spec.ts`      | 4     | prod-config     | Production-config install: first-run setup, sign-in, sign-out, session revocation. Only runs in the `e2e-prod-config` CI job                |
+| `opds.spec.ts`             | 2     | @smoke          | Real-filesystem cover and ebook streaming through the live server                                                                           |
+| `reading-status.spec.ts`   | 8     | @smoke          | Sidebar links, status tabs, empty state, wide-screen cards, plus a parametrized loop covering the reading/finished/unread/paused tabs       |
+| `settings.spec.ts`         | 8     | @smoke (4)      | Health & diagnostics (@smoke); jobs browser and queue management untagged                                                                   |
+| `stats.spec.ts`            | 7     | @smoke          | Books finished, streaks, daily activity, genre distribution                                                                                 |
+| `websocket-events.spec.ts` | 6     | @smoke (1)      | Realtime event bus over WebSocket — job status, pipeline events, Hardcover sync updates                                                     |
 
 > **Note:** Feed structure, search, language filtering, authentication, and content-type
 > contracts live in `services/api-hono/src/routes/opds.test.ts`. `opds.spec.ts` retains only
@@ -40,7 +41,53 @@
 | `@external` | Exercises a boundary normally backed by an external service or filesystem event |
 | _untagged_  | Runs in the complete suite but not the PR smoke selection                       |
 
-Untagged specs (command palette, multi-user flows, WebSocket events) validate behavior that doesn't need to block every PR but must pass on main.
+Untagged specs (command palette, jobs browser, most WebSocket cases) validate behavior that doesn't need to block every PR but must pass on main.
+
+**`@smoke` is the PR gate's entire definition of "covered".** The `e2e` job runs
+`--grep @smoke` on pull requests and the full suite only on pushes to main, so an
+untagged spec first executes _after_ the merge that broke it. That is not a
+theoretical cost: the auth work on this branch initially left `account.spec.ts`,
+`isolation.spec.ts`, `websocket-events.spec.ts` and every `auth.spec.ts` block
+except `sign-in` untagged, which meant app passwords, app-password scoping, OPDS
+Basic auth, the admin user-management walk and the last-admin 409 were not
+gating anything.
+
+The rule now: **anything that pins an authentication, authorization, ownership or
+session invariant carries `@smoke`.** Concretely that is the sign-in,
+post-sign-in redirect, session, authorization, app-password, app-password-scope,
+OPDS and user-management blocks of `auth.spec.ts`; the ownership, per-user
+stats, sign-out cache and upload-collision blocks of `isolation.spec.ts`; the
+WebSocket per-user event scoping case; and the password-change,
+session-token-leak, device-revocation and non-admin-access cases in
+`account.spec.ts`. Presentation and convenience coverage stays untagged so the
+gate stays a gate. That takes the PR selection from 89 tests to 136.
+
+::: warning `first-run-setup.spec.ts` cannot be tagged
+Its `first-run` project declares `dependencies: ["chromium"]` so it sorts last —
+it wipes every account, so nothing may follow it. Playwright does **not** apply
+`--grep` to a dependency project: it runs the whole thing. Tagging anything in
+that file therefore drags the entire `chromium` project into the PR run (136
+tests becomes all 175) and the gate silently stops being a gate.
+
+First-run setup runs on main only. If you want it on PRs, the honest change is
+to run the full suite on PRs, not to tag the file.
+:::
+
+### What CI actually exercises
+
+Green does not mean "every configuration works" — it means the configurations
+below were tried.
+
+| Config branch                                     | Exercised by                                  | Notes                                                                                                                                      |
+| ------------------------------------------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `NODE_ENV=development` + `E2E_TEST=1`, plain HTTP | `e2e` job (3 shards), `./scripts/test-e2e.sh` | The main suite. Dev `trustedOrigins`, in-memory KV and secondary storage, `/__test/*` mounted, Better Auth rate limiting relaxed.          |
+| `NODE_ENV=production`, no `E2E_TEST`, plain HTTP  | `e2e-prod-config` job (`prod-config.spec.ts`) | Empty `trustedOrigins` resolved from a required `BETTER_AUTH_URL`, Redis-backed KV and secondary storage, no support routes, Pino logging. |
+| `NODE_ENV=test`                                   | `vp run test` (Vitest, PGlite)                | Unit and integration only — never boots a real server.                                                                                     |
+| Real HTTPS / a TLS-terminating reverse proxy      | **Nothing**                                   | `LIBRIS_COOKIE_SECURE=1`, `Secure` cookies, `TRUST_PROXY_HEADERS=1` and forwarded-header handling are covered by unit tests at best.       |
+| `NODE_ENV=development` without `E2E_TEST`         | **Nothing**                                   | The interactive dev path, including the pretty-terminal logger transport.                                                                  |
+
+The last two rows are the standing gap. Read them before concluding that a green
+matrix clears a deployment change.
 
 ### Running Tests
 
@@ -70,15 +117,15 @@ cd tests/e2e && vp exec playwright test --ui            # interactive Playwright
 
 ### Infrastructure
 
-| File                      | Purpose                                                                                                               |
-| ------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| `playwright.config.ts`    | Config: 1 worker, retries in CI, reporters, webServer auto-start, two setup projects                                  |
-| `global-setup.ts`         | Waits for API health, resets DB (delete all rows), seeds admin + regular-user keys                                    |
-| `auth.setup.ts`           | `setup` project — logs in the admin key via API, saves session to `.auth/user.json`                                   |
-| `user-auth.setup.ts`      | `user-setup` project — logs in the non-admin `E2E_USER_API_KEY`, saves `.auth/regular-user.json` for multi-user tests |
-| `fixtures.ts`             | Custom fixtures: `authedPage` (pre-authenticated page)                                                                |
-| `helpers/index.ts`        | `seedOrganizedBook()`, `deleteAllBooks()`, `waitForJob()`, `goPath()`, etc.                                           |
-| `helpers/resolve-urls.ts` | `requireDatabaseUrl()` / `requireRedisUrl()` — DB/Redis URL resolution used by `global-setup.ts`                      |
+| File                      | Purpose                                                                                                                                                                              |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `playwright.config.ts`    | Config: 1 worker, retries in CI, reporters, webServer auto-start, two setup projects. `E2E_PROD_CONFIG=1` collapses it to the single `prod-config` project                           |
+| `global-setup.ts`         | Waits for API health, resets DB (delete all rows), seeds admin + regular-user keys. Stops after the reset under `E2E_PROD_CONFIG=1` — that run has no support routes to seed through |
+| `auth.setup.ts`           | `setup` project — logs in the admin key via API, saves session to `.auth/user.json`                                                                                                  |
+| `user-auth.setup.ts`      | `user-setup` project — logs in the non-admin `E2E_USER_API_KEY`, saves `.auth/regular-user.json` for multi-user tests                                                                |
+| `fixtures.ts`             | Custom fixtures: `authedPage` (pre-authenticated page)                                                                                                                               |
+| `helpers/index.ts`        | `seedOrganizedBook()`, `deleteAllBooks()`, `waitForJob()`, `goPath()`, etc.                                                                                                          |
+| `helpers/resolve-urls.ts` | `requireDatabaseUrl()` / `requireRedisUrl()` — DB/Redis URL resolution used by `global-setup.ts`                                                                                     |
 
 ### Database Seeding
 
@@ -222,6 +269,7 @@ That command deletes only Libris BullMQ keys, which keeps Home and Settings queu
 
 See [ci-cd.md](ci-cd.md) for the full CI workflow. Summary:
 
-- **PRs:** `@smoke` E2E tests only
-- **main push:** Full E2E suite
-- Test results posted as PR comments
+- **PRs:** `@smoke` E2E tests (3 shards), plus the whole `e2e-prod-config` job
+- **main push:** Full E2E suite, plus `e2e-prod-config`
+- Results are surfaced by GitHub's native checks UI. A failure uploads the
+  Playwright report, the traces, and the API server log.
