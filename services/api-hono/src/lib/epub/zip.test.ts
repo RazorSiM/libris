@@ -4,7 +4,11 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vite-plus/test";
 import {
   buildZip,
+  CD_SIG,
+  EOCD_SIG,
   findEocd,
+  MAX_CENTRAL_DIRECTORY_BYTES,
+  MAX_ZIP_ENTRIES,
   parseCentralDirectory,
   readAllZipEntries,
   readZipEntry,
@@ -69,6 +73,97 @@ describe("ZIP decompression budgets", () => {
     await expect(
       readAllZipEntries(path, { maxEntryBytes: 100, maxTotalBytes: 250 }),
     ).rejects.toThrow(/archive.*budget/i);
+  });
+});
+
+// libris-59m.29: every byte budget in this module is derived from
+// `uncompressedSize`, so entries declaring size 0 are free. A 46-byte central
+// directory record buys one ZipEntry object plus one open/read/close round
+// trip, and nothing capped how many of them an archive could declare.
+describe("ZIP central-directory entry-count cap", () => {
+  /** A minimal, well-formed central directory record. */
+  function cdRecord(name: string): Buffer {
+    const nameBytes = Buffer.from(name, "utf8");
+    const record = Buffer.alloc(46 + nameBytes.length);
+    record.writeUInt32LE(CD_SIG, 0);
+    record.writeUInt16LE(nameBytes.length, 28);
+    nameBytes.copy(record, 46);
+    return record;
+  }
+
+  /** An archive that is nothing but a central directory and an EOCD at offset 0. */
+  function archiveOf(records: Buffer[], declaredCdSize?: number): Buffer {
+    const directory = Buffer.concat(records);
+    const eocd = Buffer.alloc(22);
+    eocd.writeUInt32LE(EOCD_SIG, 0);
+    eocd.writeUInt16LE(records.length & 0xffff, 8);
+    eocd.writeUInt16LE(records.length & 0xffff, 10);
+    eocd.writeUInt32LE(declaredCdSize ?? directory.length, 12);
+    eocd.writeUInt32LE(0, 16);
+    return Buffer.concat([directory, eocd]);
+  }
+
+  function repeatRecords(count: number): Buffer[] {
+    return Array.from({ length: count }, (_, i) => cdRecord(`f${i % 10}`));
+  }
+
+  it("throws once the directory declares more than MAX_ZIP_ENTRIES records", () => {
+    const directory = Buffer.concat(repeatRecords(MAX_ZIP_ENTRIES + 1));
+
+    expect(() => parseCentralDirectory(directory, directory.length)).toThrow(ZipLimitError);
+    expect(() => parseCentralDirectory(directory, directory.length)).toThrow(/more than/i);
+  });
+
+  it("still parses a directory sitting exactly on the cap", () => {
+    const directory = Buffer.concat(repeatRecords(MAX_ZIP_ENTRIES));
+
+    expect(parseCentralDirectory(directory, directory.length)).toHaveLength(MAX_ZIP_ENTRIES);
+  });
+
+  it("propagates the cap through readAllZipEntries, so every caller inherits it", async () => {
+    const path = await writeZip("entry-flood.zip", archiveOf(repeatRecords(MAX_ZIP_ENTRIES + 1)));
+
+    await expect(readAllZipEntries(path)).rejects.toThrow(ZipLimitError);
+  });
+
+  it("bounds the central-directory read before allocating it", async () => {
+    // A tiny file whose EOCD claims a huge directory. The bound has to be
+    // checked against the DECLARED size: reading first would either allocate
+    // the claim or (here) quietly return a short buffer that parses fine.
+    const path = await writeZip(
+      "lying-cd-size.zip",
+      archiveOf(repeatRecords(1), MAX_CENTRAL_DIRECTORY_BYTES + 1),
+    );
+
+    await expect(readAllZipEntries(path)).rejects.toThrow(/central directory exceeds/i);
+  });
+
+  it("does not let zero-length filenames inflate the entry list", () => {
+    // 46 bytes each and no name is the cheapest possible padding record.
+    const directory = Buffer.concat([
+      cdRecord("mimetype"),
+      ...Array.from({ length: MAX_ZIP_ENTRIES * 2 }, () => cdRecord("")),
+    ]);
+
+    const entries = parseCentralDirectory(directory, directory.length);
+
+    expect(entries.map((e) => e.fileName)).toEqual(["mimetype"]);
+  });
+
+  it("still parses an archive with as many entries as a large real EPUB", async () => {
+    const zip = buildZip([
+      { name: "mimetype", data: Buffer.from("application/epub+zip") },
+      ...Array.from({ length: 400 }, (_, i) => ({
+        name: `OEBPS/p${i}.xhtml`,
+        data: Buffer.from(`<html><body>page ${i}</body></html>`),
+      })),
+    ]);
+    const path = await writeZip("large-real-epub.zip", zip);
+
+    expect(centralEntries(zip)).toHaveLength(401);
+    const { entries, rawEntries } = await readAllZipEntries(path);
+    expect(entries).toHaveLength(401);
+    expect(rawEntries.get("OEBPS/p399.xhtml")?.toString()).toContain("page 399");
   });
 });
 
