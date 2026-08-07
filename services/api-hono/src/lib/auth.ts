@@ -35,10 +35,14 @@ export interface CreateAuthDeps {
    */
   secret: string;
   /**
-   * Omit to let Better Auth derive the origin from the incoming request, which
-   * is what production needs: the container listens on http behind a proxy that
-   * terminates https, so a fixed value would produce wrong cookie and redirect
-   * origins.
+   * The public origin users reach, e.g. `https://libris.example.com`.
+   *
+   * MUST be set in production. Omitting it makes Better Auth fall back to
+   * `getOrigin(request.url)` — the container's plain-http socket origin — and
+   * that single derived origin becomes the whole trusted-origin list, so every
+   * browser request carrying `Origin: https://...` is refused with 403
+   * INVALID_ORIGIN (libris-59m.1). env.ts enforces this at boot; only dev and
+   * test may leave it undefined.
    */
   baseURL?: string | undefined;
 }
@@ -207,6 +211,15 @@ export function createAuth({ db, secondaryStorage, env, secret, baseURL }: Creat
       // to NODE_ENV encouraged HTTP/LAN operators to select development mode,
       // which also changes unrelated test and logging behaviour.
       useSecureCookies: env.LIBRIS_COOKIE_SECURE === "1",
+      // Explicit for the same reason useSecureCookies is: left unset, Better
+      // Auth derives it from process.env.NODE_ENV — `disableOriginCheck:
+      // options.advanced?.disableOriginCheck ?? isTest()` in
+      // context/create-context.ts — and `isTest()` reads a NODE_ENV captured at
+      // module load. The whole origin defence therefore switched itself off
+      // under `NODE_ENV=test` and no unit test could ever exercise it, which is
+      // how libris-59m.1 shipped. Pinning it to false means the suite runs the
+      // same check production runs.
+      disableOriginCheck: false,
       // app.ts overwrites this private header with the address resolved from
       // the TCP peer and trusted-proxy CIDRs. Better Auth never reads raw
       // forwarded headers, so its session tracking and limiter cannot diverge.

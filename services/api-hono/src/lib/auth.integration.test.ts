@@ -369,6 +369,97 @@ describe("listing your own devices", () => {
   });
 });
 
+/**
+ * The production configuration branch (libris-59m.1).
+ *
+ * Everything above runs with NODE_ENV=test, which takes the dev
+ * `trustedOrigins` list. Production takes `trustedOrigins: []` and relies
+ * entirely on the origin Better Auth derives from `baseURL` — and with no
+ * baseURL it derives one from `request.url`, which @hono/node-server builds
+ * from the socket. Behind a TLS-terminating proxy that is `http://host`, while
+ * the browser sends `Origin: https://host`, and the mismatch is a 403.
+ */
+describe("production origin handling", () => {
+  const PUBLIC_ORIGIN = "https://libris.example.test";
+  /** What @hono/node-server sees: the container's own plain-http socket. */
+  const SOCKET_URL = "http://libris.example.test/api/auth/sign-in/email";
+
+  const PROD_ENV = {
+    NODE_ENV: "production",
+    // Rate limiting is orthogonal to origin checking, and leaving it on would
+    // let a 429 satisfy a "not 403" assertion.
+    E2E_TEST: "1",
+    TRUST_PROXY_HEADERS: "0",
+    LIBRIS_TRUSTED_PROXIES: [],
+    LIBRIS_COOKIE_SECURE: "1",
+  } as unknown as Env;
+
+  function productionAuth(baseURL: string | undefined): Auth {
+    return createAuth({
+      db: db as unknown as Db,
+      secondaryStorage: createMemorySecondaryStorage(),
+      env: PROD_ENV,
+      secret: "test-only-secret-at-least-32-characters-long",
+      baseURL,
+    });
+  }
+
+  /**
+   * A sign-in exactly as a browser sends it: https Origin, a cookie already in
+   * the jar, and a request URL the node adapter built from the plain-http
+   * socket.
+   *
+   * The cookie is load-bearing, not decoration. `validateOrigin` returns early
+   * unless the request carries one (`origin-check.mjs`: `if (!(forceValidate ||
+   * useCookies)) return`), so a cookie-less POST never reaches the trusted-origin
+   * comparison at all. Any browser that has visited the app once has a cookie,
+   * and every authenticated call — sign-out, revoke-session, mint an app
+   * password — carries the session cookie by definition.
+   */
+  function browserSignIn(instance: Auth, email: string): Promise<Response> {
+    return instance.handler(
+      new Request(SOCKET_URL, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          host: "libris.example.test",
+          origin: PUBLIC_ORIGIN,
+          cookie: "libris.theme=dark",
+        },
+        body: JSON.stringify({ email, password: PASSWORD }),
+      }),
+    );
+  }
+
+  it("signs a browser in over https when BETTER_AUTH_URL names the public origin", async () => {
+    const instance = productionAuth(PUBLIC_ORIGIN);
+    await instance.api.createUser({
+      body: { email: "proxied@example.com", password: PASSWORD, name: "Proxied" },
+    });
+
+    const res = await browserSignIn(instance, "proxied@example.com");
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("set-cookie")).toBeTruthy();
+  });
+
+  it("refuses the same sign-in when no base URL is configured", async () => {
+    // The defect itself, pinned. env.ts now refuses to boot a production
+    // process without BETTER_AUTH_URL precisely so this configuration cannot
+    // be reached; if a Better Auth upgrade ever makes this pass, the boot-time
+    // requirement can be revisited on purpose rather than by accident.
+    const instance = productionAuth(undefined);
+    await instance.api.createUser({
+      body: { email: "unproxied@example.com", password: PASSWORD, name: "Unproxied" },
+    });
+
+    const res = await browserSignIn(instance, "unproxied@example.com");
+
+    expect(res.status).toBe(403);
+    expect(await res.json()).toMatchObject({ code: "INVALID_ORIGIN" });
+  });
+});
+
 describe("sign-in", () => {
   it("accepts the correct password", async () => {
     await signUp("reader@example.com");
