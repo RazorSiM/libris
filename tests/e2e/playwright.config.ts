@@ -19,6 +19,18 @@ const WEB_PORT = 3100;
 // In dev, the web dev server runs on WEB_PORT with a proxy to API_PORT.
 const basePort = process.env.CI ? API_PORT : WEB_PORT;
 
+/**
+ * Tee the API process's output to LIBRIS_API_LOG when CI asks for it, so a
+ * failing shard can upload the server log alongside the trace.
+ *
+ * Playwright runs `command` through a shell, so the pipe is honoured. The log
+ * still reaches the job output too — see `stdout: "pipe"` below.
+ */
+function apiCommand(command: string): string {
+  const logPath = process.env.LIBRIS_API_LOG;
+  return logPath ? `${command} 2>&1 | tee -a ${JSON.stringify(logPath)}` : command;
+}
+
 export default defineConfig({
   testDir: ".",
   testMatch: "**/*.spec.ts",
@@ -87,12 +99,18 @@ export default defineConfig({
     ? [
         {
           // CI: Hono serves both API and SPA from ./public (like production)
-          command: "node services/api-hono/dist/index.mjs",
+          command: apiCommand("node services/api-hono/dist/index.mjs"),
           cwd: "../..",
           url: `http://localhost:${API_PORT}/api/health`,
           reuseExistingServer: false,
           timeout: 60_000,
           env: { PORT: String(API_PORT) },
+          // Without these, Playwright DISCARDS the server's stdout (the default
+          // is "ignore"), so a shard that fails on a 401 or a 500 shows no
+          // server-side explanation — and a server that refuses to boot reports
+          // only "Timed out waiting 60000ms".
+          stdout: "pipe",
+          stderr: "pipe",
         },
       ]
     : [

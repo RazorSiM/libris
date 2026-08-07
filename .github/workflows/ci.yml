@@ -236,6 +236,17 @@ jobs:
           path: tests/e2e/test-results/
           retention-days: 7
 
+      # The server side of a failure. The Playwright trace shows the 401; this
+      # shows why the API sent it.
+      - name: Upload API server log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-api-log-${{ strategy.job-index }}
+          path: ${{ env.LIBRIS_API_LOG }}
+          retention-days: 7
+          if-no-files-found: warn
+
       - name: Upload HTML report
         if: always()
         uses: actions/upload-artifact@v4
