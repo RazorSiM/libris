@@ -1,4 +1,5 @@
 import type { PGlite } from "@electric-sql/pglite";
+import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vite-plus/test";
 import type { Db } from "#db";
 import { createTestDb, type TestDb } from "../db/test-utils.js";
@@ -363,6 +364,80 @@ describe("sessions", () => {
     });
 
     expect(session).toBeNull();
+  });
+});
+
+/**
+ * libris-59m.6, part three: a ban must unpair the devices, not just close the
+ * browser sessions.
+ *
+ * middleware/auth.ts refuses a banned user's app-password session on every
+ * request, but the rows themselves have to go inactive too — otherwise an unban
+ * silently re-authorizes whatever was paired at ban time, including the device
+ * that may be the reason for the ban.
+ */
+describe("banning a user", () => {
+  async function banAdmin(email: string): Promise<Headers> {
+    await auth.api.createUser({
+      body: { email, password: PASSWORD, name: "Admin", role: "admin" },
+    });
+    return new Headers({
+      cookie: cookieFrom(
+        await auth.api.signInEmail({ body: { email, password: PASSWORD }, asResponse: true }),
+      ),
+    });
+  }
+
+  async function keysFor(userId: string) {
+    return await db.select().from(schema.apiKeys).where(eq(schema.apiKeys.referenceId, userId));
+  }
+
+  it("disables the banned user's app passwords, and only theirs", async () => {
+    const headers = await banAdmin("ban-admin@example.com");
+    const target = await auth.api.createUser({
+      body: { email: "bannable@example.com", password: PASSWORD, name: "Bannable" },
+    });
+    const bystander = await auth.api.createUser({
+      body: { email: "bystander2@example.com", password: PASSWORD, name: "Bystander" },
+    });
+    const key = await auth.api.createApiKey({ body: { userId: target.user.id, name: "Kobo" } });
+    await auth.api.createApiKey({ body: { userId: bystander.user.id, name: "Kindle" } });
+
+    // Paired and working before the ban.
+    expect(
+      await auth.api.getSession({ headers: new Headers({ "x-api-key": key.key }) }),
+    ).not.toBeNull();
+
+    await auth.api.banUser({ body: { userId: target.user.id }, headers });
+
+    expect(await keysFor(target.user.id)).toMatchObject([{ enabled: false }]);
+    // Kept, not deleted: the user can still see what was cut off.
+    expect(await keysFor(target.user.id)).toHaveLength(1);
+    expect(await keysFor(bystander.user.id)).toMatchObject([{ enabled: true }]);
+
+    // And the plugin itself now refuses the key (KEY_DISABLED), independently
+    // of the middleware's ban check.
+    const afterBan = await auth.api
+      .getSession({ headers: new Headers({ "x-api-key": key.key }) })
+      .catch((err: { statusCode?: number }) => err);
+    expect(afterBan).toMatchObject({ statusCode: 401 });
+  });
+
+  it("leaves app passwords alone when the ban itself is refused", async () => {
+    // The 59m.5 trap again: after-hooks run for a rejected call too, so an
+    // unauthenticated ban attempt must not disable anybody's devices.
+    const target = await auth.api.createUser({
+      body: { email: "not-banned@example.com", password: PASSWORD, name: "Safe" },
+    });
+    await auth.api.createApiKey({ body: { userId: target.user.id, name: "Kobo" } });
+
+    const rejection = await auth.api
+      .banUser({ body: { userId: target.user.id } })
+      .then(() => null)
+      .catch((err: { statusCode?: number }) => err);
+
+    expect(rejection).toMatchObject({ statusCode: 401 });
+    expect(await keysFor(target.user.id)).toMatchObject([{ enabled: true }]);
   });
 });
 

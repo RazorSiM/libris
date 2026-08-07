@@ -7,6 +7,7 @@ import { deniesAppPasswords, resolvePolicy } from "../shared/route-policy.js";
 import { requireKosyncAuth } from "../shared/kosync-auth.js";
 import { withTrustedClientIp } from "../shared/request-ip.js";
 import { isAdmin } from "../shared/auth.js";
+import { isUserBanned } from "../shared/user-ban.js";
 import { apiKeyFromHeaders } from "../lib/auth.js";
 
 const logger = getLogger("auth");
@@ -150,6 +151,28 @@ export const authMiddleware = createMiddleware<{ Variables: AppVariables }>(asyn
     if (!session) {
       if (required) throw unauthorized();
       return;
+    }
+
+    /**
+     * A ban has to bind to the person, not to one kind of credential
+     * (libris-59m.6).
+     *
+     * Better Auth only checks `banned` when it CREATES a session
+     * (`plugins/admin/admin.mjs`, the session.create before-hook), and banning
+     * deletes the existing session rows — so the cookie path looked covered.
+     * An app password creates no session row: the apiKey plugin's before-hook
+     * looks the user up by referenceId and synthesises a session without ever
+     * reading the ban fields. A banned user's Kobo therefore kept downloading,
+     * uploading and PATCHing indefinitely, because app passwords never expire.
+     *
+     * Checking here covers cookies and app passwords in one place, because
+     * both arrive through this one getSession call. Throwing `unauthorized()`
+     * rather than a bare 401 keeps the OPDS WWW-Authenticate challenge, so a
+     * reader shows a login box instead of an error.
+     */
+    if (isUserBanned(session.user)) {
+      logger.warn(`Banned user ${session.user.id} refused on ${path}`);
+      throw unauthorized();
     }
 
     c.set("userId", session.user.id);

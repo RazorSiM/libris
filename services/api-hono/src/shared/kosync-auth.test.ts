@@ -10,6 +10,7 @@
 
 import { afterAll, beforeAll, describe, expect, it } from "vite-plus/test";
 import type { PGlite } from "@electric-sql/pglite";
+import { eq } from "drizzle-orm";
 import { createApp } from "../app.js";
 import { createTestAuth, createTestDb, seedUser, type TestDb } from "../db/test-utils.js";
 import * as schema from "../db/schema.js";
@@ -220,6 +221,70 @@ describe("KoSync Auth (integration)", () => {
       headers: { "x-auth-user": "new-user", "x-auth-key": md5("new-pass") },
     });
     expect(authRes.status).toBe(401);
+  });
+
+  /**
+   * libris-59m.6. KoSync is the one credential path that never touches Better
+   * Auth, so nothing on it ever consulted the account's state: a banned user's
+   * KOReader kept reading and writing progress, and /users/auth kept handing
+   * out a userkey they could pair a NEW device with.
+   */
+  describe("banned accounts", () => {
+    async function seedKosyncUser(
+      username: string,
+      password: string,
+      ban: { banned: boolean; banExpires: Date | null },
+    ): Promise<void> {
+      const userId = await seedUser(db, { name: username });
+      await db.update(schema.users).set(ban).where(eq(schema.users.id, userId));
+      await db.insert(schema.kosyncCredentials).values({
+        userId,
+        username,
+        secretHash: hashKosyncSecret(md5(password)),
+      });
+    }
+
+    it("refuses a banned user's credentials with the same 401 a wrong password gets", async () => {
+      await seedKosyncUser("banned-kosync", "banned-pass", { banned: true, banExpires: null });
+
+      const res = await app.request("/kosync/users/auth", {
+        headers: { "x-auth-user": "banned-kosync", "x-auth-key": md5("banned-pass") },
+      });
+
+      expect(res.status).toBe(401);
+      // Indistinguishable from the wrong-password refusal: saying "banned"
+      // would confirm both the username and the credential.
+      expect(await res.json()).toEqual(
+        await (
+          await app.request("/kosync/users/auth", {
+            headers: { "x-auth-user": KOSYNC_USER, "x-auth-key": md5("nope") },
+          })
+        ).json(),
+      );
+    });
+
+    it("refuses a banned user's progress sync too, not just the auth probe", async () => {
+      await seedKosyncUser("banned-sync", "banned-pass", { banned: true, banExpires: null });
+
+      const res = await app.request("/kosync/syncs/progress?document=abc", {
+        headers: { "x-auth-user": "banned-sync", "x-auth-key": md5("banned-pass") },
+      });
+
+      expect(res.status).toBe(401);
+    });
+
+    it("lets a user back in once the ban has expired", async () => {
+      await seedKosyncUser("expired-ban-kosync", "expired-pass", {
+        banned: true,
+        banExpires: new Date(Date.now() - 60_000),
+      });
+
+      const res = await app.request("/kosync/users/auth", {
+        headers: { "x-auth-user": "expired-ban-kosync", "x-auth-key": md5("expired-pass") },
+      });
+
+      expect(res.status).toBe(200);
+    });
   });
 
   it("POST /kosync/users/create refuses a bodyless request too", async () => {

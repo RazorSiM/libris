@@ -207,6 +207,34 @@ export function createAuth({ db, secondaryStorage, env, secret, baseURL }: Creat
           // Redis-backed sessions valid until expiry. App passwords deliberately
           // remain valid because they are separately managed device credentials.
           await ctx.context.internalAdapter.deleteUserSessions(userId);
+          return;
+        }
+
+        if (ctx.path === "/admin/ban-user") {
+          /**
+           * Unpair the banned user's devices (libris-59m.6).
+           *
+           * The plugin's own ban only deletes sessions, and an app password is
+           * not a session — it resolves into one on each request, so a banned
+           * user's Kobo, KOReader and curl scripts kept working indefinitely.
+           * middleware/auth.ts now refuses a banned user's app-password
+           * session too, but leaving live rows behind would mean an unban
+           * silently re-authorizes every device that was paired at ban time.
+           *
+           * DISABLED, NOT DELETED, and deliberately not re-enabled on unban:
+           * the row stays visible on the devices page so the user can see what
+           * was cut off and mint a replacement, and an unban never resurrects a
+           * credential that may be the reason for the ban. The `enabled` column
+           * is what the apiKey plugin checks (`KEY_DISABLED`), so a disabled
+           * row cannot authenticate even if the ban check were removed.
+           */
+          await ctx.context.adapter.updateMany({
+            // The plugin's model KEY, which the adapter maps to the configured
+            // modelName ("apiKeys") and thence to the api_keys table.
+            model: "apikey",
+            where: [{ field: "referenceId", value: userId }],
+            update: { enabled: false },
+          });
         }
       }),
     },

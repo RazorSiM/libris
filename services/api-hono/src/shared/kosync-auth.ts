@@ -1,8 +1,9 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { HTTPException } from "hono/http-exception";
 import { eq } from "drizzle-orm";
-import { kosyncCredentials } from "#db";
+import { kosyncCredentials, users } from "#db";
 import type { Db } from "#db";
+import { isUserBanned } from "./user-ban.js";
 
 /**
  * Hash the value KOReader puts on the wire.
@@ -39,6 +40,13 @@ function digestsMatch(a: string, b: string): boolean {
  * over a high-entropy secret leaks nothing worth the complexity — whereas
  * bcrypt-per-attempt was itself a CPU exhaustion vector on an unauthenticated
  * endpoint.
+ *
+ * The join onto `users` is the ban check (libris-59m.6). This is the one
+ * credential path that never touches Better Auth, so nothing else here would
+ * ever consult the account's state: before the join, a banned user's KOReader
+ * kept reading and writing progress under their id, and `POST
+ * /kosync/users/auth` kept handing out a userkey they could pair a NEW device
+ * with. Account deletion was already covered by the FK cascade; a ban was not.
  */
 export async function validateKosyncCredentials(
   username: string,
@@ -46,12 +54,21 @@ export async function validateKosyncCredentials(
   db: Db,
 ): Promise<string> {
   const [cred] = await db
-    .select()
+    .select({
+      userId: kosyncCredentials.userId,
+      secretHash: kosyncCredentials.secretHash,
+      banned: users.banned,
+      banExpires: users.banExpires,
+    })
     .from(kosyncCredentials)
+    .innerJoin(users, eq(users.id, kosyncCredentials.userId))
     .where(eq(kosyncCredentials.username, username))
     .limit(1);
 
-  if (!cred || !digestsMatch(hashKosyncSecret(wireSecret), cred.secretHash)) {
+  // One indistinguishable refusal for all three causes. Telling a caller that
+  // the password was right but the account is banned confirms both the
+  // username and the credential.
+  if (!cred || !digestsMatch(hashKosyncSecret(wireSecret), cred.secretHash) || isUserBanned(cred)) {
     throw new HTTPException(401, { message: "Unauthorized" });
   }
 
