@@ -226,6 +226,77 @@ describe("sessions", () => {
     ).toMatchObject({ user: { id: target.user.id } });
   });
 
+  /**
+   * libris-59m.5. The after-hook in createAuth() must not fire for a call that
+   * failed authorization.
+   *
+   * Better Auth's dispatcher catches the endpoint's APIError, stores it as the
+   * return value and runs after-hooks anyway, so the hook used to read `userId`
+   * straight off the request body of a REJECTED call and delete that user's
+   * sessions. No credential of any kind was needed.
+   */
+  it("does not touch the target's sessions when the caller has no credential", async () => {
+    const target = await auth.api.createUser({
+      body: { email: "victim@example.com", password: PASSWORD, name: "Victim" },
+    });
+    const victimCookie = cookieFrom(
+      await auth.api.signInEmail({
+        body: { email: "victim@example.com", password: PASSWORD },
+        asResponse: true,
+      }),
+    );
+    expect(await auth.api.getSession({ headers: new Headers({ cookie: victimCookie }) })).not.toBe(
+      null,
+    );
+
+    const rejection = await auth.api
+      .setUserPassword({
+        body: { userId: target.user.id, newPassword: "attacker-chosen-password" },
+      })
+      .then(() => null)
+      .catch((err: { statusCode?: number }) => err);
+
+    expect(rejection).toMatchObject({ statusCode: 401 });
+    // The session survives — this is the assertion that fails without the
+    // isAPIError guard.
+    expect(
+      await auth.api.getSession({ headers: new Headers({ cookie: victimCookie }) }),
+    ).not.toBeNull();
+    expect(await db.select().from(schema.sessions)).toHaveLength(1);
+    // ...and the password really was not changed either.
+    const stillWorks = await auth.api.signInEmail({
+      body: { email: "victim@example.com", password: PASSWORD },
+      asResponse: true,
+    });
+    expect(stillWorks.status).toBe(200);
+  });
+
+  it("does not touch the target's sessions when the caller is a plain user", async () => {
+    const target = await auth.api.createUser({
+      body: { email: "victim2@example.com", password: PASSWORD, name: "Victim" },
+    });
+    const victimCookie = cookieFrom(
+      await auth.api.signInEmail({
+        body: { email: "victim2@example.com", password: PASSWORD },
+        asResponse: true,
+      }),
+    );
+    const bystanderCookie = cookieFrom(await signUp("bystander@example.com"));
+
+    const rejection = await auth.api
+      .setUserPassword({
+        body: { userId: target.user.id, newPassword: "attacker-chosen-password" },
+        headers: new Headers({ cookie: bystanderCookie }),
+      })
+      .then(() => null)
+      .catch((err: { statusCode?: number }) => err);
+
+    expect(rejection).toMatchObject({ statusCode: 403 });
+    expect(
+      await auth.api.getSession({ headers: new Headers({ cookie: victimCookie }) }),
+    ).not.toBeNull();
+  });
+
   it("resolves a session cookie back to the user", async () => {
     const res = await signUp("reader@example.com");
     const session = await auth.api.getSession({

@@ -5,7 +5,7 @@ import { drizzleAdapter } from "better-auth/adapters/drizzle";
 // direct database connections) out of the bundle entirely. Verified absent from
 // the bundle.
 import { betterAuth } from "better-auth/minimal";
-import { createAuthMiddleware } from "better-auth/api";
+import { createAuthMiddleware, isAPIError } from "better-auth/api";
 import { admin } from "better-auth/plugins/admin";
 import type { BetterAuthOptions } from "better-auth/types";
 import type { Db } from "#db";
@@ -175,17 +175,39 @@ export function createAuth({ db, secondaryStorage, env, secret, baseURL }: Creat
 
     hooks: {
       after: createAuthMiddleware(async (ctx) => {
-        if (ctx.path !== "/admin/set-user-password") return;
+        /**
+         * ⚠︎ INSPECT THE OUTCOME BEFORE ACTING. THIS IS NOT OPTIONAL.
+         *
+         * The dispatcher does not skip after-hooks when the endpoint fails.
+         * `dist/api/dispatch.mjs` wraps the endpoint call in a `.catch` that
+         * turns an APIError into `{response, status}`, assigns it to
+         * `ctx.context.returned`, and then runs `runAfterHooks`
+         * unconditionally. The admin plugin's authorization gate is
+         * `use: [adminMiddleware]` on the endpoint, so it runs *inside* that
+         * try block — an unauthorized caller's 401 arrives here as a value, not
+         * as a thrown error, and every line below would otherwise run for them.
+         *
+         * libris-59m.5: without this guard, an anonymous
+         * `POST /api/auth/admin/set-user-password` got its 401 and still
+         * signed the named user out of every device. Looped over admin ids it
+         * was a credential-free denial of service.
+         *
+         * Any future hook added here inherits the same trap.
+         */
+        if (isAPIError(ctx.context.returned)) return;
+
         const userId = (ctx.body as { userId?: unknown } | undefined)?.userId;
         if (typeof userId !== "string") return;
 
-        // An admin-set password is the recovery path for a forgotten or
-        // compromised credential. A captured browser session must not survive
-        // that recovery. Better Auth's own adapter call clears both Redis and
-        // the persisted session rows; deleting rows directly would leave the
-        // Redis-backed sessions valid until expiry. App passwords deliberately
-        // remain valid because they are separately managed device credentials.
-        await ctx.context.internalAdapter.deleteUserSessions(userId);
+        if (ctx.path === "/admin/set-user-password") {
+          // An admin-set password is the recovery path for a forgotten or
+          // compromised credential. A captured browser session must not survive
+          // that recovery. Better Auth's own adapter call clears both Redis and
+          // the persisted session rows; deleting rows directly would leave the
+          // Redis-backed sessions valid until expiry. App passwords deliberately
+          // remain valid because they are separately managed device credentials.
+          await ctx.context.internalAdapter.deleteUserSessions(userId);
+        }
       }),
     },
 
