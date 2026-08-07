@@ -7,6 +7,7 @@
  * security boundary and gets tested accordingly.
  */
 import type { PGlite } from "@electric-sql/pglite";
+import { eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vite-plus/test";
@@ -164,6 +165,142 @@ describe("POST /api/setup", () => {
 
   it("rejects a malformed body", async () => {
     expect((await postSetup({ email: "not-an-email", password: "x" })).status).toBe(400);
+  });
+});
+
+/**
+ * The state the auth cutover migration leaves an UPGRADED install in: one
+ * `users` row per legacy api key, and zero `accounts` rows, because a bcrypt
+ * key hash is not a password hash. See migrations/20260801115500_auth_cutover
+ * and db/auth-cutover.test.ts.
+ *
+ * Gating the bootstrap on "does any user exist" made this state permanent: no
+ * credential to sign in with, no admin session, and /api/setup answering 409.
+ * libris-59m.4.
+ */
+describe("POST /api/setup on a migrated install (users exist, no credential)", () => {
+  const MIGRATED_ADMIN = "0f39f2ce-1111-4111-8111-000000000001";
+  const MIGRATED_USER = "0f39f2ce-2222-4222-8222-000000000002";
+
+  async function seedMigratedUsers() {
+    await db.insert(schema.users).values([
+      {
+        id: MIGRATED_ADMIN,
+        name: "Raz laptop",
+        email: `${MIGRATED_ADMIN}@migrated.invalid`,
+        role: "admin",
+        createdAt: new Date("2026-01-01T00:00:00Z"),
+      },
+      {
+        id: MIGRATED_USER,
+        name: "Housemate",
+        email: `${MIGRATED_USER}@migrated.invalid`,
+        role: "user",
+        createdAt: new Date("2026-02-01T00:00:00Z"),
+      },
+    ]);
+  }
+
+  it("reports setup as required", async () => {
+    await seedMigratedUsers();
+    const res = await app.request("/api/setup");
+    expect(await res.json()).toEqual({ required: true });
+  });
+
+  it("attaches the credential to the oldest admin instead of creating a duplicate", async () => {
+    await seedMigratedUsers();
+
+    const { status, body } = await postSetup();
+    expect(status).toBe(201);
+    expect(body.id).toBe(MIGRATED_ADMIN);
+    expect(body.adopted).toBe(true);
+
+    // The whole point of adopting: no second person for the same human, so
+    // their books, reading history and Hardcover token stay reachable.
+    expect(await db.select().from(schema.users)).toHaveLength(2);
+
+    const [adopted] = await db
+      .select()
+      .from(schema.users)
+      .where(eq(schema.users.id, MIGRATED_ADMIN));
+    expect(adopted.email).toBe(BODY.email);
+    expect(adopted.name).toBe(BODY.name);
+    expect(adopted.role).toBe("admin");
+  });
+
+  it("produces a credential the adopted admin can actually sign in with", async () => {
+    // The assertion that fails against the old code: before the fix this state
+    // returned 409, so there was never a password to sign in with.
+    await seedMigratedUsers();
+    expect((await postSetup()).status).toBe(201);
+
+    const signedIn = await auth.api.signInEmail({
+      body: { email: BODY.email, password: BODY.password },
+    });
+    expect(signedIn.user.id).toBe(MIGRATED_ADMIN);
+    expect(signedIn.user.role).toBe("admin");
+  });
+
+  it("adopts the user already holding the submitted email, over the oldest admin", async () => {
+    await seedMigratedUsers();
+    const claimed = "housemate@example.test";
+    await db.update(schema.users).set({ email: claimed }).where(eq(schema.users.id, MIGRATED_USER));
+
+    const { status, body } = await postSetup({ ...BODY, email: claimed });
+    expect(status).toBe(201);
+    expect(body.id).toBe(MIGRATED_USER);
+
+    // Promoted, because whoever completes the bootstrap has to be able to
+    // administer the install.
+    const [adopted] = await db
+      .select()
+      .from(schema.users)
+      .where(eq(schema.users.id, MIGRATED_USER));
+    expect(adopted.role).toBe("admin");
+  });
+
+  it("promotes the oldest user when the migrated install has no admin at all", async () => {
+    await db.insert(schema.users).values({
+      id: MIGRATED_USER,
+      name: "Housemate",
+      email: `${MIGRATED_USER}@migrated.invalid`,
+      role: "user",
+      createdAt: new Date("2026-02-01T00:00:00Z"),
+    });
+
+    const { status, body } = await postSetup();
+    expect(status).toBe(201);
+    expect(body.id).toBe(MIGRATED_USER);
+    expect(body.role).toBe("admin");
+    expect(await db.select().from(schema.users)).toHaveLength(1);
+  });
+
+  it("closes again once the credential exists", async () => {
+    await seedMigratedUsers();
+    expect((await postSetup()).status).toBe(201);
+
+    expect((await postSetup({ ...BODY, email: "second@example.test" })).status).toBe(409);
+    const res = await app.request("/api/setup");
+    expect(await res.json()).toEqual({ required: false });
+
+    // The refused second attempt must not have created anybody.
+    expect(await db.select().from(schema.users)).toHaveLength(2);
+  });
+
+  it("cannot be raced into attaching two credentials", async () => {
+    await seedMigratedUsers();
+
+    const results = await Promise.allSettled([
+      postSetup({ ...BODY, email: "a@example.test" }),
+      postSetup({ ...BODY, email: "b@example.test" }),
+      postSetup({ ...BODY, email: "c@example.test" }),
+    ]);
+
+    const created = results.filter(
+      (r) => r.status === "fulfilled" && r.value.status === 201,
+    ).length;
+    expect(created).toBe(1);
+    expect(await db.select().from(schema.accounts)).toHaveLength(1);
   });
 });
 

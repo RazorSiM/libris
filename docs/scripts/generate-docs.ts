@@ -114,8 +114,11 @@ function generateDbDocs() {
 
   lines.push("## Tables", "");
 
+  // Only Libris' own tables. Better Auth owns `users`, `sessions`, `accounts`,
+  // `verifications` and `api_keys` (see src/db/auth-schema.ts); this generator
+  // reads schema.ts alone, so those are documented by Better Auth rather than
+  // here.
   const tableDescriptions: Record<string, string> = {
-    api_keys: "API key records — the identity table (hashed key, label, is_admin, timestamps)",
     books: "Main book records with status, metadata, and the full-text search vector",
     book_files: "Physical file storage per book (format, checksums, content hashes, paths)",
     book_metadata_candidates:
@@ -125,10 +128,12 @@ function generateDbDocs() {
     reading_aggregate:
       "Per-(user, book) reading lifecycle: effective status plus started/finished/paused dates and any manual override",
     service_credentials:
-      "Per-user credentials for OPDS, KoSync, and Hardcover (bcrypt or sealed token)",
+      "Per-user Hardcover API token (sealed, reversible). `username` is a label, not an identity — it is not unique across users",
+    kosync_credentials:
+      "Per-user KoSync login: the username KOReader sends plus a sha256 of the secret it puts on the wire",
     app_settings: "Global key/value application settings (e.g. Hardcover metadata/sync toggles)",
     upload_registry:
-      "Checksum → uploader (api_key) ownership mapping consumed by the book-detected worker",
+      "Checksum → uploader (user) ownership mapping consumed by the book-detected worker",
     hardcover_sync_log: "Per-(user, book) Hardcover sync tracking and last status",
   };
 
@@ -177,7 +182,8 @@ function generateDbDocs() {
     "- `books.language` holds a canonical lowercase ISO 639-1 code (e.g. `en`, `fr`); arbitrary input is normalized by `services/api-hono/src/lib/languages.ts`.",
     "- `book_files.format`, `book_metadata_candidates.source`, `service_credentials.service`, and `hardcover_sync_log.last_status` are free-text columns (not Postgres enums) even though they hold format/source/status-like values.",
     "- `books.search_vector` is excluded from all API responses — the API selects the `bookColumns` projection, which omits it.",
-    "- `reading_progress`, `reading_progress_history`, and `reading_aggregate` use `ON DELETE SET NULL` on `book_id` so reading history survives a book deletion, while their `api_key_id` cascades (or is set null for history).",
+    "- `reading_progress`, `reading_progress_history`, and `reading_aggregate` use `ON DELETE SET NULL` on `book_id` so reading history survives a book deletion, while their `user_id` cascades (or is set null for history).",
+    "- Better Auth owns `users`, `sessions`, `accounts`, `verifications` and `api_keys` — they are declared in `services/api-hono/src/db/auth-schema.ts` and are not listed above.",
     "- The trigram indexes (`*_trgm_idx`) require the `pg_trgm` extension; the full-text `*_search_vector_idx` is a GIN index over the generated `tsvector`.",
     "",
   );

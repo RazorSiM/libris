@@ -8,6 +8,7 @@ import { securityHeaders } from "./middleware/security-headers.js";
 import { rateLimitMiddleware } from "./middleware/rate-limit.js";
 import { bodyLimitMiddleware } from "./middleware/body-limit.js";
 import { authMiddleware } from "./middleware/auth.js";
+import { reassignBooksOnRemoveUser } from "./lib/user-deletion.js";
 import { lastAdminMiddleware } from "./middleware/last-admin.js";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { createRouter } from "./routes/index.js";
@@ -88,6 +89,12 @@ export function createApp({ services, env }: CreateAppOptions) {
   // and an enumerated list had already missed it (59m.12). The middleware
   // classifies each endpoint itself — see ADMIN_ENDPOINT_EFFECTS.
   app.use("/api/auth/admin/*", lastAdminMiddleware);
+  // books.created_by references users with RESTRICT, so removing a user who owns
+  // books made Better Auth's delete fail half-way: the accounts row was already
+  // gone and the user row survived (59m.21). This moves their books to the acting
+  // admin first, so the constraint has nothing left to reject. It must run AFTER
+  // lastAdminMiddleware, so a refused last-admin removal never moves any books.
+  app.use("/api/auth/admin/remove-user", reassignBooksOnRemoveUser);
   app.on(["GET", "POST"], "/api/auth/*", (c) => {
     const request = new Request(c.req.raw, {
       headers: withTrustedClientIp(c.req.raw.headers, c.get("clientIp")),

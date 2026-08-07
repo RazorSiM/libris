@@ -1,8 +1,8 @@
 {
-  "dialect": "postgres",
-  "id": "eb3eac19-2ed0-4be2-b843-a53f89c981e4",
-  "prevIds": ["e875ed36-bc7a-48c4-b4ed-3b0fa9753396"],
   "version": "8",
+  "dialect": "postgres",
+  "id": "87935264-4160-4a6a-a6c6-7a364b4d7d84",
+  "prevIds": ["eb3eac19-2ed0-4be2-b843-a53f89c981e4"],
   "ddl": [
     {
       "values": ["inbox", "review", "organized"],
@@ -18,7 +18,7 @@
     },
     {
       "isRlsEnabled": false,
-      "name": "books",
+      "name": "app_settings",
       "entityType": "tables",
       "schema": "public"
     },
@@ -36,6 +36,30 @@
     },
     {
       "isRlsEnabled": false,
+      "name": "books",
+      "entityType": "tables",
+      "schema": "public"
+    },
+    {
+      "isRlsEnabled": false,
+      "name": "hardcover_sync_log",
+      "entityType": "tables",
+      "schema": "public"
+    },
+    {
+      "isRlsEnabled": false,
+      "name": "kosync_credentials",
+      "entityType": "tables",
+      "schema": "public"
+    },
+    {
+      "isRlsEnabled": false,
+      "name": "reading_aggregate",
+      "entityType": "tables",
+      "schema": "public"
+    },
+    {
+      "isRlsEnabled": false,
       "name": "reading_progress",
       "entityType": "tables",
       "schema": "public"
@@ -48,25 +72,7 @@
     },
     {
       "isRlsEnabled": false,
-      "name": "reading_aggregate",
-      "entityType": "tables",
-      "schema": "public"
-    },
-    {
-      "isRlsEnabled": false,
       "name": "service_credentials",
-      "entityType": "tables",
-      "schema": "public"
-    },
-    {
-      "isRlsEnabled": false,
-      "name": "kosync_credentials",
-      "entityType": "tables",
-      "schema": "public"
-    },
-    {
-      "isRlsEnabled": false,
-      "name": "app_settings",
       "entityType": "tables",
       "schema": "public"
     },
@@ -78,13 +84,13 @@
     },
     {
       "isRlsEnabled": false,
-      "name": "hardcover_sync_log",
+      "name": "accounts",
       "entityType": "tables",
       "schema": "public"
     },
     {
       "isRlsEnabled": false,
-      "name": "users",
+      "name": "api_keys",
       "entityType": "tables",
       "schema": "public"
     },
@@ -96,7 +102,7 @@
     },
     {
       "isRlsEnabled": false,
-      "name": "accounts",
+      "name": "users",
       "entityType": "tables",
       "schema": "public"
     },
@@ -107,10 +113,290 @@
       "schema": "public"
     },
     {
-      "isRlsEnabled": false,
-      "name": "api_keys",
-      "entityType": "tables",
-      "schema": "public"
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "key",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "app_settings"
+    },
+    {
+      "type": "jsonb",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "value",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "app_settings"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "now()",
+      "generated": null,
+      "identity": null,
+      "name": "updated_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "app_settings"
+    },
+    {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "gen_random_uuid()",
+      "generated": null,
+      "identity": null,
+      "name": "id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "book_files"
+    },
+    {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "book_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "book_files"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "format",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "book_files"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "original_name",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "book_files"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "storage_path",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "book_files"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "inbox_path",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "book_files"
+    },
+    {
+      "type": "bigint",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "0",
+      "generated": null,
+      "identity": null,
+      "name": "file_size",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "book_files"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "checksum",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "book_files"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "content_hash",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "book_files"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "original_content_hash",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "book_files"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "now()",
+      "generated": null,
+      "identity": null,
+      "name": "created_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "book_files"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "now()",
+      "generated": null,
+      "identity": null,
+      "name": "updated_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "book_files"
+    },
+    {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "gen_random_uuid()",
+      "generated": null,
+      "identity": null,
+      "name": "id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "book_metadata_candidates"
+    },
+    {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "book_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "book_metadata_candidates"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "source",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "book_metadata_candidates"
+    },
+    {
+      "type": "jsonb",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "raw_response",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "book_metadata_candidates"
+    },
+    {
+      "type": "jsonb",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "'{}'",
+      "generated": null,
+      "identity": null,
+      "name": "normalized",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "book_metadata_candidates"
+    },
+    {
+      "type": "numeric(5,4)",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "'0'",
+      "generated": null,
+      "identity": null,
+      "name": "confidence",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "book_metadata_candidates"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 1,
+      "default": "'{}'",
+      "generated": null,
+      "identity": null,
+      "name": "selected_fields",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "book_metadata_candidates"
     },
     {
       "type": "uuid",
@@ -448,7 +734,7 @@
       "name": "id",
       "entityType": "columns",
       "schema": "public",
-      "table": "book_files"
+      "table": "hardcover_sync_log"
     },
     {
       "type": "uuid",
@@ -461,7 +747,7 @@
       "name": "book_id",
       "entityType": "columns",
       "schema": "public",
-      "table": "book_files"
+      "table": "hardcover_sync_log"
     },
     {
       "type": "text",
@@ -471,101 +757,88 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "format",
+      "name": "user_id",
       "entityType": "columns",
       "schema": "public",
-      "table": "book_files"
+      "table": "hardcover_sync_log"
+    },
+    {
+      "type": "integer",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "hardcover_user_book_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "hardcover_sync_log"
+    },
+    {
+      "type": "integer",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "hardcover_read_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "hardcover_sync_log"
     },
     {
       "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "last_status",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "hardcover_sync_log"
+    },
+    {
+      "type": "numeric(5,4)",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "last_progress",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "hardcover_sync_log"
+    },
+    {
+      "type": "numeric(3,1)",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "last_rating",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "hardcover_sync_log"
+    },
+    {
+      "type": "timestamp with time zone",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "original_name",
+      "name": "last_synced_at",
       "entityType": "columns",
       "schema": "public",
-      "table": "book_files"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "storage_path",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "book_files"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "inbox_path",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "book_files"
-    },
-    {
-      "type": "bigint",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "0",
-      "generated": null,
-      "identity": null,
-      "name": "file_size",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "book_files"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "checksum",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "book_files"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "content_hash",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "book_files"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "original_content_hash",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "book_files"
+      "table": "hardcover_sync_log"
     },
     {
       "type": "timestamp with time zone",
@@ -578,7 +851,7 @@
       "name": "created_at",
       "entityType": "columns",
       "schema": "public",
-      "table": "book_files"
+      "table": "hardcover_sync_log"
     },
     {
       "type": "timestamp with time zone",
@@ -591,7 +864,7 @@
       "name": "updated_at",
       "entityType": "columns",
       "schema": "public",
-      "table": "book_files"
+      "table": "hardcover_sync_log"
     },
     {
       "type": "uuid",
@@ -604,12 +877,103 @@
       "name": "id",
       "entityType": "columns",
       "schema": "public",
-      "table": "book_metadata_candidates"
+      "table": "kosync_credentials"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "user_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "kosync_credentials"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "username",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "kosync_credentials"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "secret_hash",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "kosync_credentials"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "now()",
+      "generated": null,
+      "identity": null,
+      "name": "created_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "kosync_credentials"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "now()",
+      "generated": null,
+      "identity": null,
+      "name": "updated_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "kosync_credentials"
     },
     {
       "type": "uuid",
       "typeSchema": null,
       "notNull": true,
+      "dimensions": 0,
+      "default": "gen_random_uuid()",
+      "generated": null,
+      "identity": null,
+      "name": "id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "reading_aggregate"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "user_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "reading_aggregate"
+    },
+    {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": false,
       "dimensions": 0,
       "default": null,
       "generated": null,
@@ -617,72 +981,137 @@
       "name": "book_id",
       "entityType": "columns",
       "schema": "public",
-      "table": "book_metadata_candidates"
+      "table": "reading_aggregate"
     },
     {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "source",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "book_metadata_candidates"
-    },
-    {
-      "type": "jsonb",
+      "type": "timestamp with time zone",
       "typeSchema": null,
       "notNull": false,
       "dimensions": 0,
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "raw_response",
+      "name": "started_at",
       "entityType": "columns",
       "schema": "public",
-      "table": "book_metadata_candidates"
+      "table": "reading_aggregate"
     },
     {
-      "type": "jsonb",
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "finished_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "reading_aggregate"
+    },
+    {
+      "type": "reading_status",
+      "typeSchema": "public",
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "manual_status",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "reading_aggregate"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "manual_started_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "reading_aggregate"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "manual_finished_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "reading_aggregate"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "manual_paused_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "reading_aggregate"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "manual_set_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "reading_aggregate"
+    },
+    {
+      "type": "reading_status",
+      "typeSchema": "public",
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "external_status",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "reading_aggregate"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "external_status_synced_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "reading_aggregate"
+    },
+    {
+      "type": "timestamp with time zone",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "'{}'",
+      "default": "now()",
       "generated": null,
       "identity": null,
-      "name": "normalized",
+      "name": "updated_at",
       "entityType": "columns",
       "schema": "public",
-      "table": "book_metadata_candidates"
-    },
-    {
-      "type": "numeric(5,4)",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "'0'",
-      "generated": null,
-      "identity": null,
-      "name": "confidence",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "book_metadata_candidates"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 1,
-      "default": "'{}'",
-      "generated": null,
-      "identity": null,
-      "name": "selected_fields",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "book_metadata_candidates"
+      "table": "reading_aggregate"
     },
     {
       "type": "uuid",
@@ -955,175 +1384,6 @@
       "name": "id",
       "entityType": "columns",
       "schema": "public",
-      "table": "reading_aggregate"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "user_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "reading_aggregate"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "book_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "reading_aggregate"
-    },
-    {
-      "type": "timestamp with time zone",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "started_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "reading_aggregate"
-    },
-    {
-      "type": "timestamp with time zone",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "finished_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "reading_aggregate"
-    },
-    {
-      "type": "reading_status",
-      "typeSchema": "public",
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "manual_status",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "reading_aggregate"
-    },
-    {
-      "type": "timestamp with time zone",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "manual_started_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "reading_aggregate"
-    },
-    {
-      "type": "timestamp with time zone",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "manual_finished_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "reading_aggregate"
-    },
-    {
-      "type": "timestamp with time zone",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "manual_paused_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "reading_aggregate"
-    },
-    {
-      "type": "timestamp with time zone",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "manual_set_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "reading_aggregate"
-    },
-    {
-      "type": "reading_status",
-      "typeSchema": "public",
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "external_status",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "reading_aggregate"
-    },
-    {
-      "type": "timestamp with time zone",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "external_status_synced_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "reading_aggregate"
-    },
-    {
-      "type": "timestamp with time zone",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "now()",
-      "generated": null,
-      "identity": null,
-      "name": "updated_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "reading_aggregate"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "gen_random_uuid()",
-      "generated": null,
-      "identity": null,
-      "name": "id",
-      "entityType": "columns",
-      "schema": "public",
       "table": "service_credentials"
     },
     {
@@ -1215,123 +1475,6 @@
       "name": "id",
       "entityType": "columns",
       "schema": "public",
-      "table": "kosync_credentials"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "user_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "kosync_credentials"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "username",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "kosync_credentials"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "secret_hash",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "kosync_credentials"
-    },
-    {
-      "type": "timestamp with time zone",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "now()",
-      "generated": null,
-      "identity": null,
-      "name": "created_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "kosync_credentials"
-    },
-    {
-      "type": "timestamp with time zone",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "now()",
-      "generated": null,
-      "identity": null,
-      "name": "updated_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "kosync_credentials"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "key",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "app_settings"
-    },
-    {
-      "type": "jsonb",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "value",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "app_settings"
-    },
-    {
-      "type": "timestamp with time zone",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "now()",
-      "generated": null,
-      "identity": null,
-      "name": "updated_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "app_settings"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "gen_random_uuid()",
-      "generated": null,
-      "identity": null,
-      "name": "id",
-      "entityType": "columns",
-      "schema": "public",
       "table": "upload_registry"
     },
     {
@@ -1385,409 +1528,6 @@
       "entityType": "columns",
       "schema": "public",
       "table": "upload_registry"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "gen_random_uuid()",
-      "generated": null,
-      "identity": null,
-      "name": "id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "hardcover_sync_log"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "book_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "hardcover_sync_log"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "user_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "hardcover_sync_log"
-    },
-    {
-      "type": "integer",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "hardcover_user_book_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "hardcover_sync_log"
-    },
-    {
-      "type": "integer",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "hardcover_read_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "hardcover_sync_log"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "last_status",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "hardcover_sync_log"
-    },
-    {
-      "type": "numeric(5,4)",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "last_progress",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "hardcover_sync_log"
-    },
-    {
-      "type": "numeric(3,1)",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "last_rating",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "hardcover_sync_log"
-    },
-    {
-      "type": "timestamp with time zone",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "last_synced_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "hardcover_sync_log"
-    },
-    {
-      "type": "timestamp with time zone",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "now()",
-      "generated": null,
-      "identity": null,
-      "name": "created_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "hardcover_sync_log"
-    },
-    {
-      "type": "timestamp with time zone",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "now()",
-      "generated": null,
-      "identity": null,
-      "name": "updated_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "hardcover_sync_log"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "users"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "name",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "users"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "email",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "users"
-    },
-    {
-      "type": "boolean",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "false",
-      "generated": null,
-      "identity": null,
-      "name": "email_verified",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "users"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "image",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "users"
-    },
-    {
-      "type": "timestamp with time zone",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "now()",
-      "generated": null,
-      "identity": null,
-      "name": "created_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "users"
-    },
-    {
-      "type": "timestamp with time zone",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "now()",
-      "generated": null,
-      "identity": null,
-      "name": "updated_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "users"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "role",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "users"
-    },
-    {
-      "type": "boolean",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": "false",
-      "generated": null,
-      "identity": null,
-      "name": "banned",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "users"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "ban_reason",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "users"
-    },
-    {
-      "type": "timestamp with time zone",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "ban_expires",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "users"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "sessions"
-    },
-    {
-      "type": "timestamp with time zone",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "expires_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "sessions"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "token",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "sessions"
-    },
-    {
-      "type": "timestamp with time zone",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "now()",
-      "generated": null,
-      "identity": null,
-      "name": "created_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "sessions"
-    },
-    {
-      "type": "timestamp with time zone",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "now()",
-      "generated": null,
-      "identity": null,
-      "name": "updated_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "sessions"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "ip_address",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "sessions"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "user_agent",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "sessions"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "user_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "sessions"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "impersonated_by",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "sessions"
     },
     {
       "type": "text",
@@ -1957,84 +1697,6 @@
       "entityType": "columns",
       "schema": "public",
       "table": "accounts"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "verifications"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "identifier",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "verifications"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "value",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "verifications"
-    },
-    {
-      "type": "timestamp with time zone",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "expires_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "verifications"
-    },
-    {
-      "type": "timestamp with time zone",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "now()",
-      "generated": null,
-      "identity": null,
-      "name": "created_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "verifications"
-    },
-    {
-      "type": "timestamp with time zone",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "now()",
-      "generated": null,
-      "identity": null,
-      "name": "updated_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "verifications"
     },
     {
       "type": "text",
@@ -2323,6 +1985,449 @@
       "table": "api_keys"
     },
     {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "sessions"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "expires_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "sessions"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "token",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "sessions"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "now()",
+      "generated": null,
+      "identity": null,
+      "name": "created_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "sessions"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "now()",
+      "generated": null,
+      "identity": null,
+      "name": "updated_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "sessions"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "ip_address",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "sessions"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "user_agent",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "sessions"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "user_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "sessions"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "impersonated_by",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "sessions"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "users"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "name",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "users"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "email",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "users"
+    },
+    {
+      "type": "boolean",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "false",
+      "generated": null,
+      "identity": null,
+      "name": "email_verified",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "users"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "image",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "users"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "now()",
+      "generated": null,
+      "identity": null,
+      "name": "created_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "users"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "now()",
+      "generated": null,
+      "identity": null,
+      "name": "updated_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "users"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "role",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "users"
+    },
+    {
+      "type": "boolean",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": "false",
+      "generated": null,
+      "identity": null,
+      "name": "banned",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "users"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "ban_reason",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "users"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "ban_expires",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "users"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "verifications"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "identifier",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "verifications"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "value",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "verifications"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "expires_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "verifications"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "now()",
+      "generated": null,
+      "identity": null,
+      "name": "created_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "verifications"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "now()",
+      "generated": null,
+      "identity": null,
+      "name": "updated_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "verifications"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "book_id",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "book_files_book_id_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "book_files"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "checksum",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "book_files_checksum_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "book_files"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "content_hash",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "book_files_content_hash_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "book_files"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "original_content_hash",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "book_files_original_content_hash_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "book_files"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "book_id",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "book_metadata_candidates_book_id_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "book_metadata_candidates"
+    },
+    {
       "nameExplicit": true,
       "columns": [
         {
@@ -2556,6 +2661,111 @@
       "nameExplicit": true,
       "columns": [
         {
+          "value": "last_status",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "hardcover_sync_log_status_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "hardcover_sync_log"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "last_synced_at",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "hardcover_sync_log_last_synced_at_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "hardcover_sync_log"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "user_id",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "hardcover_sync_log_user_id_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "hardcover_sync_log"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "username",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "kosync_credentials_username_uniq",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "kosync_credentials"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "user_id",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "kosync_credentials_user_id_uniq",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "kosync_credentials"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
           "value": "book_id",
           "isExpression": false,
           "asc": true,
@@ -2568,16 +2778,16 @@
       "with": "",
       "method": "btree",
       "concurrently": false,
-      "name": "book_files_book_id_idx",
+      "name": "reading_aggregate_book_id_idx",
       "entityType": "indexes",
       "schema": "public",
-      "table": "book_files"
+      "table": "reading_aggregate"
     },
     {
       "nameExplicit": true,
       "columns": [
         {
-          "value": "checksum",
+          "value": "user_id",
           "isExpression": false,
           "asc": true,
           "nullsFirst": false,
@@ -2589,73 +2799,10 @@
       "with": "",
       "method": "btree",
       "concurrently": false,
-      "name": "book_files_checksum_idx",
+      "name": "reading_aggregate_user_id_idx",
       "entityType": "indexes",
       "schema": "public",
-      "table": "book_files"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "content_hash",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "book_files_content_hash_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "book_files"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "original_content_hash",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "book_files_original_content_hash_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "book_files"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "book_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "book_metadata_candidates_book_id_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "book_metadata_candidates"
+      "table": "reading_aggregate"
     },
     {
       "nameExplicit": true,
@@ -2815,48 +2962,6 @@
       "nameExplicit": true,
       "columns": [
         {
-          "value": "book_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "reading_aggregate_book_id_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "reading_aggregate"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "user_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "reading_aggregate_user_id_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "reading_aggregate"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
           "value": "user_id",
           "isExpression": false,
           "asc": true,
@@ -2878,202 +2983,6 @@
       "nameExplicit": true,
       "columns": [
         {
-          "value": "service",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        },
-        {
-          "value": "username",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": true,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "service_credentials_service_username_uniq",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "service_credentials"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "username",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": true,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "kosync_credentials_username_uniq",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "kosync_credentials"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "user_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": true,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "kosync_credentials_user_id_uniq",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "kosync_credentials"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "last_status",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "hardcover_sync_log_status_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "hardcover_sync_log"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "last_synced_at",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "hardcover_sync_log_last_synced_at_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "hardcover_sync_log"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "user_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "hardcover_sync_log_user_id_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "hardcover_sync_log"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "email",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": true,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "users_email_uniq",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "users"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "token",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": true,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "sessions_token_uniq",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "sessions"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "user_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "sessions_user_id_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "sessions"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
           "value": "user_id",
           "isExpression": false,
           "asc": true,
@@ -3090,27 +2999,6 @@
       "entityType": "indexes",
       "schema": "public",
       "table": "accounts"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "identifier",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "verifications_identifier_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "verifications"
     },
     {
       "nameExplicit": true,
@@ -3176,6 +3064,116 @@
       "table": "api_keys"
     },
     {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "token",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "sessions_token_uniq",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "sessions"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "user_id",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "sessions_user_id_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "sessions"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "email",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "users_email_uniq",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "users"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "identifier",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "verifications_identifier_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "verifications"
+    },
+    {
+      "nameExplicit": false,
+      "columns": ["book_id"],
+      "schemaTo": "public",
+      "tableTo": "books",
+      "columnsTo": ["id"],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "name": "book_files_book_id_books_id_fkey",
+      "entityType": "fks",
+      "schema": "public",
+      "table": "book_files"
+    },
+    {
+      "nameExplicit": false,
+      "columns": ["book_id"],
+      "schemaTo": "public",
+      "tableTo": "books",
+      "columnsTo": ["id"],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "name": "book_metadata_candidates_book_id_books_id_fkey",
+      "entityType": "fks",
+      "schema": "public",
+      "table": "book_metadata_candidates"
+    },
+    {
       "nameExplicit": false,
       "columns": ["created_by"],
       "schemaTo": "public",
@@ -3209,10 +3207,49 @@
       "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
-      "name": "book_files_book_id_books_id_fkey",
+      "name": "hardcover_sync_log_book_id_books_id_fkey",
       "entityType": "fks",
       "schema": "public",
-      "table": "book_files"
+      "table": "hardcover_sync_log"
+    },
+    {
+      "nameExplicit": false,
+      "columns": ["user_id"],
+      "schemaTo": "public",
+      "tableTo": "users",
+      "columnsTo": ["id"],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "name": "hardcover_sync_log_user_id_users_id_fkey",
+      "entityType": "fks",
+      "schema": "public",
+      "table": "hardcover_sync_log"
+    },
+    {
+      "nameExplicit": false,
+      "columns": ["user_id"],
+      "schemaTo": "public",
+      "tableTo": "users",
+      "columnsTo": ["id"],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "name": "kosync_credentials_user_id_users_id_fkey",
+      "entityType": "fks",
+      "schema": "public",
+      "table": "kosync_credentials"
+    },
+    {
+      "nameExplicit": false,
+      "columns": ["user_id"],
+      "schemaTo": "public",
+      "tableTo": "users",
+      "columnsTo": ["id"],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "name": "reading_aggregate_user_id_users_id_fkey",
+      "entityType": "fks",
+      "schema": "public",
+      "table": "reading_aggregate"
     },
     {
       "nameExplicit": false,
@@ -3221,11 +3258,11 @@
       "tableTo": "books",
       "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
-      "onDelete": "CASCADE",
-      "name": "book_metadata_candidates_book_id_books_id_fkey",
+      "onDelete": "SET NULL",
+      "name": "reading_aggregate_book_id_books_id_fkey",
       "entityType": "fks",
       "schema": "public",
-      "table": "book_metadata_candidates"
+      "table": "reading_aggregate"
     },
     {
       "nameExplicit": false,
@@ -3287,32 +3324,6 @@
       "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
-      "name": "reading_aggregate_user_id_users_id_fkey",
-      "entityType": "fks",
-      "schema": "public",
-      "table": "reading_aggregate"
-    },
-    {
-      "nameExplicit": false,
-      "columns": ["book_id"],
-      "schemaTo": "public",
-      "tableTo": "books",
-      "columnsTo": ["id"],
-      "onUpdate": "NO ACTION",
-      "onDelete": "SET NULL",
-      "name": "reading_aggregate_book_id_books_id_fkey",
-      "entityType": "fks",
-      "schema": "public",
-      "table": "reading_aggregate"
-    },
-    {
-      "nameExplicit": false,
-      "columns": ["user_id"],
-      "schemaTo": "public",
-      "tableTo": "users",
-      "columnsTo": ["id"],
-      "onUpdate": "NO ACTION",
-      "onDelete": "CASCADE",
       "name": "service_credentials_user_id_users_id_fkey",
       "entityType": "fks",
       "schema": "public",
@@ -3326,62 +3337,10 @@
       "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
-      "name": "kosync_credentials_user_id_users_id_fkey",
-      "entityType": "fks",
-      "schema": "public",
-      "table": "kosync_credentials"
-    },
-    {
-      "nameExplicit": false,
-      "columns": ["user_id"],
-      "schemaTo": "public",
-      "tableTo": "users",
-      "columnsTo": ["id"],
-      "onUpdate": "NO ACTION",
-      "onDelete": "CASCADE",
       "name": "upload_registry_user_id_users_id_fkey",
       "entityType": "fks",
       "schema": "public",
       "table": "upload_registry"
-    },
-    {
-      "nameExplicit": false,
-      "columns": ["book_id"],
-      "schemaTo": "public",
-      "tableTo": "books",
-      "columnsTo": ["id"],
-      "onUpdate": "NO ACTION",
-      "onDelete": "CASCADE",
-      "name": "hardcover_sync_log_book_id_books_id_fkey",
-      "entityType": "fks",
-      "schema": "public",
-      "table": "hardcover_sync_log"
-    },
-    {
-      "nameExplicit": false,
-      "columns": ["user_id"],
-      "schemaTo": "public",
-      "tableTo": "users",
-      "columnsTo": ["id"],
-      "onUpdate": "NO ACTION",
-      "onDelete": "CASCADE",
-      "name": "hardcover_sync_log_user_id_users_id_fkey",
-      "entityType": "fks",
-      "schema": "public",
-      "table": "hardcover_sync_log"
-    },
-    {
-      "nameExplicit": false,
-      "columns": ["user_id"],
-      "schemaTo": "public",
-      "tableTo": "users",
-      "columnsTo": ["id"],
-      "onUpdate": "NO ACTION",
-      "onDelete": "CASCADE",
-      "name": "sessions_user_id_users_id_fkey",
-      "entityType": "fks",
-      "schema": "public",
-      "table": "sessions"
     },
     {
       "nameExplicit": false,
@@ -3410,11 +3369,24 @@
       "table": "api_keys"
     },
     {
-      "columns": ["id"],
       "nameExplicit": false,
-      "name": "books_pkey",
+      "columns": ["user_id"],
+      "schemaTo": "public",
+      "tableTo": "users",
+      "columnsTo": ["id"],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "name": "sessions_user_id_users_id_fkey",
+      "entityType": "fks",
       "schema": "public",
-      "table": "books",
+      "table": "sessions"
+    },
+    {
+      "columns": ["key"],
+      "nameExplicit": false,
+      "name": "app_settings_pkey",
+      "schema": "public",
+      "table": "app_settings",
       "entityType": "pks"
     },
     {
@@ -3436,6 +3408,38 @@
     {
       "columns": ["id"],
       "nameExplicit": false,
+      "name": "books_pkey",
+      "schema": "public",
+      "table": "books",
+      "entityType": "pks"
+    },
+    {
+      "columns": ["id"],
+      "nameExplicit": false,
+      "name": "hardcover_sync_log_pkey",
+      "schema": "public",
+      "table": "hardcover_sync_log",
+      "entityType": "pks"
+    },
+    {
+      "columns": ["id"],
+      "nameExplicit": false,
+      "name": "kosync_credentials_pkey",
+      "schema": "public",
+      "table": "kosync_credentials",
+      "entityType": "pks"
+    },
+    {
+      "columns": ["id"],
+      "nameExplicit": false,
+      "name": "reading_aggregate_pkey",
+      "schema": "public",
+      "table": "reading_aggregate",
+      "entityType": "pks"
+    },
+    {
+      "columns": ["id"],
+      "nameExplicit": false,
       "name": "reading_progress_pkey",
       "schema": "public",
       "table": "reading_progress",
@@ -3452,33 +3456,9 @@
     {
       "columns": ["id"],
       "nameExplicit": false,
-      "name": "reading_aggregate_pkey",
-      "schema": "public",
-      "table": "reading_aggregate",
-      "entityType": "pks"
-    },
-    {
-      "columns": ["id"],
-      "nameExplicit": false,
       "name": "service_credentials_pkey",
       "schema": "public",
       "table": "service_credentials",
-      "entityType": "pks"
-    },
-    {
-      "columns": ["id"],
-      "nameExplicit": false,
-      "name": "kosync_credentials_pkey",
-      "schema": "public",
-      "table": "kosync_credentials",
-      "entityType": "pks"
-    },
-    {
-      "columns": ["key"],
-      "nameExplicit": false,
-      "name": "app_settings_pkey",
-      "schema": "public",
-      "table": "app_settings",
       "entityType": "pks"
     },
     {
@@ -3492,17 +3472,17 @@
     {
       "columns": ["id"],
       "nameExplicit": false,
-      "name": "hardcover_sync_log_pkey",
+      "name": "accounts_pkey",
       "schema": "public",
-      "table": "hardcover_sync_log",
+      "table": "accounts",
       "entityType": "pks"
     },
     {
       "columns": ["id"],
       "nameExplicit": false,
-      "name": "users_pkey",
+      "name": "api_keys_pkey",
       "schema": "public",
-      "table": "users",
+      "table": "api_keys",
       "entityType": "pks"
     },
     {
@@ -3516,9 +3496,9 @@
     {
       "columns": ["id"],
       "nameExplicit": false,
-      "name": "accounts_pkey",
+      "name": "users_pkey",
       "schema": "public",
-      "table": "accounts",
+      "table": "users",
       "entityType": "pks"
     },
     {
@@ -3527,14 +3507,6 @@
       "name": "verifications_pkey",
       "schema": "public",
       "table": "verifications",
-      "entityType": "pks"
-    },
-    {
-      "columns": ["id"],
-      "nameExplicit": false,
-      "name": "api_keys_pkey",
-      "schema": "public",
-      "table": "api_keys",
       "entityType": "pks"
     },
     {
@@ -3548,12 +3520,12 @@
     },
     {
       "nameExplicit": true,
-      "columns": ["user_id", "document", "device"],
+      "columns": ["user_id", "book_id"],
       "nullsNotDistinct": false,
-      "name": "reading_progress_user_document_device_uniq",
+      "name": "hardcover_sync_log_user_book_uniq",
       "entityType": "uniques",
       "schema": "public",
-      "table": "reading_progress"
+      "table": "hardcover_sync_log"
     },
     {
       "nameExplicit": true,
@@ -3563,6 +3535,15 @@
       "entityType": "uniques",
       "schema": "public",
       "table": "reading_aggregate"
+    },
+    {
+      "nameExplicit": true,
+      "columns": ["user_id", "document", "device"],
+      "nullsNotDistinct": false,
+      "name": "reading_progress_user_document_device_uniq",
+      "entityType": "uniques",
+      "schema": "public",
+      "table": "reading_progress"
     },
     {
       "nameExplicit": true,
@@ -3581,15 +3562,6 @@
       "entityType": "uniques",
       "schema": "public",
       "table": "upload_registry"
-    },
-    {
-      "nameExplicit": true,
-      "columns": ["user_id", "book_id"],
-      "nullsNotDistinct": false,
-      "name": "hardcover_sync_log_user_book_uniq",
-      "entityType": "uniques",
-      "schema": "public",
-      "table": "hardcover_sync_log"
     }
   ],
   "renames": []

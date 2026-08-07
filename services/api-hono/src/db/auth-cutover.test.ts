@@ -142,9 +142,13 @@ describe("auth cutover — resulting schema", () => {
 
   it("books.created_by is text NOT NULL and references users.id ON DELETE RESTRICT", async () => {
     // NOT NULL is what lets authorization drop its "unowned book" branch.
-    // RESTRICT is the database backstop: the admin delete-user path
-    // reassigns a user's books before removing them, and a path that forgets
-    // fails loudly rather than orphaning rows.
+    // RESTRICT is the database backstop. The path that satisfies it is
+    // `reassignBooksOnRemoveUser` (lib/user-deletion.ts), which moves the
+    // target's books to the acting admin before Better Auth deletes them —
+    // covered by lib/user-deletion.test.ts. A path that forgets fails loudly
+    // rather than orphaning rows, but loudly is not safely: Better Auth's
+    // deletion is un-transacted, so the rejection lands after the account row
+    // is already gone (libris-59m.21).
     const info = await column(pglite, "books", "created_by");
     expect(info?.data_type).toBe("text");
     expect(info?.is_nullable).toBe("NO");
@@ -300,11 +304,19 @@ describe("auth cutover — data backfill", () => {
     expect(await count(pglite, `SELECT count(*) n FROM users WHERE role = 'user'`)).toBe(1);
   });
 
-  it("leaves migrated users with no credential account, so they cannot sign in until reset", async () => {
-    // bcrypt key hashes are not password hashes and cannot become one. Every
-    // migrated user gets a password from the admin at cutover time.
+  it("leaves migrated users with no credential account, which is what keeps POST /api/setup open", async () => {
+    // bcrypt key hashes are not password hashes and cannot become one, so the
+    // migration cannot produce a usable credential.
+    //
+    // This is precisely the state POST /api/setup has to recognise: it gates on
+    // the absence of a CREDENTIAL rather than the absence of users, and
+    // attaches the first password to an existing row instead of creating a
+    // duplicate person (routes/api/setup.test.ts, "POST /api/setup on a
+    // migrated install"). Gating it on "any user exists" is what turned this
+    // migration into a permanent lockout — libris-59m.4.
     await applyMigration(pglite, cutover);
     expect(await count(pglite, `SELECT count(*) n FROM accounts`)).toBe(0);
+    expect(await count(pglite, `SELECT count(*) n FROM users`)).toBeGreaterThan(0);
   });
 
   it("repoints every dependent row onto the new user without losing any", async () => {

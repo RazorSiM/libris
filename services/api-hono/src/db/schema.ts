@@ -65,11 +65,16 @@ export const books = pgTable(
     tags: text("tags").array().notNull().default([]),
     hardcoverBookId: integer("hardcover_book_id"),
     hardcoverEditionId: integer("hardcover_edition_id"),
-    // NOT NULL: every book has an owner, which is what lets
-    // authorization drop its "unowned book" branch. RESTRICT rather than
-    // CASCADE or SET NULL — deleting a user must not delete or orphan their
-    // books, so the admin delete path reassigns them first and a path that
-    // forgets fails loudly here.
+    // NOT NULL: every book has an owner, which is what lets authorization drop
+    // its "unowned book" branch. RESTRICT rather than CASCADE or SET NULL —
+    // deleting a user must not delete or orphan their books.
+    //
+    // What satisfies it is `reassignBooksOnRemoveUser` (lib/user-deletion.ts):
+    // it moves the target's books to the acting admin BEFORE Better Auth's
+    // deletion runs, so this constraint has nothing left to reject. A path that
+    // forgets fails loudly here — and loudly is not the same as safely: Better
+    // Auth's deletion is three un-transacted statements, so the rejection lands
+    // after the sessions and accounts rows are already gone (libris-59m.21).
     createdBy: text("created_by")
       .notNull()
       .references(() => users.id, { onDelete: "restrict" }),
@@ -263,6 +268,19 @@ export const readingAggregate = pgTable(
   ],
 );
 
+/**
+ * Per-user credential for an external service. Hardcover is the only remaining
+ * occupant: OPDS credentials were removed with the service, and KoSync moved to
+ * `kosync_credentials`.
+ *
+ * `username` is a LABEL, not an identity. Nothing authenticates against it --
+ * the frontend sends the literal string "hardcover" for every user (see
+ * SettingsHardcover.vue), and the token in `password_hash` is what actually
+ * talks to the API. It is therefore deliberately NOT unique across users; the
+ * global `(service, username)` unique index that used to be here let exactly
+ * one person in the whole install connect Hardcover and 500'd the second
+ * (libris-59m.9). `(service, user_id)` is the constraint that still matters.
+ */
 export const serviceCredentials = pgTable(
   "service_credentials",
   {
@@ -282,7 +300,6 @@ export const serviceCredentials = pgTable(
   (t) => [
     unique("service_credentials_service_user_uniq").on(t.service, t.userId),
     index("service_credentials_user_id_idx").on(t.userId),
-    uniqueIndex("service_credentials_service_username_uniq").on(t.service, t.username),
   ],
 );
 
