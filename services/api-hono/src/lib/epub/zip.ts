@@ -10,6 +10,25 @@ export const EOCD_MIN_SIZE = 22;
 export const EOCD_MAX_COMMENT = 65535;
 export const MAX_ZIP_ENTRY_BYTES = 16 * 1024 * 1024;
 export const MAX_ZIP_ARCHIVE_BYTES = 64 * 1024 * 1024;
+/**
+ * Hard cap on central-directory records. A real EPUB has hundreds; 10,000 is
+ * generous. Without it a ~90 MB upload can declare millions of zero-payload
+ * entries: every byte budget here is computed from `uncompressedSize`, so an
+ * entry declaring size 0 costs nothing against them while still costing ~90
+ * bytes of heap in the entry array plus one open/read/close round trip in
+ * readAllZipEntries.
+ *
+ * Measured on Node 24 with 2M 47-byte records: 89.6 MB for the directory
+ * buffer, 181.5 MB of heap for the entry array, 391 MB peak RSS — enough to
+ * OOM-kill a 512 MB container along with the in-process HTTP server.
+ */
+export const MAX_ZIP_ENTRIES = 10_000;
+/**
+ * Hard cap on the central-directory buffer itself, which is read in one
+ * allocation before any per-entry limit can apply. 10,000 records with
+ * maximum-length names stay far below this.
+ */
+export const MAX_CENTRAL_DIRECTORY_BYTES = 4 * 1024 * 1024;
 
 export class ZipLimitError extends Error {
   constructor(message: string) {
@@ -66,12 +85,25 @@ export function findEocd(buf: Buffer): number {
   return -1;
 }
 
+/**
+ * Parse ZIP central-directory records.
+ *
+ * Throws {@link ZipLimitError} once {@link MAX_ZIP_ENTRIES} records have been
+ * read, so every caller — readEpubOpf, readAllZipEntries,
+ * extractEpubCoverImage, extractEpubTextSample — inherits the cap.
+ */
 export function parseCentralDirectory(buf: Buffer, cdSize: number): ZipEntry[] {
   const entries: ZipEntry[] = [];
   let pos = 0;
 
   while (pos + 46 <= cdSize && pos + 46 <= buf.length) {
     if (buf.readUInt32LE(pos) !== CD_SIG) break;
+
+    if (entries.length >= MAX_ZIP_ENTRIES) {
+      throw new ZipLimitError(
+        `ZIP central directory declares more than ${MAX_ZIP_ENTRIES} entries`,
+      );
+    }
 
     const compression = buf.readUInt16LE(pos + 10);
     const compressedSize = buf.readUInt32LE(pos + 20);
@@ -80,6 +112,11 @@ export function parseCentralDirectory(buf: Buffer, cdSize: number): ZipEntry[] {
     const extraLength = buf.readUInt16LE(pos + 30);
     const commentLength = buf.readUInt16LE(pos + 32);
     const localHeaderOffset = buf.readUInt32LE(pos + 42);
+
+    // No legitimate archive has an unnamed entry; a 46-byte record with no name
+    // is the cheapest possible way to inflate the entry count. Treat it as the
+    // end of the directory.
+    if (fileNameLength === 0) break;
 
     const fileNameStart = pos + 46;
     if (fileNameStart + fileNameLength > buf.length) break;
@@ -98,6 +135,24 @@ export function parseCentralDirectory(buf: Buffer, cdSize: number): ZipEntry[] {
   }
 
   return entries;
+}
+
+/**
+ * Read the central directory off disk and parse it, bounding both the buffer
+ * size and the entry count before either can be attacker-controlled.
+ */
+export async function readCentralDirectory(
+  filePath: string,
+  cdOffset: number,
+  cdSize: number,
+): Promise<ZipEntry[]> {
+  if (cdSize > MAX_CENTRAL_DIRECTORY_BYTES) {
+    throw new ZipLimitError(
+      `ZIP central directory exceeds the ${MAX_CENTRAL_DIRECTORY_BYTES}-byte limit`,
+    );
+  }
+  const cdBuf = await readRange(filePath, cdOffset, cdSize);
+  return parseCentralDirectory(cdBuf, cdSize);
 }
 
 interface ReadZipEntryOptions {
@@ -184,8 +239,7 @@ export async function readAllZipEntries(
   const cdSize = tailBuf.readUInt32LE(eocdPos + 12);
   const cdOffset = tailBuf.readUInt32LE(eocdPos + 16);
 
-  const cdBuf = await readRange(filePath, cdOffset, cdSize);
-  const entries = parseCentralDirectory(cdBuf, cdSize);
+  const entries = await readCentralDirectory(filePath, cdOffset, cdSize);
 
   let declaredTotal = 0;
   for (const entry of entries) {

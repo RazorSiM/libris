@@ -1,3 +1,5 @@
+import { MAX_CENTRAL_DIRECTORY_BYTES, MAX_ZIP_ENTRIES } from "../lib/epub/zip.js";
+
 const LOCAL_FILE_HEADER = 0x04034b50;
 const CENTRAL_DIRECTORY_HEADER = 0x02014b50;
 const END_OF_CENTRAL_DIRECTORY = 0x06054b50;
@@ -51,6 +53,13 @@ export function validateEpubUpload(data: Uint8Array): string | null {
     buffer.readUInt32LE(directoryOffset) !== CENTRAL_DIRECTORY_HEADER
   ) {
     return "EPUB ZIP central directory is invalid";
+  }
+  // libris-59m.29: reject entry floods at upload rather than during ingestion,
+  // where parsing the directory is an in-process worker outage. `entryCount` is
+  // only 16 bits and wraps past 65535, so the directory size is the load-bearing
+  // bound: ~2.2M zero-payload records need ~92 MB of central directory.
+  if (entryCount > MAX_ZIP_ENTRIES || directorySize > MAX_CENTRAL_DIRECTORY_BYTES) {
+    return "EPUB ZIP central directory declares too many entries";
   }
   const firstDirectoryNameLength = buffer.readUInt16LE(directoryOffset + 28);
   const firstDirectoryName = buffer
