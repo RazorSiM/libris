@@ -43,8 +43,17 @@ BEGIN
   -- is applied by hand at cutover time. `.invalid` is the reserved TLD from
   -- RFC 2606, so these can never collide with or accidentally reach a real
   -- address. No `accounts` row is created — a bcrypt key hash is not a password
-  -- hash and cannot become one, so every migrated user needs a password set by
-  -- an admin before they can sign in.
+  -- hash and cannot become one, so every migrated user needs a password before
+  -- they can sign in.
+  --
+  -- The way back in is POST /api/setup (routes/api/setup.ts). It gates on the
+  -- absence of a CREDENTIAL rather than the absence of users, so it stays open
+  -- in exactly this state, and it ATTACHES the submitted email and password to
+  -- an existing user — the oldest admin below, or whoever already holds the
+  -- submitted email — instead of creating a duplicate person. It closes again
+  -- the moment the first credential exists. See docs/deployment.md, "Upgrading
+  -- from a pre-Better-Auth install". Gating it on "any user exists" is what
+  -- made this migration a permanent lockout (libris-59m.4).
   INSERT INTO users (id, name, email, email_verified, role, created_at, updated_at)
   SELECT k.id::text,
          k.label,

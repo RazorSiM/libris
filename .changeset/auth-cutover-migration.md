@@ -47,8 +47,13 @@ Breaking:
 
 - Existing API keys are **not** carried over. Their hashes are bcrypt and Better
   Auth uses SHA-256, so every OPDS and e-reader credential must be reissued.
-- Migrated users get a placeholder `@migrated.invalid` email and no password. An
-  admin sets a real address and password before they can sign in.
+- Migrated users get a placeholder `@migrated.invalid` email and no password, so
+  immediately after the upgrade nobody can sign in yet. Recovery is the first-run
+  setup form, which the sign-in page offers automatically in that state: it
+  attaches your email and password to an EXISTING user rather than creating a new
+  one, and closes again once that first credential exists. From there an admin
+  sets the remaining users' addresses and passwords from Settings → Users. See
+  "Upgrading from a pre-Better-Auth install" in `docs/deployment.md`.
 - Deleting a user who owns books is now refused by the database; reassign their
   books first.
 - Books found in the inbox directory by the watcher, rather than uploaded through

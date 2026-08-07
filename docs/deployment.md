@@ -235,3 +235,31 @@ Caddy and Traefik proxy WebSocket upgrades automatically; no extra configuration
 ## Database Migrations
 
 Migrations apply automatically on API startup — `runMigrations()` in `services/api-hono/src/bootstrap.ts` runs before the server starts accepting requests. No manual migration step is needed when deploying a new image. The migrations directory is resolved from `MIGRATIONS_PATH` (default `./migrations`, which the Dockerfile copies into the image alongside the bundled server).
+
+### Upgrading from a pre-Better-Auth install
+
+Skip this section for a fresh install — it applies only when upgrading a deployment that predates the Better Auth cutover, i.e. one whose `api_keys` table was still the identity table.
+
+The cutover migration (`20260801115500_auth_cutover`) creates one `users` row per existing API key so that books, reading history and Hardcover tokens keep their owner. It deliberately creates **no password** for those users: the old `api_keys.key_hash` values are bcrypt hashes of API keys, and a Better Auth password hash cannot be derived from one.
+
+So immediately after the upgrade nobody can sign in yet. Recovery is self-service and needs no SQL:
+
+1. Deploy the new image and let it start. Migrations apply on boot.
+2. Open Libris in a browser. The sign-in page shows the **first-run setup form** — `GET /api/setup` reports `required: true` because no credential exists anywhere on the install, even though users do.
+3. Submit your real email, a password, and your display name.
+
+That does **not** create a new person. It attaches the credential to a user that already exists, choosing:
+
+1. the user already holding the email you submitted, if there is one;
+2. otherwise the oldest admin — the same row the migration assigned any ownerless books to;
+3. otherwise the oldest user, promoted to admin.
+
+The email, display name and `admin` role of that row are updated to what you submitted. Everything owned by it — books, reading progress, app passwords, Hardcover token — stays attached.
+
+Once that first credential exists, `POST /api/setup` returns 409 again and the sign-in page stops offering the form. From there:
+
+- Set the remaining users' real addresses and passwords from **Settings → Users** (admin only). Until you do, they keep placeholder `<uuid>@migrated.invalid` emails and cannot sign in.
+- Every OPDS and e-reader credential must be reissued from the app-passwords page. The old key hashes are bcrypt and Better Auth uses SHA-256; they cannot be converted.
+- KoSync credentials must be regenerated for the same reason.
+
+If the setup form does not appear, some account already has a password — sign in with it, or use **Settings → Users** to set another user's password.
