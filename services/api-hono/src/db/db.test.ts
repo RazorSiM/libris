@@ -137,6 +137,51 @@ describe("migrations", () => {
     expect(constraints).toContain("reading_progress_user_document_device_uniq");
   });
 
+  it("keeps the drizzle-kit snapshot chain single-leafed", async () => {
+    // drizzle-kit stores each migration's ancestry in snapshot.json's `prevIds`.
+    // A snapshot nobody names as a parent is a "leaf". More than one leaf means
+    // the history has branched, and plain `drizzle-kit generate` refuses to run
+    // ("Non-commutative migrations detected") until the branch is resolved --
+    // which is how libris-59m.45 was found. Passing --ignore-conflicts hides the
+    // branch rather than fixing it, so this test is the thing that has to notice.
+    const { readFileSync, readdirSync } = await import("node:fs");
+    const nodePath = await import("node:path");
+    const nodeUrl = await import("node:url");
+    const dir = nodePath.dirname(nodeUrl.fileURLToPath(import.meta.url));
+    const migrationsDir = nodePath.resolve(dir, "../../migrations");
+
+    const folders = readdirSync(migrationsDir, { withFileTypes: true })
+      .filter((e) => e.isDirectory())
+      .map((e) => e.name)
+      .sort();
+
+    const snapshots = folders.map((name) => ({
+      name,
+      ...(JSON.parse(readFileSync(nodePath.join(migrationsDir, name, "snapshot.json"), "utf8")) as {
+        id: string;
+        prevIds: string[];
+      }),
+    }));
+
+    const ids = new Set(snapshots.map((s) => s.id));
+    const referencedAsParent = new Set(snapshots.flatMap((s) => s.prevIds));
+    const leaves = snapshots.filter((s) => !referencedAsParent.has(s.id)).map((s) => s.name);
+
+    // Exactly one tip, and it is the newest migration by folder name -- which is
+    // also the snapshot drizzle-kit diffs against when generating the next one.
+    expect(leaves).toEqual([folders[folders.length - 1]]);
+
+    // Only the very first migration may descend from the origin UUID; every
+    // other prevId must name a snapshot that actually exists in this folder.
+    const ORIGIN = "00000000-0000-0000-0000-000000000000";
+    const ancestry = snapshots.map((s, i) => ({
+      name: s.name,
+      resolves:
+        s.prevIds.length === 1 && (i === 0 ? s.prevIds[0] === ORIGIN : ids.has(s.prevIds[0])),
+    }));
+    expect(ancestry.filter((a) => !a.resolves)).toEqual([]);
+  });
+
   it("re-running migrations is idempotent", async () => {
     // Should not throw on a second migration run
     const fresh = await createTestDb();
