@@ -65,11 +65,16 @@ export const books = pgTable(
     tags: text("tags").array().notNull().default([]),
     hardcoverBookId: integer("hardcover_book_id"),
     hardcoverEditionId: integer("hardcover_edition_id"),
-    // NOT NULL: every book has an owner, which is what lets
-    // authorization drop its "unowned book" branch. RESTRICT rather than
-    // CASCADE or SET NULL — deleting a user must not delete or orphan their
-    // books, so the admin delete path reassigns them first and a path that
-    // forgets fails loudly here.
+    // NOT NULL: every book has an owner, which is what lets authorization drop
+    // its "unowned book" branch. RESTRICT rather than CASCADE or SET NULL —
+    // deleting a user must not delete or orphan their books.
+    //
+    // What satisfies it is `reassignBooksOnRemoveUser` (lib/user-deletion.ts):
+    // it moves the target's books to the acting admin BEFORE Better Auth's
+    // deletion runs, so this constraint has nothing left to reject. A path that
+    // forgets fails loudly here — and loudly is not the same as safely: Better
+    // Auth's deletion is three un-transacted statements, so the rejection lands
+    // after the sessions and accounts rows are already gone (libris-59m.21).
     createdBy: text("created_by")
       .notNull()
       .references(() => users.id, { onDelete: "restrict" }),

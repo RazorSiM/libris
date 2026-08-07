@@ -99,11 +99,30 @@ export function useSetUserPassword() {
   });
 }
 
+/**
+ * Delete an account for good.
+ *
+ * Their books do NOT go with them: a Libris library is shared, and
+ * `books.created_by` is NOT NULL with ON DELETE RESTRICT, so the server
+ * reassigns everything the departing user owned to the admin performing the
+ * deletion before removing the row (`lib/user-deletion.ts` on the API side).
+ * Their reading history and app passwords are cascade-deleted, and their
+ * sessions stop authenticating immediately.
+ *
+ * Note for whoever wires this into the UI: nothing calls it today, so there is
+ * currently no way to delete an account except through the API directly.
+ */
 export function useRemoveUser() {
   const queryCache = useQueryCache();
 
   return useMutation({
     mutation: async (userId: string) => unwrap(await authClient.admin.removeUser({ userId })),
-    onSettled: () => queryCache.invalidateQueries({ key: USERS_KEY }),
+    // Books changed hands, so the library and dashboard views are stale too.
+    onSettled: () =>
+      Promise.all([
+        queryCache.invalidateQueries({ key: USERS_KEY }),
+        queryCache.invalidateQueries({ key: ["library"] }),
+        queryCache.invalidateQueries({ key: ["dashboard"] }),
+      ]),
   });
 }

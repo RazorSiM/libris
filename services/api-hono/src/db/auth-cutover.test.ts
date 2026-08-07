@@ -142,9 +142,13 @@ describe("auth cutover — resulting schema", () => {
 
   it("books.created_by is text NOT NULL and references users.id ON DELETE RESTRICT", async () => {
     // NOT NULL is what lets authorization drop its "unowned book" branch.
-    // RESTRICT is the database backstop: the admin delete-user path
-    // reassigns a user's books before removing them, and a path that forgets
-    // fails loudly rather than orphaning rows.
+    // RESTRICT is the database backstop. The path that satisfies it is
+    // `reassignBooksOnRemoveUser` (lib/user-deletion.ts), which moves the
+    // target's books to the acting admin before Better Auth deletes them —
+    // covered by lib/user-deletion.test.ts. A path that forgets fails loudly
+    // rather than orphaning rows, but loudly is not safely: Better Auth's
+    // deletion is un-transacted, so the rejection lands after the account row
+    // is already gone (libris-59m.21).
     const info = await column(pglite, "books", "created_by");
     expect(info?.data_type).toBe("text");
     expect(info?.is_nullable).toBe("NO");
