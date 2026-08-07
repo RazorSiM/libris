@@ -89,6 +89,22 @@ describe("getRequestIp", () => {
     expect(getRequestIp(c)).toBe("198.51.100.10");
   });
 
+  it("unwraps an IPv4-mapped peer from a dual-stack listener", () => {
+    expect(getRequestIp(createMockContext({ remoteAddress: "::ffff:198.51.100.23" }))).toBe(
+      "198.51.100.23",
+    );
+  });
+
+  it("matches a trusted proxy CIDR when the peer arrives IPv4-mapped", () => {
+    const c = createMockContext({
+      headers: { "x-forwarded-for": "198.51.100.7" },
+      remoteAddress: "::ffff:10.0.0.5",
+      trustProxyHeaders: "1",
+      trustedProxies: ["10.0.0.0/24"],
+    });
+    expect(getRequestIp(c)).toBe("198.51.100.7");
+  });
+
   it("fails closed when a production request has no connection address", () => {
     expect(() => getRequestIp(createMockContext({ remoteAddress: null }))).toThrow(
       /Unable to determine client address/,
@@ -110,6 +126,25 @@ describe("rate-limit identities", () => {
       getIpRateLimitKey("2001:db8:abcd:12::1"),
     );
     expect(getIpRateLimitKey("192.0.2.4")).toBe("192.0.2.4");
+  });
+
+  it("keeps IPv4 peers apart when a dual-stack listener reports them as ::ffff:", () => {
+    // serve({ port }) binds :: with no host, so Node hands every IPv4 peer over
+    // as an IPv4-mapped address. Before this was unwrapped, every one of them
+    // expanded to 0:0:0:0:0:ffff:<hi>:<lo> and the /64 key was built from the
+    // four leading zero groups — one shared bucket for the entire IPv4
+    // internet, and a single-machine DoS against every IPv4 user at once.
+    expect(getIpRateLimitKey("::ffff:203.0.113.9")).toBe("203.0.113.9");
+    expect(getIpRateLimitKey("::ffff:198.51.100.7")).toBe("198.51.100.7");
+    expect(getIpRateLimitKey("::ffff:203.0.113.9")).not.toBe(
+      getIpRateLimitKey("::ffff:198.51.100.7"),
+    );
+    // Same address, three spellings, one bucket.
+    expect(getIpRateLimitKey("::FFFF:203.0.113.9")).toBe("203.0.113.9");
+    expect(getIpRateLimitKey("0:0:0:0:0:ffff:203.0.113.9")).toBe("203.0.113.9");
+    expect(getIpRateLimitKey("[::ffff:203.0.113.9]")).toBe("203.0.113.9");
+    // And it must not collapse onto a real IPv6 caller's /64 either.
+    expect(getIpRateLimitKey("::ffff:203.0.113.9")).not.toBe(getIpRateLimitKey("::1"));
   });
 
   it("normalizes credential identifiers without exposing them in keys", () => {

@@ -16,12 +16,30 @@ function stripAddressDecorations(address: string): string {
   return unbracketed.split("%")[0] ?? unbracketed;
 }
 
+/** `::ffff:a.b.c.d` — the canonical spelling SocketAddress gives every mapped form. */
+const IPV4_MAPPED = /^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/i;
+
 export function normalizeIpAddress(address: string): string | null {
   const bare = stripAddressDecorations(address.trim());
   const family = isIP(bare);
   if (family === 4) return SocketAddress.parse(`${bare}:0`)?.address ?? null;
-  if (family === 6) return SocketAddress.parse(`[${bare}]:0`)?.address ?? null;
-  return null;
+  if (family !== 6) return null;
+
+  const canonical = SocketAddress.parse(`[${bare}]:0`)?.address ?? null;
+  if (!canonical) return null;
+
+  // `serve({ port })` listens on :: with no host, so a dual-stack kernel hands
+  // every IPv4 peer over as an IPv4-mapped address. Unwrap it here, once, so
+  // that every consumer — rate-limit buckets, access logs, the Better Auth
+  // client-IP header, trusted-proxy CIDR matching — sees the same dotted quad
+  // a single-stack listener would have produced. Without this, isIP() reports
+  // 6 and getIpRateLimitKey() aggregates the entire IPv4 internet into the
+  // single 0:0:0:0::/64 bucket.
+  const embedded = IPV4_MAPPED.exec(canonical)?.[1];
+  if (embedded && isIP(embedded) === 4) {
+    return SocketAddress.parse(`${embedded}:0`)?.address ?? canonical;
+  }
+  return canonical;
 }
 
 export function isValidProxyCidr(value: string): boolean {
