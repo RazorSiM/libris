@@ -89,7 +89,7 @@ Rate limits are configurable through the validated env schema. The defaults are 
 
 There are three tiers, each with a request limit and a window anchored to the client's first request:
 
-- `general` — applies to every path except health and Better Auth. Defaults to 600 requests per 60 seconds.
+- `general` — applies to every path except Better Auth's own `/api/auth/*`, which Better Auth limits itself. `/api/health` is included: it is unauthenticated and costs a database round-trip per call, and the fail-open described below keeps it answerable when Redis is down. Defaults to 600 requests per 60 seconds.
 - `auth` — applies to authentication endpoints (login, setup). Defaults to 30 requests per 60 seconds.
 - `keyCreation` — applies to API-key creation. Defaults to 30 requests per 3600 seconds (1 hour).
 

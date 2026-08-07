@@ -61,11 +61,11 @@ There is nothing to configure — to change them, edit `rateLimit` in
 
 What the app's own tiers still cover:
 
-| Tier          | Applies to                                                                           |
-| ------------- | ------------------------------------------------------------------------------------ |
-| `auth`        | `/kosync/users/auth` — KOReader speaks its own protocol, outside Better Auth's reach |
-| `keyCreation` | `POST /api/setup` and `POST /api/app-passwords` — each costs a password hash         |
-| `general`     | every path except `/api/health` and Better Auth's separately limited `/api/auth/*`   |
+| Tier          | Applies to                                                                                |
+| ------------- | ----------------------------------------------------------------------------------------- |
+| `auth`        | `/kosync/users/auth` — KOReader speaks its own protocol, outside Better Auth's reach      |
+| `keyCreation` | `POST /api/setup` and `POST /api/app-passwords` — each costs a password hash              |
+| `general`     | every path except Better Auth's separately limited `/api/auth/*` — `/api/health` included |
 
 `DATABASE_URL` is still read as an escape hatch. When set, `src/lib/resolve-database-url.ts` returns it verbatim and it takes precedence over the split `POSTGRES_*` vars. When unset, the app assembles the connection URL from the split vars above. This gives docker-compose and the app a single source of truth in dev (compose interpolates the same `POSTGRES_*` values; see `docker-compose.dev.yml` for the `${POSTGRES_USER:-libris}` interpolation), while CI and tests can override with a single `DATABASE_URL`.
 

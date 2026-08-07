@@ -5,9 +5,17 @@ import type { RateLimitTier } from "../services/rate-limit.js";
 import { getCredentialRateLimitKey, getIpRateLimitKey } from "../shared/request-ip.js";
 
 export function resolveRateLimitTiers(path: string, method: string): RateLimitTier[] {
-  // Liveness must remain observable when Redis is unavailable. The handler
-  // reports Redis as degraded using the bounded request-path connection.
-  if (path === "/api/health") return [];
+  // /api/health takes the general tier like everything else.
+  //
+  // It used to be exempt, justified as "liveness must remain observable when
+  // Redis is unavailable" — but the general tier already provides exactly that:
+  // services/rate-limit.ts catches a store failure, logs "Rate limit check
+  // failed, allowing request" and allows the request for every tier that is not
+  // auth/keyCreation. The exemption bought nothing and removed the only bound
+  // on an unauthenticated endpoint that costs a "SELECT 1" round-trip and a
+  // Redis PING per call, and that access-log.ts also skips — so a flood of it
+  // saturated the connection pool leaving no trace. 600/min per source is three
+  // orders of magnitude above any orchestrator probe interval.
 
   // Better Auth rate-limits its own prefix, with per-endpoint windows far
   // tighter than anything here (three requests per ten seconds on sign-in,
@@ -39,8 +47,8 @@ export function resolveRateLimitTiers(path: string, method: string): RateLimitTi
   if (isCredentialCheck) {
     tiers.push("auth");
   } else {
-    // Default closed: static files, unknown paths and any future namespace are
-    // bounded too. Explicitly exempt only health and Better Auth above.
+    // Default closed: health, static files, unknown paths and any future
+    // namespace are bounded too. Only Better Auth's own prefix is exempt.
     tiers.push("general");
   }
 

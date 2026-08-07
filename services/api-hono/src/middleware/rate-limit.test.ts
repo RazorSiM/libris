@@ -3,10 +3,30 @@ import { describe, expect, it } from "vite-plus/test";
 import type { AppVariables } from "../context.js";
 import type { Env } from "../env.js";
 import { createMemoryKVStore } from "../services/kv-store.js";
+import type { KVStore } from "../services/kv-store.js";
 import { rateLimitMiddleware, resolveRateLimitTiers } from "./rate-limit.js";
 
+/** Every operation fails, the way the Redis-backed store does when Redis is down. */
+function createUnavailableKVStore(): KVStore {
+  const fail = () => Promise.reject(new Error("ECONNREFUSED"));
+  return {
+    getItem: fail,
+    setItem: fail,
+    increment: fail,
+    getKeys: fail,
+    removeItem: fail,
+    clear: fail,
+  } as unknown as KVStore;
+}
+
+interface BuildOptions {
+  env?: Partial<Env>;
+  /** Stands in for Redis being down. */
+  storage?: KVStore;
+}
+
 /** A minimal stack: the limiter, an echoing handler, and a memory store. */
-function buildLimitedApp(overrides: Partial<Env> = {}) {
+function buildLimitedApp({ env: overrides = {}, storage: store }: BuildOptions = {}) {
   const app = new Hono<{ Variables: AppVariables }>();
   const env = {
     NODE_ENV: "production",
@@ -19,7 +39,7 @@ function buildLimitedApp(overrides: Partial<Env> = {}) {
     LIBRIS_RATELIMIT_KEY_CREATION_WINDOW_SECONDS: 60,
     ...overrides,
   } as Env;
-  const storage = createMemoryKVStore();
+  const storage = store ?? createMemoryKVStore();
   app.use("*", async (c, next) => {
     c.set("env", env);
     c.set("redisStorage", storage);
@@ -79,9 +99,18 @@ describe("resolveRateLimitTiers", () => {
   });
 
   it("puts ordinary library traffic in the general tier", () => {
-    expect(resolveRateLimitTiers("/api/health", "GET")).toEqual([]);
     expect(resolveRateLimitTiers("/api/books", "GET")).toEqual(["general"]);
     expect(resolveRateLimitTiers("/api/library", "GET")).toEqual(["general"]);
+  });
+
+  it("bounds /api/health rather than exempting it", () => {
+    // The old exemption was justified by "liveness must remain observable when
+    // Redis is unavailable", which the general tier's fail-open already
+    // provides (pinned by the store-failure test below). Unbounded, /api/health
+    // was an unauthenticated SELECT 1 plus a Redis PING per call, on a path
+    // access logging also skips — a flood of it saturated the connection pool
+    // silently.
+    expect(resolveRateLimitTiers("/api/health", "GET")).toEqual(["general"]);
   });
 
   it("rate-limits static and unknown paths by default", () => {
@@ -103,6 +132,29 @@ describe("resolveRateLimitTiers", () => {
     expect((await attempt("192.0.2.1")).status).toBe(200);
     expect((await attempt("192.0.2.2")).status).toBe(200);
     expect((await attempt("192.0.2.3")).status).toBe(429);
+  });
+
+  it("stops an unauthenticated /api/health flood", async () => {
+    const { app } = buildLimitedApp({ env: { LIBRIS_RATELIMIT_GENERAL_LIMIT: 2 } });
+
+    expect((await app.request("/api/health")).status).toBe(200);
+    expect((await app.request("/api/health")).status).toBe(200);
+    expect((await app.request("/api/health")).status).toBe(429);
+  });
+
+  it("still answers /api/health when the rate-limit store is down", async () => {
+    // This is the property the old path-level exemption claimed to protect,
+    // and it belongs to the general tier's fail-open, not to the exemption:
+    // services/rate-limit.ts allows the request when the store throws for any
+    // tier that is not auth/keyCreation. Liveness stays observable either way.
+    const { app } = buildLimitedApp({
+      env: { LIBRIS_RATELIMIT_GENERAL_LIMIT: 1 },
+      storage: createUnavailableKVStore(),
+    });
+
+    for (let attempt = 0; attempt < 5; attempt++) {
+      expect((await app.request("/api/health")).status, `attempt ${attempt}`).toBe(200);
+    }
   });
 
   it("accumulates POST /kosync/users/auth attempts against the username", async () => {
