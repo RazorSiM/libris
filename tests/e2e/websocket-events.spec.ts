@@ -203,23 +203,39 @@ test.describe("WebSocket Real-time Events", () => {
     expect(websocketUrls.filter((url) => url.endsWith("/api/events"))).toHaveLength(1);
   });
 
-  test("Settings page reacts to job events", async ({ livePage: page }) => {
+  test("Settings page refetches its status on a job:failed event", async ({ livePage: page }) => {
+    // This used to assert `getByText("Settings")` is visible — the exact
+    // assertion it had already made BEFORE emitting the event, so it could not
+    // detect whether the event did anything at all.
+    //
+    // What the event is actually wired to (pages/settings.vue): the
+    // `job:failed` handler invalidates the `["settings", "status"]` query, and
+    // Pinia Colada refetches it because the page is mounted and using it. So
+    // the observable consequence is a fresh GET /api/settings/status — which is
+    // what the failed-jobs list and the queue counters are rendered from. Unwire
+    // the handler and this times out.
     await reloadWithWebSocket(page);
     await navigateToPage(page, "Settings", "**/settings");
-
-    // 2. Wait for settings page to load
     await expect(page.getByText("Settings").first()).toBeVisible();
 
-    // 3. Fire a job:failed event
+    // Let the page's own initial fetch settle first, so the response awaited
+    // below can only be the one the event caused.
+    await page.waitForLoadState("networkidle");
+
+    const refetched = page.waitForResponse(
+      (res) =>
+        res.url().includes("/api/settings/status") &&
+        res.request().method() === "GET" &&
+        res.status() === 200,
+      { timeout: 15_000 },
+    );
+
     await emitEvent({
       type: "job:failed",
       payload: { queue: "book-detected", error: "Test error", jobId: "test-123" },
     });
 
-    // 4. The settings status section should refresh (query invalidation)
-    // We verify the WS event pipeline reaches the settings page by confirming
-    // the page stays functional and doesn't crash from the event
-    await expect(page.getByText("Settings").first()).toBeVisible();
+    expect((await refetched).ok()).toBe(true);
   });
 
   test("Settings navigation does not emit Vue lifecycle warnings", async ({ livePage: page }) => {

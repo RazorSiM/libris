@@ -21,6 +21,7 @@ import {
 import { ADMIN } from "./helpers/accounts.js";
 import {
   API_BASE,
+  deleteUserByEmail,
   getApiKey,
   getUserApiKey,
   sessionHeaders,
@@ -646,6 +647,75 @@ test.describe("OPDS", { tag: "@smoke" }, () => {
     await api.dispose();
   });
 
+  test("a revoked app password stops opening the catalog immediately", async () => {
+    // Restored coverage: the deleted multi-user-auth.spec.ts asserted
+    // revocation immediacy against /opds specifically, and its nearest
+    // survivor only checks /api/library. That is not the same claim — OPDS is
+    // the one surface reached by Basic auth, and it is the surface a leaked
+    // credential is actually spent on. "Immediately" is literal: nothing in
+    // this path caches, and a cache added later must fail here.
+    const api = await anonymousApi();
+    const created = await api.post(`${API_BASE}/api/app-passwords`, {
+      headers: sessionHeaders(),
+      data: { name: "opds-revoke" },
+    });
+    expect(created.status()).toBe(201);
+    const { id, key } = (await created.json()) as { id: string; key: string };
+    const basic = {
+      Authorization: `Basic ${Buffer.from(`${ADMIN.email}:${key}`).toString("base64")}`,
+    };
+
+    expect((await api.get(`${API_BASE}/opds`, { headers: basic })).ok()).toBe(true);
+
+    expect(
+      (
+        await api.delete(`${API_BASE}/api/app-passwords/${id}`, { headers: sessionHeaders() })
+      ).status(),
+    ).toBe(204);
+
+    const after = await api.get(`${API_BASE}/opds`, { headers: basic });
+    expect(after.status()).toBe(401);
+    expect(after.headers()["www-authenticate"]).toMatch(/^Basic realm=/i);
+    await api.dispose();
+  });
+
+  test("rotating an app password retires the old one and admits the new one", async () => {
+    // What a user does when a device is lost: mint a replacement, drop the old
+    // credential. Both halves have to be true at the same instant, on /opds.
+    const api = await anonymousApi();
+    const mint = async (name: string) => {
+      const res = await api.post(`${API_BASE}/api/app-passwords`, {
+        headers: sessionHeaders(),
+        data: { name },
+      });
+      expect(res.status()).toBe(201);
+      return (await res.json()) as { id: string; key: string };
+    };
+    const asBasic = (key: string) => ({
+      Authorization: `Basic ${Buffer.from(`${ADMIN.email}:${key}`).toString("base64")}`,
+    });
+
+    const old = await mint("opds-rotate-old");
+    expect((await api.get(`${API_BASE}/opds`, { headers: asBasic(old.key) })).ok()).toBe(true);
+
+    const replacement = await mint("opds-rotate-new");
+    expect(
+      (
+        await api.delete(`${API_BASE}/api/app-passwords/${old.id}`, { headers: sessionHeaders() })
+      ).status(),
+    ).toBe(204);
+
+    expect((await api.get(`${API_BASE}/opds`, { headers: asBasic(old.key) })).status()).toBe(401);
+    expect((await api.get(`${API_BASE}/opds`, { headers: asBasic(replacement.key) })).ok()).toBe(
+      true,
+    );
+
+    await api.delete(`${API_BASE}/api/app-passwords/${replacement.id}`, {
+      headers: sessionHeaders(),
+    });
+    await api.dispose();
+  });
+
   test("survives more requests than the plugin's default daily budget", async () => {
     // The apiKey plugin defaults to 10 requests per DAY per key. Browsing a
     // catalog spends that before the reader has drawn anything, and the
@@ -681,6 +751,19 @@ test.describe.serial("user management", { tag: "@smoke" }, () => {
     password: "housemate-correct-horse",
   };
 
+  // A fixed address in a serial group, on a runner with `retries: 2`. Playwright
+  // restarts a serial group from its FIRST test, so without this a retry finds
+  // last attempt's housemate — already an admin, already holding the reset
+  // password — `create-user` 409s, and the block goes on to test the leftover.
+  // Both hooks, because the previous RUN can leave one behind too.
+  test.beforeAll(async () => {
+    await deleteUserByEmail(NEW_USER.email);
+  });
+
+  test.afterAll(async () => {
+    await deleteUserByEmail(NEW_USER.email);
+  });
+
   test("an admin creates an account that can actually sign in", async ({ page, browser }) => {
     // Self-registration is off, so this page is the ONLY way a second person
     // gets in. "Created" is worth nothing unless they can then sign in.
@@ -691,7 +774,18 @@ test.describe.serial("user management", { tag: "@smoke" }, () => {
     await page.getByTestId("new-user-name").fill(NEW_USER.name);
     await page.getByTestId("new-user-email").fill(NEW_USER.email);
     await page.getByTestId("new-user-password").fill(NEW_USER.password);
+
+    // Assert the CREATION, not a row that could pre-date the click. The list
+    // row is satisfied by a leftover account just as well as by a new one, so
+    // on its own it reports PASSED for a request that 4xx'd — and the real
+    // failure then surfaces two tests later as a confusing role error.
+    const created = page.waitForResponse(
+      (res) =>
+        res.url().includes("/api/auth/admin/create-user") && res.request().method() === "POST",
+    );
     await page.getByTestId("create-user-btn").click();
+    const createResponse = await created;
+    expect(createResponse.ok(), await createResponse.text()).toBe(true);
 
     // Scope to the list: the success toast also contains the address, and a
     // bare getByText matches both.
