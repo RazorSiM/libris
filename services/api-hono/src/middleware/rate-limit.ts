@@ -47,6 +47,34 @@ export function resolveRateLimitTiers(path: string, method: string): RateLimitTi
   return tiers;
 }
 
+/**
+ * Ceiling on a body this middleware is willing to parse.
+ *
+ * The only fields it reads are a username and an email, so a few kilobytes is
+ * already generous. bodyLimitMiddleware runs first (app.ts) and caps every body
+ * at 1 MB, so this is defence in depth: if the two are ever reordered, the
+ * limiter still refuses to buffer something large.
+ *
+ * A caller that pads its body past this loses its per-credential bucket and
+ * falls back to the per-IP tiers, which is the safe direction — refusing the
+ * request outright would turn a rate-limit detail into a new way to reject
+ * legitimate traffic.
+ */
+const MAX_CREDENTIAL_BODY_BYTES = 8192;
+
+async function readCredentialBody(c: {
+  req: { header: (name: string) => string | undefined; raw: Request };
+}): Promise<Record<string, unknown> | null> {
+  const declared = c.req.header("content-length");
+  if (declared !== undefined && Number(declared) > MAX_CREDENTIAL_BODY_BYTES) return null;
+
+  const body: unknown = await c.req.raw
+    .clone()
+    .json()
+    .catch(() => null);
+  return typeof body === "object" && body !== null ? (body as Record<string, unknown>) : null;
+}
+
 export const rateLimitMiddleware = createMiddleware<{ Variables: AppVariables }>(
   async (c, next) => {
     const env = c.get("env");
@@ -81,10 +109,7 @@ export const rateLimitMiddleware = createMiddleware<{ Variables: AppVariables }>
     if (path === "/kosync/users/auth") {
       credentialIdentifier = c.req.header("x-auth-user");
     } else if (path === "/api/auth/sign-in/email" && method === "POST") {
-      const body = (await c.req.raw
-        .clone()
-        .json()
-        .catch(() => null)) as { email?: unknown } | null;
+      const body = await readCredentialBody(c);
       if (typeof body?.email === "string") credentialIdentifier = body.email;
     }
     if (credentialIdentifier) {

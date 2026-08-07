@@ -5,6 +5,32 @@ import type { Env } from "../env.js";
 import { createMemoryKVStore } from "../services/kv-store.js";
 import { rateLimitMiddleware, resolveRateLimitTiers } from "./rate-limit.js";
 
+/** A minimal stack: the limiter, an echoing handler, and a memory store. */
+function buildLimitedApp(overrides: Partial<Env> = {}) {
+  const app = new Hono<{ Variables: AppVariables }>();
+  const env = {
+    NODE_ENV: "production",
+    E2E_TEST: "",
+    LIBRIS_RATELIMIT_GENERAL_LIMIT: 100,
+    LIBRIS_RATELIMIT_GENERAL_WINDOW_SECONDS: 60,
+    LIBRIS_RATELIMIT_AUTH_LIMIT: 2,
+    LIBRIS_RATELIMIT_AUTH_WINDOW_SECONDS: 60,
+    LIBRIS_RATELIMIT_KEY_CREATION_LIMIT: 100,
+    LIBRIS_RATELIMIT_KEY_CREATION_WINDOW_SECONDS: 60,
+    ...overrides,
+  } as Env;
+  const storage = createMemoryKVStore();
+  app.use("*", async (c, next) => {
+    c.set("env", env);
+    c.set("redisStorage", storage);
+    c.set("clientIp", c.req.header("x-test-source") ?? "192.0.2.1");
+    await next();
+  });
+  app.use("*", rateLimitMiddleware);
+  app.all("*", (c) => c.json({ ok: true }));
+  return { app, env, storage };
+}
+
 describe("resolveRateLimitTiers", () => {
   it("stands aside for the whole /api/auth/ prefix", () => {
     // Better Auth limits its own endpoints, and far more tightly than any tier
@@ -65,26 +91,7 @@ describe("resolveRateLimitTiers", () => {
   });
 
   it("limits one sign-in identity across changing source addresses", async () => {
-    const app = new Hono<{ Variables: AppVariables }>();
-    const env = {
-      NODE_ENV: "production",
-      E2E_TEST: "",
-      LIBRIS_RATELIMIT_GENERAL_LIMIT: 100,
-      LIBRIS_RATELIMIT_GENERAL_WINDOW_SECONDS: 60,
-      LIBRIS_RATELIMIT_AUTH_LIMIT: 2,
-      LIBRIS_RATELIMIT_AUTH_WINDOW_SECONDS: 60,
-      LIBRIS_RATELIMIT_KEY_CREATION_LIMIT: 100,
-      LIBRIS_RATELIMIT_KEY_CREATION_WINDOW_SECONDS: 60,
-    } as Env;
-    const storage = createMemoryKVStore();
-    app.use("*", async (c, next) => {
-      c.set("env", env);
-      c.set("redisStorage", storage);
-      c.set("clientIp", c.req.header("x-test-source") ?? "192.0.2.1");
-      await next();
-    });
-    app.use("*", rateLimitMiddleware);
-    app.post("/api/auth/sign-in/email", (c) => c.json({ ok: true }));
+    const { app } = buildLimitedApp();
 
     const attempt = (source: string) =>
       app.request("/api/auth/sign-in/email", {
@@ -96,5 +103,26 @@ describe("resolveRateLimitTiers", () => {
     expect((await attempt("192.0.2.1")).status).toBe(200);
     expect((await attempt("192.0.2.2")).status).toBe(200);
     expect((await attempt("192.0.2.3")).status).toBe(429);
+  });
+
+  it("falls back to IP-only limiting instead of parsing an oversized body", async () => {
+    // bodyLimitMiddleware caps every body at 1 MB before this middleware runs,
+    // but the limiter refuses to buffer anything large on its own account too.
+    // The request must still be served, not thrown out of the limiter.
+    const { app } = buildLimitedApp();
+    const body = JSON.stringify({ email: "reader@example.com", pad: "x".repeat(20_000) });
+
+    for (const source of ["192.0.2.1", "192.0.2.2", "192.0.2.3"]) {
+      const res = await app.request("/api/auth/sign-in/email", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "content-length": String(body.length),
+          "x-test-source": source,
+        },
+        body,
+      });
+      expect(res.status, source).toBe(200);
+    }
   });
 });

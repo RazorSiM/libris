@@ -62,8 +62,13 @@ export function createApp({ services, env }: CreateAppOptions) {
   );
   app.use("*", accessLogMiddleware);
   app.use("*", securityHeaders);
-  app.use("*", rateLimitMiddleware);
+  // bodyLimit MUST stay ahead of the rate limiter: the limiter clones and
+  // parses the JSON body of the credential endpoints to derive their
+  // per-credential bucket, and nothing else in this chain caps a body. With
+  // the two the other way round an unauthenticated request was buffered whole,
+  // with no size ceiling and no 429 in front of it. Pinned by app.wiring.test.ts.
   app.use("*", bodyLimitMiddleware);
+  app.use("*", rateLimitMiddleware);
   app.use("*", authMiddleware);
 
   // Global error handler — always return JSON, preserving custom headers
