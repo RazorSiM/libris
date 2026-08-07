@@ -61,9 +61,13 @@ services:
       LIBRIS_COOKIE_SECURE: "0"
       LIBRIS_INBOX_PATH: /repo/tmp/test-inbox
       LIBRIS_LIBRARY_PATH: /repo/tmp/test-library
-      API_SECRET_KEY: e2e-test-secret-key-minimum-32-chars!
-      TEST_ROUTE_TOKEN: e2e-test-route-token-minimum-32-chars!
-      BETTER_AUTH_SECRET: e2e-better-auth-secret-minimum-32-chars!
+      # Throwaway, but generated with `openssl rand -hex 32`: the API rejects
+      # published placeholders and low-diversity secrets at startup, and
+      # middleware/auth.ts refuses a TEST_ROUTE_TOKEN under 32 bytes by 401ing
+      # every /__test/ call rather than failing loudly.
+      API_SECRET_KEY: 1e368ee3513dd6e7807d83fdcca3e0a2dc06e66d70ab903298c5130740ca9669
+      TEST_ROUTE_TOKEN: 2264bacc352498319d641fb2bc92228c83cda488e1bc8676e87623dfc8cd1455
+      BETTER_AUTH_SECRET: f46f4321bb1c145197e08b5f773973faa4f70b0aefcdd9a3d09736e62b37a462
       MIGRATIONS_PATH: /repo/services/api-hono/migrations
       E2E_DOCKER: "1"
       # Turns off Better Auth's rate limiting (see lib/auth.ts) and enables the

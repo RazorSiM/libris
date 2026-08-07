@@ -160,6 +160,13 @@ jobs:
           --health-retries 10
     env:
       CI: "true"
+      # `development`, matching docker-compose.test.yml, so the two E2E
+      # harnesses take the same branches. env.ts has no default for NODE_ENV,
+      # so omitting it makes getEnv() throw at startup and the webServer times
+      # out before a single test runs. `production` is not an option here:
+      # bootstrap.ts refuses E2E_TEST=1 under it — the production config is
+      # covered by the separate e2e-prod-config job below.
+      NODE_ENV: development
       E2E_TEST: "1"
       LIBRIS_COOKIE_SECURE: "0"
       POSTGRES_HOST: postgres
@@ -171,9 +178,18 @@ jobs:
       REDIS_PORT: "6379"
       LIBRIS_INBOX_PATH: /tmp/e2e-inbox
       LIBRIS_LIBRARY_PATH: /tmp/e2e-library
-      API_SECRET_KEY: ci-e2e-test-secret-key-minimum-32-chars!
-      BETTER_AUTH_SECRET: ci-e2e-better-auth-secret-min-32-chars!
+      # Throwaway CI-only values, but generated with `openssl rand -hex 32`
+      # rather than written by hand: the API rejects published placeholders and
+      # low-diversity strings, and middleware/auth.ts refuses a
+      # TEST_ROUTE_TOKEN shorter than 32 bytes (which 401s every /__test/ call
+      # instead of failing loudly).
+      API_SECRET_KEY: 1f92b61ecd5459091252d89c56ec96119dceb2bd53b567d44990a7ba3d4b8991
+      BETTER_AUTH_SECRET: fc45735d1aba00d6426be5f40e1b9a10312974f22c867b10b6a0e6ee1f253861
+      TEST_ROUTE_TOKEN: 7cbcb1e8c2b4f21dcd64cfc0c9ac1e241e4884d8111b0de8c8fdb0fd7e70fbe6
       MIGRATIONS_PATH: ./services/api-hono/migrations
+      # Tees the API's stdout/stderr to a file the shards upload on failure.
+      # playwright.config.ts only adds the `tee` when this is set.
+      LIBRIS_API_LOG: /tmp/e2e-api.log
     steps:
       - uses: actions/checkout@v4
         with:

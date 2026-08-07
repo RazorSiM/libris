@@ -120,7 +120,9 @@ Set on the `e2e` job:
 
 ```
 CI=true
+NODE_ENV=development
 E2E_TEST=1
+LIBRIS_COOKIE_SECURE=0
 POSTGRES_HOST=postgres
 POSTGRES_PORT=5432
 POSTGRES_USER=libris_test
@@ -130,10 +132,34 @@ REDIS_HOST=redis
 REDIS_PORT=6379
 LIBRIS_INBOX_PATH=/tmp/e2e-inbox
 LIBRIS_LIBRARY_PATH=/tmp/e2e-library
-API_SECRET_KEY=ci-e2e-test-secret-key-minimum-32-chars!
-BETTER_AUTH_SECRET=ci-e2e-better-auth-secret-min-32-chars!
+API_SECRET_KEY=<openssl rand -hex 32>
+BETTER_AUTH_SECRET=<openssl rand -hex 32>
+TEST_ROUTE_TOKEN=<openssl rand -hex 32>
 MIGRATIONS_PATH=./services/api-hono/migrations
+LIBRIS_API_LOG=/tmp/e2e-api.log
 ```
+
+Four of those are easy to get wrong and each one is fatal rather than flaky:
+
+- **`NODE_ENV`** has no default in `services/api-hono/src/env.ts`. Omit it and
+  `getEnv()` throws a `ZodError` before the server binds a port, so Playwright's
+  `webServer` times out after 60s and every shard fails without running a test.
+  The value must match `docker-compose.test.yml` (`development`) so the two
+  harnesses exercise the same branches. It must **not** be `production`:
+  `bootstrap.ts` throws `E2E_TEST=1 is not allowed in NODE_ENV=production`. The
+  production config is covered by its own job, `e2e-prod-config`.
+- **`TEST_ROUTE_TOKEN`** authenticates the `/__test/*` support routes that seed
+  books, clear caches and emit events. `tests/e2e/helpers/index.ts` throws
+  outright when it is unset, and `src/middleware/auth.ts` rejects any token
+  shorter than 32 bytes — a short value silently 401s every support-route call
+  rather than reporting a config error.
+- **`API_SECRET_KEY` / `BETTER_AUTH_SECRET`** are validated at startup:
+  published placeholders and low-diversity strings are rejected. Generate CI's
+  throwaway values with `openssl rand -hex 32` like any other, so a future
+  tightening of the validator does not take CI down with it.
+- **`LIBRIS_API_LOG`** is Libris-specific, not a framework variable. When it is
+  set, `tests/e2e/playwright.config.ts` tees the API process's stdout/stderr to
+  that path so a failing shard can upload it (`e2e-api-log-<idx>`).
 
 ## Release (release.yml)
 
