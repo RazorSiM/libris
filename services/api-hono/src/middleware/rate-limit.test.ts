@@ -105,6 +105,52 @@ describe("resolveRateLimitTiers", () => {
     expect((await attempt("192.0.2.3")).status).toBe(429);
   });
 
+  it("accumulates POST /kosync/users/auth attempts against the username", async () => {
+    // The POST form takes the plaintext password and answers 200 + userkey or
+    // 401 — the best brute-force oracle in the app. It carries the username in
+    // the body, not in x-auth-user, so it used to fall through to the per-IP
+    // auth tier alone and a rotating address pool never exhausted a budget.
+    const { app } = buildLimitedApp();
+
+    const attempt = (source: string, username: string) =>
+      app.request("/kosync/users/auth", {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-test-source": source },
+        body: JSON.stringify({ username, password: "guess" }),
+      });
+
+    // auth limit is 2. Three different source addresses, one username.
+    expect((await attempt("192.0.2.1", "reader")).status).toBe(200);
+    expect((await attempt("192.0.2.2", "reader")).status).toBe(200);
+    expect((await attempt("192.0.2.3", "reader")).status).toBe(429);
+    // A different username still has its own budget from a fresh address.
+    expect((await attempt("192.0.2.4", "someone-else")).status).toBe(200);
+  });
+
+  it("keeps the GET form bucketed by x-auth-user", async () => {
+    const { app } = buildLimitedApp();
+
+    const attempt = (source: string) =>
+      app.request("/kosync/users/auth", {
+        headers: { "x-auth-user": "reader", "x-auth-key": "digest", "x-test-source": source },
+      });
+
+    expect((await attempt("198.51.100.1")).status).toBe(200);
+    expect((await attempt("198.51.100.2")).status).toBe(200);
+    expect((await attempt("198.51.100.3")).status).toBe(429);
+  });
+
+  it("does not throw when a kosync POST body is malformed", async () => {
+    const { app } = buildLimitedApp();
+    const res = await app.request("/kosync/users/auth", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{not json",
+    });
+    // Falls back to the per-IP auth tier: served, not 500.
+    expect(res.status).toBe(200);
+  });
+
   it("falls back to IP-only limiting instead of parsing an oversized body", async () => {
     // bodyLimitMiddleware caps every body at 1 MB before this middleware runs,
     // but the limiter refuses to buffer anything large on its own account too.

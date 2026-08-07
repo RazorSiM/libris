@@ -107,7 +107,16 @@ export const rateLimitMiddleware = createMiddleware<{ Variables: AppVariables }>
     // source addresses cannot reset attempts against one account.
     let credentialIdentifier: string | undefined;
     if (path === "/kosync/users/auth") {
+      // Two shapes for one credential check. GET carries the username in
+      // x-auth-user; POST carries it in the JSON body — and takes the PLAINTEXT
+      // password, so it is the better oracle of the two and needs the budget
+      // more. Without reading the body, POST attempts accumulated only per
+      // source address and an attacker rotating addresses never spent one.
       credentialIdentifier = c.req.header("x-auth-user");
+      if (!credentialIdentifier && method === "POST") {
+        const body = await readCredentialBody(c);
+        if (typeof body?.username === "string") credentialIdentifier = body.username;
+      }
     } else if (path === "/api/auth/sign-in/email" && method === "POST") {
       const body = await readCredentialBody(c);
       if (typeof body?.email === "string") credentialIdentifier = body.email;
