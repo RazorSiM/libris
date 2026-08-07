@@ -1,4 +1,5 @@
-import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
+import { createRoute, z } from "@hono/zod-openapi";
+import { createOpenApiRouter } from "../../shared/openapi.js";
 import { and, eq, sql } from "drizzle-orm";
 import { HTTPException } from "hono/http-exception";
 import { kosyncCredentials, serviceCredentials } from "#db";
@@ -187,7 +188,7 @@ const settingsStatusRoute = createRoute({
 
 type HealthCheck = { status: "ok" | "error"; latencyMs?: number; error?: string };
 
-export const settingsRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
+export const settingsRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
   .openapi(settingsStatusRoute, async (c) => {
     const db = c.get("db");
     const env = c.get("env");

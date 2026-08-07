@@ -1,4 +1,5 @@
-import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
+import { createRoute, z } from "@hono/zod-openapi";
+import { createOpenApiRouter } from "../../shared/openapi.js";
 import type { AppVariables } from "../../context.js";
 import { cachedRoute } from "../../middleware/cache.js";
 import {
@@ -34,7 +35,7 @@ const rootCatalogRoute = createRoute({
 
 // ── Handlers ────────────────────────────────────────────────────────
 
-export const opdsRootRoutes = new OpenAPIHono<{ Variables: AppVariables }>().openapi(
+export const opdsRootRoutes = createOpenApiRouter<{ Variables: AppVariables }>().openapi(
   rootCatalogRoute,
   async (c) => {
     const base = getBaseUrl(c.req.url, c.req.header("x-forwarded-proto"));

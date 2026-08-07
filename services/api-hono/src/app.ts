@@ -1,5 +1,3 @@
-import { OpenAPIHono } from "@hono/zod-openapi";
-import { HTTPException } from "hono/http-exception";
 import { createNodeWebSocket } from "@hono/node-ws";
 import { honoLogLayer } from "@loglayer/hono";
 import type { AppVariables } from "./context.js";
@@ -13,10 +11,11 @@ import { authMiddleware } from "./middleware/auth.js";
 import { lastAdminMiddleware } from "./middleware/last-admin.js";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { createRouter } from "./routes/index.js";
-import { root, getLogger } from "./lib/logger.js";
+import { root } from "./lib/logger.js";
 import { clientIpMiddleware } from "./middleware/client-ip.js";
 import { accessLogMiddleware } from "./middleware/access-log.js";
 import { withTrustedClientIp } from "./shared/request-ip.js";
+import { createOpenApiRouter, toErrorResponse } from "./shared/openapi.js";
 
 export interface CreateAppOptions {
   services: AppServices;
@@ -25,14 +24,9 @@ export interface CreateAppOptions {
 
 export function createApp({ services, env }: CreateAppOptions) {
   const includeTestRoutes = env.NODE_ENV === "test" || env.E2E_TEST === "1";
-  const app = new OpenAPIHono<{ Variables: AppVariables }>({
-    strict: false,
-    defaultHook: (result, c) => {
-      if (!result.success) {
-        return c.json({ error: "Validation failed", issues: result.error.issues }, 400);
-      }
-    },
-  });
+  // The hook this installs only ever reaches routes defined directly on this
+  // instance; every mounted router installs its own through the same factory.
+  const app = createOpenApiRouter<{ Variables: AppVariables }>({ strict: false });
 
   // eslint-disable-next-line @typescript-eslint/unbound-method
   const { injectWebSocket, upgradeWebSocket } = createNodeWebSocket({ app });
@@ -71,25 +65,10 @@ export function createApp({ services, env }: CreateAppOptions) {
   app.use("*", rateLimitMiddleware);
   app.use("*", authMiddleware);
 
-  // Global error handler — always return JSON, preserving custom headers
-  app.onError((err, c) => {
-    if (err instanceof HTTPException) {
-      // Preserve custom headers (e.g. Retry-After from rate limiting)
-      const errResponse = err.getResponse();
-      const headers: Record<string, string> = {};
-      errResponse.headers.forEach((v, k) => {
-        headers[k] = v;
-      });
-      return c.json({ error: err.message }, { status: err.status, headers });
-    }
-    const appLogger = getLogger("app");
-    if (err instanceof Error) {
-      appLogger.withError(err).error("Unhandled error");
-    } else {
-      appLogger.withMetadata({ error: err }).error("Unhandled error");
-    }
-    return c.json({ error: "Internal server error" }, 500);
-  });
+  // Global error handler — always return JSON, preserving custom headers.
+  // Understands hono's HTTPException and better-call's APIError (what every
+  // auth.api.* call throws); see shared/openapi.ts.
+  app.onError((err, c) => toErrorResponse(err, c));
 
   // Better Auth's own endpoints, as a catch-all so every current and future
   // endpoint it exposes — including nested plugin routes like

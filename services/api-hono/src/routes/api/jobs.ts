@@ -1,4 +1,5 @@
-import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
+import { createRoute, z } from "@hono/zod-openapi";
+import { createOpenApiRouter } from "../../shared/openapi.js";
 import { HTTPException } from "hono/http-exception";
 import type { AppVariables } from "../../context.js";
 import { getQueues, getAllQueues } from "../../services/queue.js";
@@ -401,7 +402,7 @@ function findQueueByName(name: string): Queue | null {
 
 // ── Router ───────────────────────────────────────────────────────
 
-export const jobsRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
+export const jobsRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
   .openapi(statusRoute, async (c) => {
     const results = await collectQueueCounts(getRegisteredQueues());
     return c.json({ queues: results });

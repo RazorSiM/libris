@@ -1,4 +1,5 @@
-import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
+import { createRoute, z } from "@hono/zod-openapi";
+import { createOpenApiRouter } from "../../shared/openapi.js";
 import { eq, and } from "drizzle-orm";
 import { createReadStream, existsSync, realpathSync } from "node:fs";
 import { stat } from "node:fs/promises";
@@ -46,7 +47,7 @@ const downloadRoute = createRoute({
 
 // ── Handlers ────────────────────────────────────────────────────────
 
-export const opdsDownloadRoutes = new OpenAPIHono<{ Variables: AppVariables }>().openapi(
+export const opdsDownloadRoutes = createOpenApiRouter<{ Variables: AppVariables }>().openapi(
   downloadRoute,
   async (c) => {
     const { fileId } = c.req.valid("param");

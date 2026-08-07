@@ -130,4 +130,22 @@ describe("validation hook coverage", () => {
     expect(checked, "found routers to check").toBeGreaterThan(10);
     expect(missing).toEqual([]);
   });
+
+  it("answers an invalid body on a mounted route with the documented shape", async () => {
+    // POST /api/setup is public and validates a body, so this reaches the
+    // validator without a session and without touching the database. Before
+    // the hook was installed on the router itself the body here was a raw
+    // serialized ZodError: {"success":false,"error":{...},"data":...}.
+    const res = await buildApp().request("/api/setup", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: "not-an-email", password: "short", name: "" }),
+    });
+
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body).not.toHaveProperty("success");
+    expect(body.error).toBe("Validation failed");
+    expect(Array.isArray(body.issues)).toBe(true);
+  });
 });

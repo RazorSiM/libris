@@ -1,4 +1,4 @@
-import { OpenAPIHono } from "@hono/zod-openapi";
+import { createOpenApiRouter } from "../../shared/openapi.js";
 import { HTTPException } from "hono/http-exception";
 import {
   appSettings,
@@ -26,7 +26,7 @@ function assertTestEnv(env: { NODE_ENV: string; E2E_TEST: string }): void {
   }
 }
 
-export const testRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
+export const testRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
   /**
    * POST /cleanup — wipe test data.
    *

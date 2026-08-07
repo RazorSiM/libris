@@ -1,4 +1,5 @@
-import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
+import { createRoute, z } from "@hono/zod-openapi";
+import { createOpenApiRouter } from "../../shared/openapi.js";
 import { eq, and } from "drizzle-orm";
 import { createReadStream, existsSync, realpathSync } from "node:fs";
 import { stat } from "node:fs/promises";
@@ -52,7 +53,7 @@ const coverRoute = createRoute({
 
 // ── Handlers ────────────────────────────────────────────────────────
 
-export const opdsCoversRoutes = new OpenAPIHono<{ Variables: AppVariables }>().openapi(
+export const opdsCoversRoutes = createOpenApiRouter<{ Variables: AppVariables }>().openapi(
   coverRoute,
   async (c) => {
     const { id } = c.req.valid("param");

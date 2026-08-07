@@ -1,4 +1,4 @@
-import { OpenAPIHono } from "@hono/zod-openapi";
+import { createOpenApiRouter } from "../shared/openapi.js";
 import { Scalar } from "@scalar/hono-api-reference";
 import type { AppVariables } from "../context.js";
 import pkg from "../../package.json" with { type: "json" };
@@ -40,7 +40,7 @@ export function createRouter(
   upgradeWebSocket: UpgradeWebSocket,
   { includeTestRoutes = false }: CreateRouterOptions = {},
 ) {
-  const router = new OpenAPIHono<{ Variables: AppVariables }>()
+  const router = createOpenApiRouter<{ Variables: AppVariables }>()
     // API routes
     .route("/api/setup", setupRoutes)
     .route("/api/health", healthRoutes)

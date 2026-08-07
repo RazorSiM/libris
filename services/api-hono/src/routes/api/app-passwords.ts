@@ -1,4 +1,5 @@
-import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
+import { createRoute, z } from "@hono/zod-openapi";
+import { createOpenApiRouter } from "../../shared/openapi.js";
 import { and, desc, eq } from "drizzle-orm";
 import { HTTPException } from "hono/http-exception";
 import { apiKeys } from "#db";
@@ -123,7 +124,7 @@ const deleteRoute = createRoute({
   },
 });
 
-export const appPasswordRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
+export const appPasswordRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
   .openapi(listRoute, async (c) => {
     const db = c.get("db");
     const userId = getUserId(c);

@@ -1,4 +1,4 @@
-import { OpenAPIHono } from "@hono/zod-openapi";
+import { createOpenApiRouter } from "../../shared/openapi.js";
 import { createHash } from "node:crypto";
 import { HTTPException } from "hono/http-exception";
 import type { AppVariables } from "../../context.js";
@@ -13,7 +13,7 @@ import { getUserId, isAdmin } from "../../shared/auth.js";
 const logger = getLogger("ws");
 
 export function createEventsRoutes(upgradeWebSocket: UpgradeWebSocket) {
-  return new OpenAPIHono<{ Variables: AppVariables }>().get(
+  return createOpenApiRouter<{ Variables: AppVariables }>().get(
     "/",
     upgradeWebSocket(async (c) => {
       const origin = c.req.header("origin");

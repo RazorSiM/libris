@@ -1,4 +1,5 @@
-import { OpenAPIHono, createRoute } from "@hono/zod-openapi";
+import { createRoute } from "@hono/zod-openapi";
+import { createOpenApiRouter } from "../../shared/openapi.js";
 import { HTTPException } from "hono/http-exception";
 import { and, eq } from "drizzle-orm";
 import { unlink } from "node:fs/promises";
@@ -121,7 +122,7 @@ const METADATA_FIELDS = new Set([
 
 // ── Router ───────────────────────────────────────────────────────
 
-export const booksRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
+export const booksRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
   .openapi(deleteBookRoute, async (c) => {
     const { id } = c.req.valid("param");
     const db = c.get("db");
