@@ -1,8 +1,13 @@
+import type { PGlite } from "@electric-sql/pglite";
 import type Redis from "ioredis";
-import { describe, expect, it, vi } from "vite-plus/test";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { createAuth } from "../lib/auth.js";
+import { createTestDb, type TestDb } from "../db/test-utils.js";
+import type { Env } from "../env.js";
 import {
   createMemorySecondaryStorage,
   createRedisSecondaryStorage,
+  resetSecondaryStorageFallback,
 } from "./auth-secondary-storage.js";
 
 describe("createMemorySecondaryStorage", () => {
@@ -229,5 +234,213 @@ describe("createRedisSecondaryStorage", () => {
     await storage.get("k");
 
     expect(redis.get).toHaveBeenCalledWith("auth:k");
+  });
+
+  /**
+   * libris-59m.15. The request-path client carries `commandTimeout: 250` and
+   * `enableOfflineQueue: false`, so any Redis pause above 250 ms — BGSAVE, an
+   * AOF rewrite, a failover, a restart — turns every command into a rejection.
+   *
+   * A THROW is strictly worse than a MISS here, because better-auth's
+   * `findSession` only reaches its Postgres fallback when secondary storage
+   * answers null.
+   */
+  describe("when the Redis client rejects every command", () => {
+    function rejectingRedis() {
+      const boom = async () => {
+        throw new Error("Stream isn't writeable and enableOfflineQueue options is false");
+      };
+      return {
+        get: vi.fn(boom),
+        getdel: vi.fn(boom),
+        set: vi.fn(boom),
+        del: vi.fn(boom),
+        eval: vi.fn(boom),
+      } as unknown as Redis;
+    }
+
+    it("degrades `get` to a miss so the database fallback can run", async () => {
+      const storage = createRedisSecondaryStorage(rejectingRedis());
+
+      // Before the fix this rejected, `findSession` threw before its fallback,
+      // and authMiddleware's .catch(() => null) turned it into a 401.
+      await expect(storage.get("session:abc")).resolves.toBeNull();
+    });
+
+    it("degrades `getAndDelete` to a miss, which refuses the token rather than replaying it", async () => {
+      const storage = createRedisSecondaryStorage(rejectingRedis());
+
+      await expect(storage.getAndDelete?.("token")).resolves.toBeNull();
+    });
+
+    it("still reports `set` and `delete` failures", async () => {
+      const storage = createRedisSecondaryStorage(rejectingRedis());
+
+      // A silently dropped delete is a revocation that did not happen. Both of
+      // these must stay loud even though the reads above went quiet.
+      await expect(storage.set("k", "v")).rejects.toThrow(/enableOfflineQueue/);
+      await expect(storage.delete("k")).rejects.toThrow(/enableOfflineQueue/);
+    });
+
+    it("counts `increment` in process memory instead of throwing out of onRequest", async () => {
+      resetSecondaryStorageFallback();
+      const storage = createRedisSecondaryStorage(rejectingRedis());
+
+      // better-auth calls increment from its rate limiter's onRequest and does
+      // not catch, so a rejection here 500s /api/auth/* — get-session included.
+      // Falling back must not fail OPEN: the counter has to keep climbing, or
+      // an attacker gets an unlimited credential-guessing budget for as long as
+      // Redis is down.
+      expect(await storage.increment?.("ratelimit:1.2.3.4", 60)).toBe(1);
+      expect(await storage.increment?.("ratelimit:1.2.3.4", 60)).toBe(2);
+      expect(await storage.increment?.("ratelimit:1.2.3.4", 60)).toBe(3);
+      // A different key keeps its own budget.
+      expect(await storage.increment?.("ratelimit:5.6.7.8", 60)).toBe(1);
+    });
+
+    it("does not hand out a fresh window each time a new storage is built", async () => {
+      resetSecondaryStorageFallback();
+
+      // A flapping Redis rebuilds nothing, but the counter must survive
+      // reconnects regardless — otherwise every blip resets the budget.
+      await createRedisSecondaryStorage(rejectingRedis()).increment?.("ratelimit:9.9.9.9", 60);
+      const second = await createRedisSecondaryStorage(rejectingRedis()).increment?.(
+        "ratelimit:9.9.9.9",
+        60,
+      );
+
+      expect(second).toBe(2);
+    });
+  });
+});
+
+/**
+ * The end-to-end shape of libris-59m.15: a session that exists in Postgres must
+ * keep authenticating while Redis is unavailable.
+ *
+ * This drives a real Better Auth instance over PGlite rather than asserting on
+ * the storage adapter alone, because the property under test belongs to the
+ * seam between the two — `session.storeSessionInDatabase` is true and
+ * `preserveSessionInDatabase` is unset, so `findSession` falls through to the
+ * `sessions` row when (and only when) secondary storage answers null.
+ */
+describe("a Redis outage against a durable session", () => {
+  const TEST_ENV = {
+    NODE_ENV: "test",
+    PORT: 3000,
+    DATABASE_URL: "pglite://",
+    REDIS_URL: "redis://localhost:6379",
+    LIBRIS_INBOX_PATH: "/tmp/libris-test-inbox",
+    LIBRIS_LIBRARY_PATH: "/tmp/libris-test-library",
+    LIBRIS_COVER_FETCH_ALLOWLIST: [],
+    API_SECRET_KEY: "test-secret-key-at-least-32-characters-long!!",
+    BETTER_AUTH_SECRET: "test-better-auth-secret-at-least-32-chars!!",
+    BETTER_AUTH_URL: "",
+    LIBRIS_COOKIE_SECURE: "0",
+    MIGRATIONS_PATH: "./migrations",
+    TRUST_PROXY_HEADERS: "0",
+    LIBRIS_TRUSTED_PROXIES: [],
+    E2E_TEST: "",
+    LOG_LEVEL: "info",
+    LIBRIS_RATELIMIT_GENERAL_LIMIT: 600,
+    LIBRIS_RATELIMIT_GENERAL_WINDOW_SECONDS: 60,
+    LIBRIS_RATELIMIT_AUTH_LIMIT: 30,
+    LIBRIS_RATELIMIT_AUTH_WINDOW_SECONDS: 60,
+    LIBRIS_RATELIMIT_KEY_CREATION_LIMIT: 30,
+    LIBRIS_RATELIMIT_KEY_CREATION_WINDOW_SECONDS: 3600,
+    LIBRIS_HTTP_HEADERS_TIMEOUT_MS: 10_000,
+    LIBRIS_HTTP_REQUEST_TIMEOUT_MS: 30_000,
+    LIBRIS_HTTP_IDLE_TIMEOUT_MS: 30_000,
+  } satisfies Env;
+
+  const PASSWORD = "correct-horse-battery-staple";
+
+  /** A Map-backed stand-in for ioredis that can be told to start failing. */
+  function faultInjectableRedis() {
+    const data = new Map<string, string>();
+    let failing = false;
+    const guard = () => {
+      if (failing) {
+        throw new Error("Stream isn't writeable and enableOfflineQueue options is false");
+      }
+    };
+    return {
+      breakIt: () => {
+        failing = true;
+      },
+      client: {
+        async get(key: string) {
+          guard();
+          return data.get(key) ?? null;
+        },
+        async getdel(key: string) {
+          guard();
+          const value = data.get(key) ?? null;
+          data.delete(key);
+          return value;
+        },
+        async set(key: string, value: string) {
+          guard();
+          data.set(key, value);
+          return "OK";
+        },
+        async del(key: string) {
+          guard();
+          return data.delete(key) ? 1 : 0;
+        },
+        async eval() {
+          guard();
+          return 1;
+        },
+      } as unknown as Redis,
+    };
+  }
+
+  let pglite: PGlite;
+  let db: TestDb;
+  let redis: ReturnType<typeof faultInjectableRedis>;
+  let auth: ReturnType<typeof createAuth>;
+
+  beforeAll(async () => {
+    ({ pglite, db } = await createTestDb());
+  });
+
+  afterAll(async () => {
+    await pglite.close();
+  });
+
+  beforeEach(() => {
+    redis = faultInjectableRedis();
+    auth = createAuth({
+      db: db as unknown as Parameters<typeof createAuth>[0]["db"],
+      secondaryStorage: createRedisSecondaryStorage(redis.client),
+      env: TEST_ENV,
+      secret: TEST_ENV.BETTER_AUTH_SECRET,
+      baseURL: "http://localhost:3000",
+    });
+  });
+
+  it("keeps authenticating an existing session once Redis starts rejecting", async () => {
+    const email = `redis-outage-${Date.now()}@example.test`;
+    await auth.api.createUser({
+      body: { email, password: PASSWORD, name: "Outage", role: "user" },
+    });
+    const { headers } = await auth.api.signInEmail({
+      body: { email, password: PASSWORD },
+      returnHeaders: true,
+    });
+    const cookie = headers.getSetCookie().join("; ");
+
+    // Sanity: the session resolves while Redis is healthy.
+    expect(await auth.api.getSession({ headers: new Headers({ cookie }) })).not.toBeNull();
+
+    redis.breakIt();
+
+    // The assertion that fails against the old adapter: with `get` propagating
+    // the rejection, this call THREW, `findSession` never reached the Postgres
+    // `sessions` row, and every logged-in user saw a 401 for the duration of
+    // the outage.
+    const session = await auth.api.getSession({ headers: new Headers({ cookie }) });
+    expect(session?.user.email).toBe(email);
   });
 });

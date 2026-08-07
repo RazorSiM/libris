@@ -1,5 +1,8 @@
 import type Redis from "ioredis";
 import type { BetterAuthOptions } from "better-auth/types";
+import { getLogger } from "../lib/logger.js";
+
+const logger = getLogger("auth-storage");
 
 // better-auth does not re-export SecondaryStorage, and the declaring package
 // (@better-auth/core) is only a transitive dependency — importing from it
@@ -37,24 +40,110 @@ end
 return value
 `;
 
+/**
+ * Counters that survive a Redis outage without failing open (libris-59m.15).
+ *
+ * Better Auth's `onRequestRateLimit` calls `secondaryStorage.increment` from
+ * `onRequest` and does not catch — a rejecting client turned every
+ * `/api/auth/*` call into a 500, including `get-session`. Process-local
+ * counting is weaker than shared counting (each process keeps its own budget)
+ * but it is still counting, which is the property a brute-force limiter needs.
+ * Returning a low value instead would hand an attacker an unlimited budget the
+ * moment Redis blinked.
+ *
+ * Module-level so the fallback survives a reconnect: a flapping Redis must not
+ * hand out a fresh window on every blip.
+ */
+const fallbackCounters = new Map<string, { value: number; expiresAt: number }>();
+
+function incrementInMemory(key: string, ttl: number): number {
+  const now = Date.now();
+  const entry = fallbackCounters.get(key);
+  if (!entry || entry.expiresAt <= now) {
+    // Only a fresh counter sets the window, matching the Lua script.
+    fallbackCounters.set(key, { value: 1, expiresAt: now + ttl * 1000 });
+    if (fallbackCounters.size > 10_000) {
+      for (const [k, v] of fallbackCounters) if (v.expiresAt <= now) fallbackCounters.delete(k);
+    }
+    return 1;
+  }
+  entry.value += 1;
+  return entry.value;
+}
+
+/** Exposed for tests; production code never needs to reset the fallback. */
+export function resetSecondaryStorageFallback(): void {
+  fallbackCounters.clear();
+}
+
+/**
+ * Redis is a cache in front of durable state, and this is where that shows.
+ *
+ * Sessions are written to Postgres as well (`session.storeSessionInDatabase`),
+ * and better-auth's `findSession` falls through to the `sessions` row whenever
+ * secondary storage answers null. A MISS therefore degrades gracefully; a THROW
+ * aborts before the fallback is ever reached, and `middleware/auth.ts` turns it
+ * into a 401. A 400 ms Redis pause (BGSAVE, AOF rewrite, failover) used to sign
+ * every logged-in user out even though every session row was intact.
+ *
+ * So: reads degrade to a miss, writes stay loud.
+ *
+ * - `get` / `getAndDelete` return null on error. For `getAndDelete` that is also
+ *   the safe direction: a single-use token that cannot be read is treated as
+ *   absent and refused, never as consumed-and-valid.
+ * - `set` and `delete` still reject. A dropped `delete` is a revocation that
+ *   silently did not happen, which must surface as an error the caller can
+ *   retry rather than as a success.
+ * - `increment` falls back to the process-local counter above.
+ */
 export function createRedisSecondaryStorage(redis: Redis, prefix = "ba"): SecondaryStorage {
   const pfx = prefix ? `${prefix}:` : "";
   const fullKey = (key: string) => `${pfx}${key}`;
 
+  const degradeToMiss = (operation: string, key: string, err: unknown): null => {
+    logger
+      .withMetadata({ operation, key: fullKey(key) })
+      .warn(
+        `Redis ${operation} failed, treating as a miss so the database fallback runs: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    return null;
+  };
+
   return {
     async get(key) {
-      return await redis.get(fullKey(key));
+      try {
+        return await redis.get(fullKey(key));
+      } catch (err) {
+        return degradeToMiss("get", key, err);
+      }
     },
 
     async getAndDelete(key) {
-      // Redis >= 6.2. The deployed image is redis:7 (docker-compose.dev.yml
-      // and the production compose both pin the 7 line).
-      return await redis.getdel(fullKey(key));
+      try {
+        // Redis >= 6.2. The deployed image is redis:7 (docker-compose.dev.yml
+        // and the production compose both pin the 7 line).
+        return await redis.getdel(fullKey(key));
+      } catch (err) {
+        return degradeToMiss("getAndDelete", key, err);
+      }
     },
 
     async increment(key, ttl) {
-      const value = await redis.eval(INCREMENT_SCRIPT, 1, fullKey(key), String(ttl));
-      return Number(value);
+      try {
+        const value = await redis.eval(INCREMENT_SCRIPT, 1, fullKey(key), String(ttl));
+        return Number(value);
+      } catch (err) {
+        logger
+          .withMetadata({ key: fullKey(key) })
+          .warn(
+            `Redis increment failed, counting in process memory instead: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          );
+        return incrementInMemory(fullKey(key), ttl);
+      }
     },
 
     async set(key, value, ttl) {

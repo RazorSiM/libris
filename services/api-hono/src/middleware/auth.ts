@@ -144,9 +144,26 @@ export const authMiddleware = createMiddleware<{ Variables: AppVariables }>(asyn
     // APIError for a credential that was presented and rejected — an unknown or
     // disabled app password, most commonly. Both mean the same thing here, and
     // letting the throw escape would turn a bad key into a 500.
+    //
+    // Anything that is NOT an APIError is an infrastructure fault (Redis,
+    // Postgres) rather than a verdict on the credential (libris-59m.15).
+    // Collapsing both into the same bare "Auth failure from <ip>" line made a
+    // store outage indistinguishable from a wrong password in the logs, which
+    // is the difference between diagnosing an incident and guessing at it.
     const session = await auth.api
       .getSession({ headers: withTrustedClientIp(c.req.raw.headers, c.get("clientIp")) })
-      .catch(() => null as Awaited<ReturnType<typeof auth.api.getSession>>);
+      .catch((err: unknown) => {
+        if (err instanceof Error && err.name === "APIError") {
+          logger.withError(err).debug(`Credential rejected on ${path}`);
+        } else {
+          logger
+            .withError(err instanceof Error ? err : new Error(String(err)))
+            .error(
+              `Session lookup failed on ${path} — auth store unavailable, not a bad credential`,
+            );
+        }
+        return null as Awaited<ReturnType<typeof auth.api.getSession>>;
+      });
 
     if (!session) {
       if (required) throw unauthorized();
