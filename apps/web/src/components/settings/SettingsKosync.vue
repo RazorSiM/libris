@@ -12,7 +12,11 @@ function copyToClipboard(text: string) {
   toast.add({ title: "Copied to clipboard", color: "success" });
 }
 
-const { appSettings, kosyncCredentials } = useSettingsStatusQuery();
+// `credentials.kosync` is the only KoSync signal in the status payload. The
+// `settings` block used to carry a second `kosyncConfigured` flag computed from
+// a table the kosync migration emptied, so this card showed "not configured"
+// however many times you saved (libris-59m.18).
+const { kosyncCredentials } = useSettingsStatusQuery();
 
 const credentialSchema = z.object({
   username: z.string().min(1, "Username is required"),
@@ -21,7 +25,49 @@ const credentialSchema = z.object({
 
 const kosyncCredForm = reactive({ username: "", password: "" });
 const kosyncUsernameDirty = ref(false);
+const passwordVisible = ref(false);
 const { mutateAsync: putCredential, isLoading: kosyncSaving } = usePutCredential();
+
+/**
+ * A KoSync password is a device pairing secret, not an account password: it is
+ * typed here once, typed into KOReader once, and never used again.
+ *
+ * KOReader sends md5(password) as the bearer secret and md5 adds no entropy, so
+ * whatever the user picks here is what an offline attacker would enumerate if
+ * the credential table ever leaked (libris-59m.24). The server pepper is what
+ * makes that leak worthless; generating the value removes the human choice
+ * underneath it as well, and stops anyone reusing their account password for a
+ * credential that lives in plaintext on an e-reader.
+ *
+ * Look-alike characters are left out because this gets copied by hand onto a
+ * device keyboard.
+ */
+const PAIRING_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789";
+const PAIRING_LENGTH = 16;
+
+function generatePairingSecret(): string {
+  // Rejection sampling: a bare modulo would favour the first few characters.
+  const limit = Math.floor(0x1_0000_0000 / PAIRING_ALPHABET.length) * PAIRING_ALPHABET.length;
+  const out: string[] = [];
+  const buffer = new Uint32Array(PAIRING_LENGTH);
+  while (out.length < PAIRING_LENGTH) {
+    crypto.getRandomValues(buffer);
+    for (const value of buffer) {
+      if (out.length === PAIRING_LENGTH) break;
+      if (value >= limit) continue;
+      out.push(PAIRING_ALPHABET[value % PAIRING_ALPHABET.length]!);
+    }
+  }
+  // Grouped for transcription, and the dashes count towards the 12-character
+  // minimum the server enforces either way.
+  return out.join("").replace(/(.{4})(?=.)/g, "$1-");
+}
+
+function fillGeneratedPassword() {
+  kosyncCredForm.password = generatePairingSecret();
+  passwordVisible.value = true;
+  copyToClipboard(kosyncCredForm.password);
+}
 
 watch(
   () => kosyncCredentials.value?.username,
@@ -40,6 +86,7 @@ async function saveKosyncCredentials() {
       password: kosyncCredForm.password,
     });
     kosyncCredForm.password = "";
+    passwordVisible.value = false;
     toast.add({ title: "KoSync credentials saved", color: "success" });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Failed to save credentials";
@@ -81,21 +128,19 @@ async function saveKosyncCredentials() {
     <USeparator class="my-3" />
 
     <UAlert
-      v-if="appSettings?.kosyncConfigured"
+      v-if="kosyncCredentials?.configured"
       icon="i-lucide-circle-check"
-      :title="
-        kosyncCredentials?.configured
-          ? `KoSync credentials configured — username: ${kosyncCredentials.username}`
-          : 'KoSync credentials are configured via environment variables.'
-      "
+      data-testid="kosync-configured-alert"
+      :title="`KoSync credentials configured — username: ${kosyncCredentials.username}`"
       color="success"
       variant="subtle"
     />
     <UAlert
       v-else
       icon="i-lucide-circle-alert"
+      data-testid="kosync-unconfigured-alert"
       title="KoSync is not configured"
-      description="Set credentials below, or use environment variables on the server."
+      description="Set a username and password below to pair a KOReader device."
       color="warning"
       variant="subtle"
     />
@@ -108,7 +153,9 @@ async function saveKosyncCredentials() {
     >
       <h4 class="text-xs font-medium">Set KoSync Credentials</h4>
       <p class="text-xs text-muted">
-        Set a username and a password of at least 12 characters for KoReader sync.
+        Set a username and a password of at least 12 characters for KoReader sync. This password is
+        a pairing secret for the device — use <strong>Generate</strong> rather than reusing your
+        account password.
       </p>
       <div class="flex flex-col sm:flex-row gap-2">
         <UFormField name="username" class="flex-1">
@@ -125,12 +172,24 @@ async function saveKosyncCredentials() {
           <UInput
             v-model="kosyncCredForm.password"
             data-testid="kosync-password-input"
-            type="password"
+            :type="passwordVisible ? 'text' : 'password'"
             placeholder="Password"
             size="sm"
             class="w-full"
           />
         </UFormField>
+        <UTooltip text="Generate a random pairing secret and copy it">
+          <UButton
+            type="button"
+            label="Generate"
+            icon="i-lucide-dices"
+            size="sm"
+            color="neutral"
+            variant="subtle"
+            data-testid="kosync-generate-btn"
+            @click="fillGeneratedPassword"
+          />
+        </UTooltip>
         <UButton
           type="submit"
           label="Save"
@@ -140,6 +199,9 @@ async function saveKosyncCredentials() {
           :loading="kosyncSaving"
         />
       </div>
+      <p v-if="passwordVisible" class="text-xs text-muted" data-testid="kosync-generated-hint">
+        Copied to the clipboard. Enter it on the device now — it is not shown again after saving.
+      </p>
     </UForm>
 
     <p class="text-xs text-muted mt-3">

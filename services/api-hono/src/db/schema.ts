@@ -315,11 +315,18 @@ export const serviceCredentials = pgTable(
  * the credential-minting path, to satisfy one client's quirk. The weirdness
  * stays at the edge instead.
  *
- * secretHash is sha256 of the exact value KOReader puts on the wire. A fast
- * hash is the right choice precisely because that value is a high-entropy
- * random secret rather than a human-chosen password: there is nothing for an
- * offline attacker to guess, so the work factor buys nothing and only slows
- * down every sync request.
+ * secret_hash holds `v1$<salt-hex>$<hmac-hex>`: a per-row-salted HMAC-SHA256
+ * of the exact value KOReader puts on the wire, keyed by a pepper derived from
+ * API_SECRET_KEY. The version and salt live inside the column so the format can
+ * move again without a migration, and pre-v1 rows -- a bare unsalted sha256 --
+ * still verify and are rewritten on the owner's next successful sync.
+ *
+ * The wire value is md5 of a HUMAN-CHOSEN password, not a random token, so a
+ * bare digest here was offline-crackable for every row at once (libris-59m.24).
+ * A password hash is not the answer either: this is verified on an
+ * unauthenticated endpoint that KOReader hits on every progress read and write,
+ * where a work factor is a CPU-exhaustion lever. shared/kosync-auth.ts has the
+ * full reasoning and states what the scheme does not protect against.
  */
 export const kosyncCredentials = pgTable(
   "kosync_credentials",

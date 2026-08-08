@@ -194,7 +194,7 @@ export const kosyncRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
     }
     const db = c.get("db");
 
-    await validateKosyncCredentials(username, password, db);
+    await validateKosyncCredentials(username, password, db, c.get("env").API_SECRET_KEY);
 
     // Return the key as userkey — KOReader stores this for subsequent sync requests
     return c.json({ authorized: "OK", userkey: password } satisfies KosyncAuthResponse);
@@ -212,7 +212,7 @@ export const kosyncRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
     // a validator that accepted both would restore the two-valid-secrets bug
     // this slice removed.
     const userkey = md5(body.password);
-    await validateKosyncCredentials(body.username, userkey, db);
+    await validateKosyncCredentials(body.username, userkey, db, c.get("env").API_SECRET_KEY);
 
     return c.json({ authorized: "OK", userkey } satisfies KosyncAuthResponse);
   })

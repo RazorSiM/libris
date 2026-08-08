@@ -107,6 +107,20 @@ const deleteCredentialRoute = createRoute({
  * error". The index is gone, but this makes the failure mode legible if any
  * future constraint change reintroduces one.
  */
+/**
+ * The one refusal a taken KoSync username gets, wherever it is detected.
+ *
+ * Two code paths reach it — the up-front SELECT and the unique violation the
+ * INSERT raises when someone else claimed the name in between — and they have
+ * to be indistinguishable to the caller, or the answer depends on how busy the
+ * server was (libris-59m.44).
+ */
+function kosyncUsernameTaken(username: string): HTTPException {
+  return new HTTPException(409, {
+    message: `Username "${username}" is already taken for kosync`,
+  });
+}
+
 async function storeCredential(
   service: string,
   username: string,
@@ -184,22 +198,36 @@ export const credentialsRoutes = createOpenApiRouter<{ Variables: AppVariables }
         .where(eq(kosyncCredentials.username, username))
         .limit(1);
       if (existing && existing.userId !== userId) {
-        throw new HTTPException(409, {
-          message: `Username "${username}" is already taken for kosync`,
-        });
+        throw kosyncUsernameTaken(username);
       }
 
-      // sha256 of the value KOReader will put on the wire, which is
-      // md5(password) — not the plaintext. See shared/kosync-auth.ts.
-      await storeCredential(service, username, () =>
-        db
+      // A salted, peppered MAC of the value KOReader will put on the wire,
+      // which is md5(password) — not the plaintext. The pepper comes from
+      // API_SECRET_KEY, so a database-only leak yields nothing to guess
+      // against. See shared/kosync-auth.ts for the full rationale.
+      const secretHash = hashKosyncSecret(md5(password), env.API_SECRET_KEY);
+
+      // The SELECT above is a check, not a lock. Between it and this INSERT
+      // another request can claim the same username, and Postgres — not the
+      // handler — is what stops the second one. Every unique violation this
+      // statement can raise is that collision: the ON CONFLICT target is
+      // kosync_credentials_user_id_uniq, so the per-user constraint is
+      // absorbed into the UPDATE branch rather than raised, leaving
+      // kosync_credentials_username_uniq as the only index left to violate —
+      // from either branch, since the UPDATE rewrites `username` too.
+      // Without this the loser of the race got a 500 (libris-59m.44).
+      try {
+        await db
           .insert(kosyncCredentials)
-          .values({ userId, username, secretHash: hashKosyncSecret(md5(password)) })
+          .values({ userId, username, secretHash })
           .onConflictDoUpdate({
             target: kosyncCredentials.userId,
-            set: { username, secretHash: hashKosyncSecret(md5(password)), updatedAt: new Date() },
-          }),
-      );
+            set: { username, secretHash, updatedAt: new Date() },
+          });
+      } catch (err) {
+        if (!isUniqueViolation(err)) throw err;
+        throw kosyncUsernameTaken(username);
+      }
 
       return c.json({ service, username, updated: true });
     }

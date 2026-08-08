@@ -165,11 +165,16 @@ const settingsStatusRoute = createRoute({
                 total: z.number().int(),
               })
               .nullable(),
+            // No `kosyncConfigured` here on purpose. It used to be a second,
+            // independently-computed copy of `credentials.kosync.configured`
+            // in the very same payload, and the two disagreed: this one read
+            // `service_credentials`, which the kosync_credentials migration
+            // emptied and no writer has touched since, so it was pinned to
+            // false forever (libris-59m.18). One field, one query, one answer.
             settings: z
               .object({
                 libraryPath: z.string(),
                 inboxPath: z.string(),
-                kosyncConfigured: z.boolean(),
                 hardcoverMetadataEnabled: z.boolean(),
                 hardcoverSyncEnabled: z.boolean(),
               })
@@ -343,17 +348,10 @@ export const settingsRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
         })(),
 
         // 4. App settings
+        //
+        // KoSync deliberately does not appear here — `credentials.kosync` in
+        // this same response is the single source of truth for it.
         (async () => {
-          const [kosyncCred] = await db
-            .select({ id: serviceCredentials.id })
-            .from(serviceCredentials)
-            .where(
-              and(eq(serviceCredentials.service, "kosync"), eq(serviceCredentials.userId, userId)),
-            )
-            .limit(1);
-
-          const kosyncConfigured = !!kosyncCred;
-
           const [hardcoverMetadataEnabled, hardcoverSyncEnabled] = await Promise.all([
             isHardcoverMetadataEnabled(db),
             isHardcoverSyncEnabled(db),
@@ -362,7 +360,6 @@ export const settingsRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
           return {
             libraryPath: env.LIBRIS_LIBRARY_PATH,
             inboxPath: env.LIBRIS_INBOX_PATH,
-            kosyncConfigured,
             hardcoverMetadataEnabled,
             hardcoverSyncEnabled,
           };
@@ -385,6 +382,11 @@ export const settingsRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
     const env = c.get("env");
     const userId = getUserId(c);
 
+    // kosync_credentials, never service_credentials: the migration that split
+    // KoSync out deleted every kosync row from the latter and nothing writes
+    // one back, so a lookup there answers "not configured" forever
+    // (libris-59m.18). GET /status deliberately reports this through
+    // `credentials.kosync` instead of carrying a second copy of the flag.
     const [kosyncCred] = await db
       .select({ userId: kosyncCredentials.userId })
       .from(kosyncCredentials)
