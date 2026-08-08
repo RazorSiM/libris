@@ -16,6 +16,28 @@ export function createEventsRoutes(upgradeWebSocket: UpgradeWebSocket) {
   return createOpenApiRouter<{ Variables: AppVariables }>().get(
     "/",
     upgradeWebSocket(async (c) => {
+      /**
+       * Refuse anything that is not a WebSocket handshake, before any slot is
+       * reserved (libris-59m.17).
+       *
+       * `upgradeWebSocket` runs this callback on EVERY GET to /api/events —
+       * hono/ws is `const events = await createEvents(c); const result = await
+       * handler(c, events, options); if (result) return result; await next();`,
+       * and the node-ws handler returns undefined for a request with no
+       * `Upgrade: websocket`. On such a request onOpen/onClose/onError never
+       * fire, so nothing released the slot except the 10 s reservation timer.
+       *
+       * Five plain `curl /api/events` in under a second therefore exhausted one
+       * principal's cap and kept their real browser socket 429'd; roughly
+       * twenty app passwords pinned the process-wide cap and denied the event
+       * stream to everyone — with no WebSocket ever opened. It also stops
+       * /api/events falling through to the SPA fallback and answering 200
+       * text/html, which was wrong on its own.
+       */
+      if (c.req.header("upgrade")?.toLowerCase() !== "websocket") {
+        throw new HTTPException(400, { message: "This endpoint requires a WebSocket upgrade" });
+      }
+
       const origin = c.req.header("origin");
       if (origin && !isTrustedOrigin(origin, c, c.get("env"))) {
         throw new HTTPException(403, { message: "Cross-site WebSocket rejected" });
@@ -39,6 +61,9 @@ export function createEventsRoutes(upgradeWebSocket: UpgradeWebSocket) {
       const reservationTimeout = setTimeout(() => {
         if (!opened) release();
       }, 10_000);
+      // A pending reservation must never be a reason for the process to stay
+      // alive: shutdown should not wait ten seconds per half-open handshake.
+      reservationTimeout.unref?.();
       const bookIdFilter = (c.req.query("bookId") as string) || null;
 
       return {

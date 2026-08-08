@@ -1,7 +1,11 @@
-import { describe, expect, it, vi } from "vite-plus/test";
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
+  assertNotInternalUrl,
   fetchExternalImage,
   isBlockedAddress,
+  type ResolvedAddress,
   type SecureImageFetchDependencies,
 } from "./secure-image-fetch.js";
 
@@ -12,11 +16,15 @@ function dependencies(
   addresses: Array<{ address: string; family: 4 | 6 }> = [{ address: "93.184.216.34", family: 4 }],
 ) {
   const resolve = vi.fn(async () => addresses);
-  const request = vi.fn(async () => {
-    const response = responses.shift();
-    if (!response) throw new Error("Unexpected request");
-    return { headers: {}, body: Buffer.alloc(0), ...response };
-  });
+  // Parameters are declared even though they go unused, so `mock.calls` stays
+  // typed and assertions about what each hop was handed can be written.
+  const request = vi.fn(
+    async (_url: URL, _address: ResolvedAddress, _signal: AbortSignal, _maxBytes: number) => {
+      const response = responses.shift();
+      if (!response) throw new Error("Unexpected request");
+      return { headers: {}, body: Buffer.alloc(0), ...response };
+    },
+  );
   return { resolve, request } satisfies SecureImageFetchDependencies;
 }
 
@@ -154,7 +162,7 @@ describe("fetchExternalImage", () => {
     expect(deps.request).toHaveBeenCalledWith(
       expect.objectContaining({ hostname: "rebind.example" }),
       { address: "93.184.216.34", family: 4 },
-      expect.any(Number),
+      expect.any(AbortSignal),
       expect.any(Number),
     );
   });
@@ -173,4 +181,171 @@ describe("fetchExternalImage", () => {
       );
     },
   );
+});
+
+/**
+ * libris-59m.41: `timeoutMs` bounds the WHOLE operation, not each hop.
+ *
+ * It used to be handed to `dependencies.request` inside the redirect loop, and
+ * `defaultRequest` built a fresh `AbortSignal.timeout` from it on every call, so
+ * the real ceiling was (maxRedirects + 1) x timeoutMs — 60 s for the cover proxy
+ * and 180 s for the organize worker. The redirect-limit test above counts hops
+ * and says nothing about elapsed time, which is exactly why this shipped.
+ */
+describe("the total time budget", () => {
+  /** A dependency set whose every hop is a redirect that takes `hopMs`. */
+  function slowRedirectChain(hopMs: number) {
+    const resolve = vi.fn(async () => [{ address: "93.184.216.34", family: 4 as const }]);
+    const request = vi.fn(
+      (url: URL, _address: unknown, signal: AbortSignal) =>
+        new Promise<{ status: number; headers: Record<string, string>; body: Buffer }>(
+          (resolveHop, rejectHop) => {
+            const timer = setTimeout(() => {
+              signal.removeEventListener("abort", onAbort);
+              resolveHop({
+                status: 302,
+                headers: { location: `${url.pathname}-next` },
+                body: Buffer.alloc(0),
+              });
+            }, hopMs);
+            function onAbort() {
+              clearTimeout(timer);
+              rejectHop(signal.reason as Error);
+            }
+            signal.addEventListener("abort", onAbort, { once: true });
+          },
+        ),
+    );
+    return { resolve, request } satisfies SecureImageFetchDependencies;
+  }
+
+  it("is not multiplied by the redirect limit", async () => {
+    // Five permitted redirects at 80 ms each plus the original request is
+    // 480 ms of hops against a 200 ms budget. Under the old per-hop timeout
+    // every hop got its own fresh 200 ms, so the chain ran to completion and
+    // failed with "Cover redirect limit exceeded" at ~480 ms. Now it is refused
+    // at the deadline instead.
+    const deps = slowRedirectChain(80);
+
+    const startedAt = Date.now();
+    await expect(
+      fetchExternalImage("https://covers.example/start", { timeoutMs: 200 }, deps),
+    ).rejects.toThrow(/exceeded 200ms/);
+    const elapsed = Date.now() - startedAt;
+
+    expect(elapsed).toBeLessThan(400);
+    // And it really was cut off mid-chain rather than allowed to finish.
+    expect(deps.request.mock.calls.length).toBeLessThan(6);
+  });
+
+  it("hands every hop the same signal rather than a fresh per-hop deadline", async () => {
+    const deps = dependencies([
+      { status: 302, headers: { location: "/two" } },
+      { status: 301, headers: { location: "https://cdn.example/final.jpg" } },
+      { status: 200, headers: { "content-type": "image/jpeg" }, body: JPEG },
+    ]);
+
+    await fetchExternalImage("https://covers.example/one", {}, deps);
+
+    const signals = deps.request.mock.calls.map((call) => call[2]);
+    expect(signals).toHaveLength(3);
+    expect(signals.every((signal) => signal === signals[0])).toBe(true);
+  });
+
+  it("bounds a DNS lookup that never answers", async () => {
+    // `defaultResolve` calls getaddrinfo, which takes no AbortSignal and cannot
+    // be cancelled — so the deadline is enforced by refusing to keep waiting.
+    // Before this, a hostile authoritative nameserver added unbounded time to
+    // each of the six hops, on top of the per-hop request timeout.
+    const deps = {
+      resolve: vi.fn(() => new Promise<never>(() => {})),
+      request: vi.fn(async () => {
+        throw new Error("must never be reached");
+      }),
+    } satisfies SecureImageFetchDependencies;
+
+    const startedAt = Date.now();
+    await expect(
+      fetchExternalImage("https://slow-dns.example/cover.jpg", { timeoutMs: 150 }, deps),
+    ).rejects.toThrow(/exceeded 150ms/);
+
+    expect(Date.now() - startedAt).toBeLessThan(1_000);
+    expect(deps.request).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The default `request`/`resolve` implementations, which every other test in
+ * this file replaces with a mock — so the streaming byte cap, the signal wiring
+ * and the DNS path had no coverage at all.
+ */
+describe("the default request and resolve implementations", () => {
+  let server: Server | null = null;
+
+  afterEach(async () => {
+    if (!server) return;
+    const closing = server;
+    server = null;
+    closing.closeAllConnections();
+    await new Promise<void>((resolve) => closing.close(() => resolve()));
+  });
+
+  /** A loopback origin, allowlisted so the SSRF guard lets the test through. */
+  async function listen(
+    handler: Parameters<typeof createServer>[1],
+  ): Promise<{ origin: string; allowedOrigins: string[] }> {
+    const started = createServer(handler);
+    server = started;
+    await new Promise<void>((resolve) => started.listen(0, "127.0.0.1", resolve));
+    const origin = `http://127.0.0.1:${(started.address() as AddressInfo).port}`;
+    return { origin, allowedOrigins: [origin] };
+  }
+
+  it("fetches and validates a real image over a real socket", async () => {
+    const { origin, allowedOrigins } = await listen((_req, res) => {
+      res.writeHead(200, { "content-type": "image/jpeg" });
+      res.end(JPEG);
+    });
+
+    const result = await fetchExternalImage(`${origin}/cover.jpg`, { allowedOrigins });
+
+    expect(result.contentType).toBe("image/jpeg");
+    expect(result.data).toEqual(JPEG);
+    expect(result.finalUrl).toBe(`${origin}/cover.jpg`);
+  });
+
+  it("stops reading once the body passes maxBytes", async () => {
+    // The cap has to bite while STREAMING, not after the whole body is in
+    // memory — the point of it is that an attacker cannot make the process
+    // buffer a gigabyte by declaring a small Content-Length and sending more.
+    const { origin, allowedOrigins } = await listen((_req, res) => {
+      res.writeHead(200, { "content-type": "image/jpeg" });
+      res.write(JPEG);
+      for (let i = 0; i < 200; i++) res.write(Buffer.alloc(1024));
+      res.end();
+    });
+
+    await expect(
+      fetchExternalImage(`${origin}/huge.jpg`, { allowedOrigins, maxBytes: 1024 }),
+    ).rejects.toThrow(/exceeds 1024 bytes/);
+  });
+
+  it("aborts a hop that never answers, on the shared deadline", async () => {
+    const { origin, allowedOrigins } = await listen(() => {
+      // Accept the request and never respond.
+    });
+
+    const startedAt = Date.now();
+    await expect(
+      fetchExternalImage(`${origin}/hangs.jpg`, { allowedOrigins, timeoutMs: 200 }),
+    ).rejects.toThrow(/exceeded 200ms/);
+
+    expect(Date.now() - startedAt).toBeLessThan(1_500);
+  });
+
+  it("resolves a real hostname and refuses it when it lands on loopback", async () => {
+    // Exercises defaultResolve's getaddrinfo path: "localhost" is not an IP
+    // literal, so it goes through lookup(), and every answer is loopback.
+    await expect(assertNotInternalUrl("http://localhost/whatever")).rejects.toThrow(/blocked/i);
+  });
 });

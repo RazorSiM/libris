@@ -5,7 +5,7 @@ import { bootstrap } from "./bootstrap.js";
 import { getEnv } from "./env.js";
 import { getLogger } from "./lib/logger.js";
 import { guardSocketErrors } from "./lib/socket-guard.js";
-import { configureHttpIdleTimeout, getHttpServerOptions } from "./lib/http-timeouts.js";
+import { getHttpServerOptions } from "./lib/http-timeouts.js";
 
 const logger = getLogger("server");
 const env = getEnv();
@@ -18,7 +18,6 @@ const server = serve(
     logger.info(`Listening on http://localhost:${info.port}`);
   },
 );
-configureHttpIdleTimeout(server as Parameters<typeof configureHttpIdleTimeout>[0], env);
 
 // Keep transport-level socket errors (e.g. client RST during the async WS
 // upgrade window) from crashing the process. Must be attached before WebSocket
