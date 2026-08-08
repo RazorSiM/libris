@@ -187,40 +187,34 @@ describe("createRedisSecondaryStorage", () => {
     expect(redis.get).not.toHaveBeenCalled();
   });
 
-  it("increments in a single scripted round-trip and returns a number", async () => {
+  it("increments in a single round-trip and returns a number", async () => {
     const redis = fakeRedis();
     redis.eval.mockResolvedValueOnce("7");
     const storage = createRedisSecondaryStorage(redis);
 
     const value = await storage.increment?.("rl", 60);
 
-    // One EVAL rather than INCR followed by EXPIRE: two round-trips would leave
+    // One call rather than INCR followed by EXPIRE: two round-trips would leave
     // a TTL-less counter behind if the process died between them, permanently
-    // rate-limiting whoever owned that key.
+    // rate-limiting whoever owned that key. This pins the WIRING — which key it
+    // is aimed at, and that it is a single call. What the script does is
+    // asserted behaviourally in tests/redis-increment.test.ts.
     expect(value).toBe(7);
     expect(redis.eval).toHaveBeenCalledTimes(1);
-    const [script, numKeys, key, ttl] = redis.eval.mock.calls[0] as [
-      string,
-      number,
-      string,
-      string,
-    ];
-    expect(script).toContain("INCR");
-    expect(script).toContain("EXPIRE");
+    const [, numKeys, key, ttl] = redis.eval.mock.calls[0] as [string, number, string, string];
     expect(numKeys).toBe(1);
     expect(key).toBe("ba:rl");
     expect(ttl).toBe("60");
   });
 
-  it("only applies the ttl when the counter is created", async () => {
-    const redis = fakeRedis();
-    const storage = createRedisSecondaryStorage(redis);
-    await storage.increment?.("rl", 60);
-
-    const [script] = redis.eval.mock.calls[0] as [string];
-    // The EXPIRE is guarded on the post-increment value being 1.
-    expect(script.replace(/\s+/g, " ")).toContain("if value == 1 then");
-  });
+  // A test named "only applies the ttl when the counter is created" used to sit
+  // here, and its assertion was `script.toContain("if value == 1 then")`
+  // (libris-59m.31). String-matching the Lua SOURCE proves the script's text
+  // and nothing about its behaviour: any rewrite that kept the substring — or
+  // moved it into a comment — passed. Both properties it was reaching for (a
+  // concurrent burst returning 1..N exactly once, and later increments not
+  // re-arming the TTL) are asserted against a real Redis in
+  // tests/redis-increment.test.ts instead.
 
   it("honours a custom prefix", async () => {
     const redis = fakeRedis();

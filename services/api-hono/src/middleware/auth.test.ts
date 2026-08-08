@@ -111,6 +111,11 @@ beforeAll(async () => {
   // so the scoping tests below can tell "refused" apart from "no such route".
   app.get("/api/app-passwords", probe);
   app.get("/api/credentials/kosync", probe);
+  // A real POST route for the CSRF block below. Without one, "the request got
+  // past the check" was being read off a 404 that only meant "no such route"
+  // (libris-59m.31) -- the tests held, but not for the reason they claimed, and
+  // a check that rejected everything with 404 would have looked identical.
+  app.post("/api/books/:id/reorganize", probe);
   app.on(["GET", "POST"], "/api/auth/*", (c) => auth.handler(c.req.raw));
 });
 
@@ -644,9 +649,9 @@ describe("cross-site cookie mutation rejection", () => {
 
   it("accepts a same-origin cookie-authenticated mutation", async () => {
     const { cookie } = await signUp("sameorigin@example.test");
-    // The route itself 404s on the fake id, which proves the CSRF check passed.
+    // 200 from the route itself: the request reached the handler.
     const { status } = await post(MUTATION, { cookie, ...SAME_ORIGIN });
-    expect(status).toBe(404);
+    expect(status).toBe(200);
   });
 
   it("rejects a foreign-Origin cookie-authenticated mutation", async () => {
@@ -676,18 +681,17 @@ describe("cross-site cookie mutation rejection", () => {
       host: "localhost",
       "sec-fetch-site": "same-origin",
     });
-    expect(status).toBe(404);
+    expect(status).toBe(200);
   });
 
   it("leaves headerless app-password clients untouched", async () => {
     // OPDS and API-key clients send no cookie, so the CSRF check must not
-    // interfere: the request falls through to the route (404 on the fake id),
-    // never rejected by the origin check even with a hostile Origin header.
+    // interfere: the request reaches the route even with a hostile Origin.
     const { userId } = await signUp("apikeycsrf@example.test");
     const key = await createAppPassword(userId, "CSRF");
     expect(
       (await post(MUTATION, { "x-api-key": key, origin: "https://evil.example.com" })).status,
-    ).toBe(404);
+    ).toBe(200);
   });
 
   it("does not reject a foreign Origin on a GET (reads are exempt)", async () => {

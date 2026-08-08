@@ -17,7 +17,26 @@ const blankAggregate = {
 describe("buildProgressAggregate", () => {
   it("returns unread when nothing is recorded", () => {
     const result = buildProgressAggregate([], []);
-    expect(result).toEqual(emptyProgressAggregate());
+
+    // A literal, not `emptyProgressAggregate()` (libris-59m.31): comparing the
+    // function against the factory it delegates to means both can change
+    // together and this test never notices.
+    expect(result).toEqual({
+      percentage: null,
+      status: "unread",
+      lastDevice: null,
+      lastTimestamp: null,
+      startedAt: null,
+      finishedAt: null,
+      pausedAt: null,
+      manuallySet: false,
+      externallySet: false,
+    });
+  });
+
+  it("emptyProgressAggregate is that same shape", () => {
+    // Pinned separately so the factory and its caller cannot drift silently.
+    expect(emptyProgressAggregate()).toEqual(buildProgressAggregate([], []));
   });
 
   it("derives status from highest-percentage progress row when no manual override", () => {

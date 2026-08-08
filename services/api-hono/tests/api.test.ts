@@ -1340,7 +1340,10 @@ describe("GET /api/stats", () => {
     const { data, status } = await $fetchRaw("/api/stats", { headers: auth() });
     expect(status).toBe(200);
     expect(data.libraryGrowth.length).toBeGreaterThanOrEqual(1);
-    let prev = -1;
+    // Seeded at 0 rather than -1 (libris-59m.31): a cumulative series can never
+    // be negative, so the first comparison was always vacuous, and a first row
+    // of 0 on a library that already holds books would have slipped through.
+    let prev = 0;
     for (const row of data.libraryGrowth) {
       expect(row.cumulative).toBeGreaterThanOrEqual(prev);
       prev = row.cumulative;

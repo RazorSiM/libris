@@ -511,15 +511,18 @@ describe("extractEpubMetadata", () => {
     });
 
     it("returns empty metadata for random binary data", async () => {
+      // Deterministic rather than Math.random() (libris-59m.31): a test whose
+      // input changes every run cannot be re-examined when it does fail.
       const garbage = Buffer.alloc(4096);
       for (let i = 0; i < garbage.length; i++) {
-        garbage[i] = Math.floor(Math.random() * 256);
+        garbage[i] = (i * 37 + 11) % 256;
       }
       const path = await writeEpub("garbage.epub", garbage);
       const meta = await extractEpubMetadata(path);
 
-      // Should not throw, returns empty or partial metadata
-      expect(meta).toBeDefined();
+      // `toBeDefined()` was the whole assertion (libris-59m.31), and this
+      // function returns an object on every path -- it could not fail.
+      expect(meta).toEqual({});
     });
 
     it("returns empty metadata when EOCD signature is corrupted", async () => {
@@ -534,8 +537,10 @@ describe("extractEpubMetadata", () => {
       const path = await writeEpub("bad-eocd.epub", corrupted);
       const meta = await extractEpubMetadata(path);
 
-      // Fallback extraction may still find metadata from local headers
-      expect(meta).toBeDefined();
+      // Was `toBeDefined()`, which an always-object return can never fail
+      // (libris-59m.31). The local-header fallback recovers the OPF even with
+      // the EOCD destroyed, so that recovery is what gets pinned.
+      expect(meta.title).toBe("Good Book");
     });
 
     it("handles missing container.xml gracefully", async () => {
@@ -600,8 +605,8 @@ describe("extractEpubMetadata", () => {
       const path = await writeEpub("bad-cd.epub", corrupted);
       const meta = await extractEpubMetadata(path);
 
-      // Should not throw; may return empty or fallback metadata
-      expect(meta).toBeDefined();
+      // Was `toBeDefined()` (libris-59m.31). The fallback still finds the OPF.
+      expect(meta.title).toBe("Bad CD");
     });
 
     it("handles DEFLATE decompression failure gracefully", async () => {
@@ -637,8 +642,9 @@ describe("extractEpubMetadata", () => {
       const path = await writeEpub("bad-deflate.epub", corrupted);
       const meta = await extractEpubMetadata(path);
 
-      // Should not throw
-      expect(meta).toBeDefined();
+      // Was `toBeDefined()` (libris-59m.31). The OPF is readable through the
+      // fallback path even though its DEFLATE stream is not.
+      expect(meta.title).toBe("Bad Deflate");
     });
 
     it("returns empty metadata for non-existent file", async () => {
@@ -1338,9 +1344,10 @@ describe("extractEpubMetadata", () => {
       const path = await writeEpub("fallback.epub", corrupted);
       const meta = await extractEpubMetadata(path);
 
-      // Fallback scans local headers for .opf files (uncompressed only)
-      // If the OPF was stored uncompressed, it should find metadata
-      expect(meta).toBeDefined();
+      // Was `toBeDefined()` under a comment saying "if the OPF was stored
+      // uncompressed, it should find metadata" -- which asserted none of that
+      // (libris-59m.31). This is the assertion the comment described.
+      expect(meta.title).toBe("Fallback Book");
     });
   });
 });
