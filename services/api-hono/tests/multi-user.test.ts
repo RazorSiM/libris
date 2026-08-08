@@ -461,9 +461,10 @@ describe("KoSync progress isolation", () => {
 // as coverage of /api/stats, and would have stayed green with that endpoint's
 // user scoping deleted.
 //
-// The header note claiming /api/stats is PGlite-incompatible is stale: the
-// route carries a `rowsOf()` helper that normalises both driver shapes, so it
-// answers here. It is driven for real below.
+// The header note claiming /api/stats is PGlite-incompatible is stale: raw
+// `db.execute()` results are normalised by the shared `rowsOf()` helper in
+// `src/db/rows.ts`, which handles both driver shapes, so the route answers
+// here. It is driven for real below.
 
 describe("reading stats isolation", () => {
   /** Seed `count` organized, finished books for one person, via the API. */

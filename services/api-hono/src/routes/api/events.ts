@@ -1,3 +1,4 @@
+import { z } from "@hono/zod-openapi";
 import { createOpenApiRouter } from "../../shared/openapi.js";
 import { createHash } from "node:crypto";
 import { HTTPException } from "hono/http-exception";
@@ -21,7 +22,54 @@ import { sessionHeaders } from "../../shared/request-ip.js";
 const logger = getLogger("ws");
 
 export function createEventsRoutes(upgradeWebSocket: UpgradeWebSocket) {
-  return createOpenApiRouter<{ Variables: AppVariables }>().get(
+  const router = createOpenApiRouter<{ Variables: AppVariables }>();
+
+  /**
+   * Documented through the registry rather than `createRoute`.
+   *
+   * Every other route in this app is defined with `createRoute` + `.openapi()`,
+   * which is what CLAUDE.md requires. This one cannot be: `upgradeWebSocket`
+   * IS the handler, and the success path never produces a `Response` for a
+   * response schema to describe — the connection is hijacked at 101 and
+   * everything afterwards is frames, not HTTP.
+   *
+   * Registering the path directly documents the real contract (the upgrade and
+   * the four ways it is refused) without pretending the handler has a JSON
+   * shape. The alternative was leaving `/api/events` absent from the spec
+   * entirely, which is how it stayed undocumented until now.
+   */
+  router.openAPIRegistry.registerPath({
+    method: "get",
+    // Relative, like every `createRoute` path in a mounted router: OpenAPIHono's
+    // `.route()` prefixes sub-registry paths with the mount point, so an
+    // absolute "/api/events" here generates "/api/events/api/events".
+    path: "/",
+    tags: ["events"],
+    summary: "Realtime event stream (WebSocket)",
+    description:
+      "Upgrades to a WebSocket carrying job, pipeline and Hardcover sync events for the caller. " +
+      "Events are scoped to the authenticated principal; an admin additionally receives install-wide job events. " +
+      "The server closes the socket with application code 4401 when the session behind it is revoked (ban, sign-out, removal) " +
+      "and 4409 when the caller's identity or role changed and the client should re-dial to be re-scoped. " +
+      "Connections are capped per principal and process-wide.",
+    request: {
+      query: z.object({
+        bookId: z
+          .string()
+          .optional()
+          .openapi({ description: "Only deliver events concerning this book." }),
+      }),
+    },
+    responses: {
+      101: { description: "Switching Protocols - the WebSocket is established." },
+      400: { description: "The request was not a WebSocket upgrade." },
+      401: { description: "No valid session or app password." },
+      403: { description: "Cross-site WebSocket handshake rejected." },
+      429: { description: "Too many concurrent WebSocket connections." },
+    },
+  });
+
+  return router.get(
     "/",
     upgradeWebSocket(async (c) => {
       /**
