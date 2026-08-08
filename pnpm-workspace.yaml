@@ -62,8 +62,10 @@ catalog:
   dotenv: ^17.4.2
   dotenv-cli: ^11.0.0
   # Database
-  drizzle-kit: 1.0.0-beta.21
-  drizzle-orm: 1.0.0-beta.21
+  # Move both together — same release train. The 1.0.0-beta line is deprecated
+  # on npm; `rc` is the current dist-tag for both packages.
+  drizzle-kit: 1.0.0-rc.4
+  drizzle-orm: 1.0.0-rc.4
   echarts: ^6.0.0
   fast-xml-parser: 5.10.1
   happy-dom: ^20.9.0
@@ -125,12 +127,22 @@ peerDependencyRules:
   allowedVersions:
     vite: "*"
     # better-auth's Drizzle adapter still declares `drizzle-orm: ^0.45.2`, but
-    # this repo runs the 1.0.0-beta line. Scoped to those two packages rather
+    # this repo runs the drizzle 1.0 line. Scoped to those two packages rather
     # than blanket-allowing drizzle-orm, so a genuine mismatch elsewhere still
-    # warns. Verified against 1.0.0-beta.21 in libris-5ng.1: create, findOne,
-    # update, findMany+count and the apiKey plugin's own table all work. This is
-    # unsupported-by-upstream territory — re-run that probe on every upgrade of
-    # either package.
+    # warns.
+    #
+    # This is a WARN, not a blocker: `vp install` exits 0 either way, and the
+    # warning text is identical on beta.21 and rc.4 because both fail `^0.45.2`
+    # equally. Do not read it as "the RC is incompatible" — it says nothing
+    # about which 1.0 release is installed.
+    #
+    # The adapter has no type coupling to drizzle-orm at all (it declares
+    # `interface DB { [key: string]: any }`); its only coupling is a runtime
+    # import of drizzle's operator functions. Verified against 1.0.0-rc.4:
+    # create, findOne, update, findMany+count and the apiKey plugin's own table
+    # all work (lib/auth.integration.test.ts drives the real adapter against
+    # PGlite). This is unsupported-by-upstream territory — re-run that suite on
+    # every upgrade of either package.
     "better-auth>drizzle-orm": "*"
     "@better-auth/drizzle-adapter>drizzle-orm": "*"
 packageExtensions:
