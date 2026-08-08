@@ -115,6 +115,15 @@ async function createSignedInUser(
   };
 }
 
+/** The exact call SettingsKosync.vue makes. */
+function claimKosync(app: TestApp, cookie: string, username: string) {
+  return app.request("/api/credentials/kosync", {
+    method: "PUT",
+    headers: { cookie, "content-type": "application/json", origin: "http://localhost:3000" },
+    body: JSON.stringify({ username, password: "a-long-enough-kosync-secret" }),
+  });
+}
+
 /** The exact call SettingsHardcover.vue makes: username is the literal "hardcover". */
 function connectHardcover(app: TestApp, cookie: string, token: string) {
   return app.request("/api/credentials/hardcover", {
@@ -237,6 +246,75 @@ describe("PUT /api/credentials/hardcover", () => {
       expect(await bobRes.text()).not.toContain("Internal Server Error");
     } finally {
       await pglite.exec(`DROP INDEX tmp_service_username_uniq`);
+    }
+  });
+});
+
+/**
+ * libris-59m.44. Claiming a KoSync username is check-then-act: a SELECT for the
+ * name, then an INSERT whose ON CONFLICT target is the per-USER unique index.
+ * The username collision is a different constraint, so a claim that slips past
+ * the SELECT lands on Postgres instead — and the loser of that race has to be
+ * told the same thing the sequential loser is told.
+ */
+describe("PUT /api/credentials/kosync — username collisions", () => {
+  it("refuses a username someone else already holds", async () => {
+    const { app, auth } = createTestApp();
+    const alice = await createSignedInUser(auth, "alice@example.test");
+    const bob = await createSignedInUser(auth, "bob@example.test");
+
+    expect((await claimKosync(app, alice.cookie, "shared-name")).status).toBe(200);
+
+    const bobRes = await claimKosync(app, bob.cookie, "shared-name");
+    expect(bobRes.status).toBe(409);
+    expect(await bobRes.json()).toMatchObject({
+      error: 'Username "shared-name" is already taken for kosync',
+    });
+
+    // And nothing was written for bob.
+    const rows = await db
+      .select({ userId: schema.kosyncCredentials.userId })
+      .from(schema.kosyncCredentials);
+    expect(rows.map((r) => r.userId)).toEqual([alice.id]);
+  });
+
+  it("gives the loser of a race the same 409, not a 500", async () => {
+    // A real interleaving is not reproducible against a single-connection
+    // PGlite — every request runs its SELECT and INSERT to completion before
+    // the next one starts, so the SELECT always sees the winner's row. What is
+    // reproducible is the state the race produces: a unique index on the
+    // username that the SELECT above did not consult. A case-insensitive index
+    // is exactly that shape, since the SELECT compares case-sensitively.
+    //
+    // Before the fix this reached storeCredential's catch-all and answered
+    // "they conflict with an existing record" — a 409, but a different one, so
+    // the message a user saw depended on whether they lost a race.
+    await pglite.exec(
+      `CREATE UNIQUE INDEX tmp_kosync_username_ci_uniq ON kosync_credentials (lower(username))`,
+    );
+    try {
+      const { app, auth } = createTestApp();
+      const alice = await createSignedInUser(auth, "alice@example.test");
+      const bob = await createSignedInUser(auth, "bob@example.test");
+      const carol = await createSignedInUser(auth, "carol@example.test");
+
+      expect((await claimKosync(app, alice.cookie, "Shared-Name")).status).toBe(200);
+
+      // bob's SELECT finds nothing ("shared-name" != "Shared-Name"), so the
+      // refusal can only come from the INSERT.
+      const raced = await claimKosync(app, bob.cookie, "shared-name");
+      const sequential = await claimKosync(app, carol.cookie, "Shared-Name");
+
+      expect(raced.status).toBe(409);
+      expect(raced.status).toBe(sequential.status);
+      expect(await raced.json()).toEqual({
+        error: 'Username "shared-name" is already taken for kosync',
+      });
+      expect(await sequential.json()).toEqual({
+        error: 'Username "Shared-Name" is already taken for kosync',
+      });
+    } finally {
+      await pglite.exec(`DROP INDEX tmp_kosync_username_ci_uniq`);
     }
   });
 });
