@@ -149,6 +149,8 @@ Realtime transport is owned by `src/plugins/server-events.ts`, which runs once a
 
 The socket is **keyed on `userId`**, not opened once per tab. The server binds a subscription's user id and admin flag at upgrade time and never re-checks them, so a socket that outlives its session is a subscription in somebody else's name — and sign-out/sign-in are both SPA navigations, with no page load to reset anything. A watcher closes and re-dials whenever the signed-in identity changes, and no socket is opened at all while signed out.
 
+Reconnection is unbounded (`retries` never gives up, backoff doubles to a 30s ceiling) with **one** exception. The server closes a socket whose credential has stopped being valid with close code **4401** (`EVENT_SOCKET_REVOKED_CLOSE_CODE`, in the application range RFC 6455 reserves for exactly this). The plugin reads the close code in `onDisconnected`, and that code alone is terminal: it stops re-dialling and reports into `reportSessionInvalidated()`, so a banned or revoked user gets the same sign-out-and-redirect as a 401 from either HTTP transport instead of a page that quietly stops updating. Every other close code — 1006 from a dropped connection, 1001/1012 from a restart or proxy timeout, 1000 from a missed heartbeat — reconnects exactly as before; treating those as terminal would sign people out over a flaky connection. The flag is per-socket and cleared when the identity changes, so the next person to sign in on the tab gets an ordinary socket.
+
 ## Keyboard Shortcuts
 
 - `?` — Toggle keyboard shortcuts modal
