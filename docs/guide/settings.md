@@ -20,6 +20,8 @@ This page covers Connections, Account, Users, System, and Paths. The Jobs / Fail
 
 The Connections tab is where you wire up the devices and services that reach this server. It has four sections, in this order: **App Passwords**, **OPDS Catalog**, **KoSync**, and **Hardcover**. App passwords come first because the two sections below need one.
 
+![Settings - Connections tab](./images/settings-connections.webp)
+
 ### App Passwords
 
 An app password is the credential a device or script uses, so your account password never has to leave the browser. Name the device, click **Create app password**, and copy the value — it is shown once and cannot be retrieved later. Revoking a row stops it working on the very next request.
@@ -89,6 +91,8 @@ This is the first place to look if ingestion seems stuck. If a queue shows faile
 
 Everyone has this tab; nothing on it is an admin concern. It has three sections.
 
+![Settings - Account tab](./images/settings-account.webp)
+
 **Profile** — edit your display name. Your email address is shown but read-only: the server does not support changing it, and an editable field would be a promise it does not keep.
 
 **Password** — change your own password. You must enter your current one, and confirm the new one. A checkbox offers **Sign out everywhere else**, which ends every other browser session and re-issues this one a fresh cookie. Your app passwords deliberately survive it — they are separate credentials with their own revoke buttons on the Connections tab, and silently unpairing every e-reader in the house would be a worse surprise.
@@ -102,6 +106,8 @@ Signing a browser out is not the same as revoking an app password, and the confi
 ## Users (admin only)
 
 Accounts are created here and nowhere else — there is no self-registration, and no password-reset email.
+
+![Settings - Users tab](./images/settings-users.webp)
 
 **Add someone** takes a name, an email, an initial password of at least 8 characters, and a role (User or Admin). Pass the password to them out of band; they can change it themselves from their Account tab.
 
