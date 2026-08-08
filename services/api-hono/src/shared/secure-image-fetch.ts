@@ -21,10 +21,15 @@ interface RawHttpResponse {
 
 export interface SecureImageFetchDependencies {
   resolve(hostname: string): Promise<ResolvedAddress[]>;
+  /**
+   * The signal is the WHOLE operation's deadline, not this hop's — it is
+   * created once before the redirect loop and handed to every hop and every DNS
+   * lookup (libris-59m.41).
+   */
   request(
     url: URL,
     address: ResolvedAddress,
-    timeoutMs: number,
+    signal: AbortSignal,
     maxBytes: number,
   ): Promise<RawHttpResponse>;
 }
@@ -121,7 +126,7 @@ async function defaultResolve(hostname: string): Promise<ResolvedAddress[]> {
 function defaultRequest(
   url: URL,
   pinnedAddress: ResolvedAddress,
-  timeoutMs: number,
+  signal: AbortSignal,
   maxBytes: number,
 ): Promise<RawHttpResponse> {
   return new Promise((resolve, reject) => {
@@ -141,7 +146,7 @@ function defaultRequest(
           Accept: "image/jpeg,image/png,image/webp,image/gif",
         },
         servername: isIP(originalHostname) ? undefined : originalHostname,
-        signal: AbortSignal.timeout(timeoutMs),
+        signal,
       },
       (response) => {
         const headers: Record<string, string> = {};
@@ -197,14 +202,33 @@ function parseHttpUrl(value: string | URL): URL {
   return url;
 }
 
+/**
+ * Stop waiting on `promise` the moment `signal` aborts.
+ *
+ * DNS is the reason this exists. `dns.lookup` runs getaddrinfo on the libuv
+ * threadpool and takes no AbortSignal, so it cannot be cancelled — but it can
+ * be abandoned, which is what bounds OUR wall clock. Racing here rather than
+ * inside `defaultResolve` also covers an injected `resolve`, and covers a
+ * `request` implementation that ignores the signal it was handed.
+ */
+function withDeadline<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(signal.reason as Error);
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(signal.reason as Error);
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
+  });
+}
+
 async function resolvePublicAddress(
   url: URL,
   dependencies: SecureImageFetchDependencies,
   allowedOrigins: ReadonlySet<string>,
+  signal: AbortSignal,
 ): Promise<ResolvedAddress> {
   const hostname = url.hostname.startsWith("[") ? url.hostname.slice(1, -1) : url.hostname;
   const literal = normalizeAddress(hostname);
-  const answers = literal ? [literal] : await dependencies.resolve(hostname);
+  const answers = literal ? [literal] : await withDeadline(dependencies.resolve(hostname), signal);
   if (answers.length === 0) throw new Error(`Cannot resolve cover URL hostname: ${hostname}`);
   for (const answer of answers) {
     if (isBlockedAddress(answer.address)) {
@@ -245,39 +269,97 @@ export async function fetchExternalImage(
   const allowedOrigins = new Set(options.allowedOrigins ?? []);
   let url = parseHttpUrl(initialUrl);
 
-  for (let hop = 0; ; hop++) {
-    const address = await resolvePublicAddress(url, dependencies, allowedOrigins);
-    const response = await dependencies.request(url, address, timeoutMs, maxBytes);
+  /**
+   * ONE deadline for the whole operation, redirects and DNS included
+   * (libris-59m.41).
+   *
+   * `timeoutMs` used to be handed to `dependencies.request` inside the loop and
+   * `defaultRequest` built a fresh `AbortSignal.timeout` from it every call, so
+   * the real ceiling was (maxRedirects + 1) x timeoutMs — 60 s for the cover
+   * proxy and 180 s for the organize worker, neither of which any caller
+   * expected. `defaultResolve`'s `lookup()` was not bounded at all, so a hostile
+   * nameserver added unbounded time on top of each of those hops. A host that
+   * answered each permitted redirect just under the per-hop limit and then hung
+   * could park a request handler, or the concurrency-1 organize worker, for
+   * minutes at a time.
+   */
+  const controller = new AbortController();
+  const expire = setTimeout(
+    () => controller.abort(new Error(`Cover request exceeded ${timeoutMs}ms`)),
+    timeoutMs,
+  );
+  // A pending cover fetch must never be the reason the process stays alive.
+  expire.unref?.();
+  try {
+    for (let hop = 0; ; hop++) {
+      const address = await resolvePublicAddress(
+        url,
+        dependencies,
+        allowedOrigins,
+        controller.signal,
+      );
+      const response = await withDeadline(
+        dependencies.request(url, address, controller.signal, maxBytes),
+        controller.signal,
+      );
 
-    if (REDIRECT_STATUSES.has(response.status)) {
-      const location = response.headers.location;
-      if (!location) throw new Error("Cover redirect is missing a Location header");
-      if (hop >= maxRedirects) throw new Error("Cover redirect limit exceeded");
-      url = parseHttpUrl(new URL(location, url));
-      continue;
-    }
+      if (REDIRECT_STATUSES.has(response.status)) {
+        const location = response.headers.location;
+        if (!location) throw new Error("Cover redirect is missing a Location header");
+        if (hop >= maxRedirects) throw new Error("Cover redirect limit exceeded");
+        url = parseHttpUrl(new URL(location, url));
+        continue;
+      }
 
-    if (response.status < 200 || response.status >= 300) {
-      throw new Error(`Cover request failed with HTTP ${response.status}`);
-    }
-    if (response.body.length > maxBytes) {
-      throw new Error(`Image response exceeds ${maxBytes} bytes`);
-    }
+      if (response.status < 200 || response.status >= 300) {
+        throw new Error(`Cover request failed with HTTP ${response.status}`);
+      }
+      if (response.body.length > maxBytes) {
+        throw new Error(`Image response exceeds ${maxBytes} bytes`);
+      }
 
-    const declaredType = response.headers["content-type"]?.split(";", 1)[0]?.trim().toLowerCase();
-    if (!declaredType?.startsWith("image/")) {
-      throw new Error("Cover response has a missing or invalid Content-Type");
-    }
-    const detectedType = detectImageType(response.body);
-    if (!detectedType) throw new Error("Cover response has an invalid image signature");
-    if (declaredType !== detectedType) {
-      throw new Error(`Cover Content-Type ${declaredType} does not match ${detectedType} bytes`);
-    }
+      const declaredType = response.headers["content-type"]?.split(";", 1)[0]?.trim().toLowerCase();
+      if (!declaredType?.startsWith("image/")) {
+        throw new Error("Cover response has a missing or invalid Content-Type");
+      }
+      const detectedType = detectImageType(response.body);
+      if (!detectedType) throw new Error("Cover response has an invalid image signature");
+      if (declaredType !== detectedType) {
+        throw new Error(`Cover Content-Type ${declaredType} does not match ${detectedType} bytes`);
+      }
 
-    return { data: response.body, contentType: detectedType, finalUrl: url.href };
+      return { data: response.body, contentType: detectedType, finalUrl: url.href };
+    }
+  } finally {
+    clearTimeout(expire);
   }
 }
 
-export async function assertNotInternalUrl(url: string): Promise<void> {
-  await resolvePublicAddress(parseHttpUrl(url), defaultDependencies, new Set());
+/**
+ * Reject a URL whose hostname resolves anywhere private, before anything else
+ * is done with it.
+ *
+ * The DNS lookup carries the same bound a fetch would, so a hostile nameserver
+ * cannot park the caller here either.
+ */
+export async function assertNotInternalUrl(
+  url: string,
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+): Promise<void> {
+  const controller = new AbortController();
+  const expire = setTimeout(
+    () => controller.abort(new Error(`Cover URL check exceeded ${timeoutMs}ms`)),
+    timeoutMs,
+  );
+  expire.unref?.();
+  try {
+    await resolvePublicAddress(
+      parseHttpUrl(url),
+      defaultDependencies,
+      new Set(),
+      controller.signal,
+    );
+  } finally {
+    clearTimeout(expire);
+  }
 }
