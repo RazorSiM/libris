@@ -1,5 +1,5 @@
 import { bookMetadataCandidates, books } from "#db";
-import { searchHardcover } from "../lib/metadata/index.js";
+import { getHardcoverTokenForUser, searchHardcover } from "../lib/metadata/index.js";
 import { BookFetchMetadataPayloadSchema } from "../types/index.js";
 import type { BookFetchMetadataPayload } from "../types/index.js";
 import type { MetadataCandidate, MetadataSearchQuery } from "../types/index.js";
@@ -127,7 +127,12 @@ export async function processBookFetchMetadata(job: Job<BookFetchMetadataPayload
 
   try {
     await job.log(`Searching Hardcover for: ${JSON.stringify(query)}`);
-    const candidates = await searchHardcover(query);
+    // Spend the book owner's own token when they have one. Falling back to any
+    // token on the install is deliberate here: this is a background job with no
+    // caller, and without the fallback automatic enrichment would stop working
+    // for every book not uploaded by whoever connected Hardcover.
+    const ownerToken = await getHardcoverTokenForUser(book.createdBy);
+    const candidates = await searchHardcover(query, ownerToken ? { token: ownerToken } : {});
     if (candidates.length === 0) {
       logger.info("hardcover returned no results");
       await job.log("Hardcover returned no results");

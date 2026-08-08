@@ -5,6 +5,7 @@ import { createTestAuth, createTestDb, seedAppPassword, type TestDb } from "../.
 import * as schema from "../../db/schema.js";
 import type { Env } from "../../env.js";
 import { createMemoryKVStore } from "../../services/kv-store.js";
+import { uploaderRef } from "../../shared/uploader-ref.js";
 import { mkdir, rm } from "node:fs/promises";
 import { inArray } from "drizzle-orm";
 
@@ -42,6 +43,11 @@ let db: TestDb;
 async function seedApiKey(label = "Library Test Key") {
   const seeded = await seedAppPassword(createTestAuth(db, TEST_ENV), db, { name: label });
   return { ...seeded, label };
+}
+
+/** The opaque uploader reference the API should emit for a given user id. */
+function refFor(userId: string) {
+  return uploaderRef(userId, TEST_ENV.API_SECRET_KEY);
 }
 
 function createTestApp() {
@@ -188,7 +194,8 @@ describe("GET /api/library", () => {
     expect(response.status).toBe(200);
     const body = await response.json();
     expect(body.data).toHaveLength(1);
-    expect(body.data[0].uploader).toEqual({ id: userId, label });
+    expect(body.data[0].uploader).toEqual({ id: refFor(userId), label });
+    expect(body.data[0].uploader.id).not.toBe(userId);
     expect(body.data[0].uploader).not.toHaveProperty("key");
     expect(body.data[0].uploader).not.toHaveProperty("keyPrefix");
     expect(body.data[0].uploader).not.toHaveProperty("keyHash");
@@ -223,7 +230,8 @@ describe("GET /api/library", () => {
 
     expect(response.status).toBe(200);
     const body = await response.json();
-    expect(body.uploader).toEqual({ id: userId, label });
+    expect(body.uploader).toEqual({ id: refFor(userId), label });
+    expect(body.uploader.id).not.toBe(userId);
     expect(body.uploader).not.toHaveProperty("key");
     expect(body.uploader).not.toHaveProperty("keyPrefix");
     expect(body.uploader).not.toHaveProperty("keyHash");
@@ -231,7 +239,7 @@ describe("GET /api/library", () => {
     expect(body.uploader).not.toHaveProperty("lastUsedAt");
   });
 
-  it("filters by language and uploader and limits uploader facets for non-admins", async () => {
+  it("filters by language and by the opaque uploader reference from the facets", async () => {
     const uploaderA = await seedApiKey("Uploader A");
     const uploaderB = await seedApiKey("Uploader B");
 
@@ -255,45 +263,105 @@ describe("GET /api/library", () => {
     ]);
 
     const { app } = createTestApp();
-    const filteredResponse = await app.request(
-      `/api/library?language=en&uploaderId=${uploaderA.userId}`,
-      {
-        headers: { Authorization: `Bearer ${uploaderA.rawKey}` },
-      },
+
+    // The organized library is shared, so B sees every uploader in the facets —
+    // identified by an opaque reference, not by a user id.
+    const facetsResponse = await app.request("/api/library/facets", {
+      headers: { Authorization: `Bearer ${uploaderB.rawKey}` },
+    });
+
+    expect(facetsResponse.status).toBe(200);
+    const facetsBody = await facetsResponse.json();
+    expect(facetsBody.languages).toEqual(expect.arrayContaining(["en", "fr"]));
+    expect(facetsBody.uploaders).toEqual(
+      expect.arrayContaining([
+        { id: refFor(uploaderA.userId), label: uploaderA.label },
+        { id: refFor(uploaderB.userId), label: uploaderB.label },
+      ]),
     );
+
+    const facetRef = facetsBody.uploaders.find(
+      (u: { label: string }) => u.label === uploaderA.label,
+    ).id;
+
+    // Round-tripping a facet reference through ?uploaderId still filters.
+    const filteredResponse = await app.request(`/api/library?language=en&uploaderId=${facetRef}`, {
+      headers: { Authorization: `Bearer ${uploaderB.rawKey}` },
+    });
 
     expect(filteredResponse.status).toBe(200);
     const filteredBody = await filteredResponse.json();
     expect(filteredBody.data).toHaveLength(1);
     expect(filteredBody.data[0].title).toBe("English Book");
     expect(filteredBody.data[0].uploader).toEqual({
-      id: uploaderA.userId,
+      id: refFor(uploaderA.userId),
       label: uploaderA.label,
     });
+  });
 
-    const facetsResponse = await app.request("/api/library/facets", {
-      headers: { Authorization: `Bearer ${uploaderA.rawKey}` },
+  it("never hands a non-admin another user's raw user id, on any read surface", async () => {
+    const uploaderA = await seedApiKey("Raw Id Uploader A");
+    const uploaderB = await seedApiKey("Raw Id Reader B");
+
+    const [book] = await db
+      .insert(schema.books)
+      .values({
+        status: "organized",
+        title: "Shared Catalog Book",
+        author: "Shared Author",
+        createdBy: uploaderA.userId,
+      })
+      .returning({ id: schema.books.id });
+
+    const { app } = createTestApp();
+    const auth = { headers: { Authorization: `Bearer ${uploaderB.rawKey}` } };
+
+    // list, sync, detail and facets must all agree: label yes, user id no.
+    for (const path of [
+      "/api/library",
+      "/api/library/sync",
+      `/api/library/${book.id}`,
+      "/api/library/facets",
+    ]) {
+      const response = await app.request(path, auth);
+      expect(response.status).toBe(200);
+      const raw = await response.text();
+      // Fails against the pre-fix code, which echoed users.id as uploader.id
+      // on all four endpoints.
+      expect(raw).not.toContain(uploaderA.userId);
+      expect(raw).toContain(uploaderA.label);
+    }
+  });
+
+  it("ignores a raw user id passed as uploaderId instead of filtering by it", async () => {
+    const uploaderA = await seedApiKey("Replay Uploader A");
+    const uploaderB = await seedApiKey("Replay Reader B");
+
+    await db.insert(schema.books).values([
+      {
+        status: "organized",
+        title: "Replay Target Book",
+        author: "Replay Author",
+        createdBy: uploaderA.userId,
+      },
+      {
+        status: "organized",
+        title: "Replay Other Book",
+        author: "Replay Author",
+        createdBy: uploaderB.userId,
+      },
+    ]);
+
+    const { app } = createTestApp();
+    const response = await app.request(`/api/library?uploaderId=${uploaderA.userId}`, {
+      headers: { Authorization: `Bearer ${uploaderB.rawKey}` },
     });
 
-    expect(facetsResponse.status).toBe(200);
-    const facetsBody = await facetsResponse.json();
-    expect(facetsBody.languages).toEqual(expect.arrayContaining(["en", "fr"]));
-    expect(facetsBody.uploaders).toEqual([{ id: uploaderA.userId, label: uploaderA.label }]);
-
-    const admin = await seedAppPassword(createTestAuth(db, TEST_ENV), db, {
-      name: "Facet Admin",
-      role: "admin",
-    });
-    const adminResponse = await app.request("/api/library/facets", {
-      headers: { Authorization: `Bearer ${admin.rawKey}` },
-    });
-    const adminBody = await adminResponse.json();
-    expect(adminBody.uploaders).toEqual(
-      expect.arrayContaining([
-        { id: uploaderA.userId, label: uploaderA.label },
-        { id: uploaderB.userId, label: uploaderB.label },
-      ]),
-    );
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    // Pre-fix this returned exactly A's books, which is the enumeration step.
+    expect(body.data).toHaveLength(0);
+    expect(body.pagination.total).toBe(0);
   });
 });
 

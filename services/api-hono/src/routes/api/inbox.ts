@@ -8,6 +8,7 @@ import { basename, join, extname, resolve } from "node:path";
 import { users, books, bookColumns, bookFiles, bookMetadataCandidates, uploadRegistry } from "#db";
 import type { AppVariables } from "../../context.js";
 import { getUserId, isAdmin, requireBookOwnership } from "../../shared/auth.js";
+import { uploaderRef } from "../../shared/uploader-ref.js";
 import { extractEpubCoverImage } from "../../lib/metadata/index.js";
 import { fetchExternalImage } from "../../shared/secure-image-fetch.js";
 import { validateEpubUpload } from "../../shared/epub-validation.js";
@@ -33,6 +34,15 @@ import {
 
 const SUPPORTED_EXTENSIONS = new Set([".epub"]);
 const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB
+
+/**
+ * Per-file rejection reason when the same bytes are already on the server.
+ *
+ * Names neither the owner nor the status of the existing copy: the caller
+ * supplied these bytes, so the only thing disclosed is that they are already
+ * here. That is the price of not silently swallowing the upload.
+ */
+const DUPLICATE_UPLOAD_MESSAGE = "This file has already been uploaded to this library";
 
 function isPathWithinDirectory(filePath: string, rootPath: string): boolean {
   return filePath === rootPath || filePath.startsWith(`${rootPath}/`);
@@ -80,9 +90,16 @@ function detectMimeType(buf: Buffer): string {
 
 // ── Route definitions ────────────────────────────────────────────────
 
-function formatUploader(row: { uploaderId: string | null; uploaderLabel: string | null }) {
+/**
+ * Uploader attribution for a book row. `id` is the opaque uploader reference,
+ * never `users.id` — see `shared/uploader-ref.ts`.
+ */
+function formatUploader(
+  row: { uploaderId: string | null; uploaderLabel: string | null },
+  secret: string,
+) {
   if (!row.uploaderId || !row.uploaderLabel) return null;
-  return { id: row.uploaderId, label: row.uploaderLabel };
+  return { id: uploaderRef(row.uploaderId, secret), label: row.uploaderLabel };
 }
 
 const listInboxRoute = createRoute({
@@ -215,7 +232,7 @@ const uploadRoute = createRoute({
   tags: ["inbox"],
   summary: "Upload ebook files",
   description:
-    "Upload one or more ebook files (EPUB) to the inbox directory. Files are saved to disk; the file watcher picks them up for processing.",
+    "Upload one or more ebook files (EPUB) to the inbox directory. Files are saved to disk; the file watcher picks them up for processing. A file whose contents are already on the server — already ingested, or uploaded by anyone and still awaiting the watcher — is rejected with a per-file `errors[]` entry and is not written, because ingestion deduplicates by checksum and would otherwise drop it silently. When every file is rejected the response is 400.",
   request: {
     body: {
       required: true,
@@ -252,6 +269,7 @@ export const inboxRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
     const { page, limit, q, sort } = c.req.valid("query");
     const offset = (page - 1) * limit;
     const db = c.get("db");
+    const secret = c.get("env").API_SECRET_KEY;
 
     // Inbox shows books with status 'inbox' or 'review'
     const conditions = [inArray(books.status, ["inbox", "review"])];
@@ -330,7 +348,7 @@ export const inboxRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
     return c.json({
       data: items.map((book) => ({
         ...(({ uploaderId: _uploaderId, uploaderLabel: _uploaderLabel, ...rest }) => rest)(book),
-        uploader: formatUploader(book),
+        uploader: formatUploader(book, secret),
         files: (filesByBook.get(book.id) ?? []).map((f) => ({
           id: f.id,
           format: f.format,
@@ -411,6 +429,7 @@ export const inboxRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
   .openapi(getInboxBookRoute, async (c) => {
     const { id } = c.req.valid("param");
     const db = c.get("db");
+    const secret = c.get("env").API_SECRET_KEY;
 
     const [book] = await db
       .select({
@@ -452,7 +471,7 @@ export const inboxRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
 
     return c.json({
       ...(({ uploaderId: _uploaderId, uploaderLabel: _uploaderLabel, ...rest }) => rest)(book),
-      uploader: formatUploader(book),
+      uploader: formatUploader(book, secret),
       possibleDuplicate,
       files: files.map((f) => ({
         id: f.id,
@@ -659,9 +678,43 @@ export const inboxRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
         continue;
       }
       const safeName = basename(file.name);
+      const checksum = computeChecksumFromBuffer(buffer);
+      const db = c.get("db");
 
+      // Ingestion deduplicates by checksum: the book-detected worker returns
+      // early when any book already holds these bytes. Writing the file anyway
+      // returned 200 with nothing to show for it — the book stayed in the first
+      // uploader's inbox, which a second uploader cannot see now that the inbox
+      // is owner-scoped, and their copy sat in the inbox directory forever.
+      // Detect it here and say so instead.
+      //
+      // Both tables have to be checked: book_files covers everything already
+      // ingested, upload_registry covers an upload still waiting on the
+      // watcher, which is the window the two-user race lives in.
+      const [ingested, pending] = await Promise.all([
+        db
+          .select({ id: bookFiles.id })
+          .from(bookFiles)
+          .where(eq(bookFiles.checksum, checksum))
+          .limit(1),
+        db
+          .select({ id: uploadRegistry.id })
+          .from(uploadRegistry)
+          .where(eq(uploadRegistry.checksum, checksum))
+          .limit(1),
+      ]);
+
+      if (ingested.length > 0 || pending.length > 0) {
+        // Says nothing about who holds the existing copy or what state it is
+        // in. The caller supplied these bytes, so all this admits is that the
+        // same bytes are already here.
+        errors.push({ filename: file.name, error: DUPLICATE_UPLOAD_MESSAGE });
+        continue;
+      }
+
+      let storedName: string;
       try {
-        await writeInboxFile(inboxPath, safeName, buffer);
+        ({ storedName } = await writeInboxFile(inboxPath, safeName, buffer));
       } catch (error) {
         if (error instanceof HTTPException && error.status === 400) {
           errors.push({ filename: file.name, error: error.message });
@@ -671,18 +724,18 @@ export const inboxRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
         throw error;
       }
 
-      // Register the upload with its checksum so the book-detected worker
-      // can attribute ownership to the uploading API key.
+      // Register the upload with its checksum so the book-detected worker can
+      // attribute ownership. The name recorded is the name ON DISK, not the one
+      // the browser sent: a collision renames the file, and the worker matches
+      // registry rows against the file it is actually ingesting.
       const userId = c.get("userId");
       if (userId) {
-        const checksum = computeChecksumFromBuffer(buffer);
-        const db = c.get("db");
         await db
           .insert(uploadRegistry)
           .values({
             checksum,
             userId,
-            filename: safeName,
+            filename: storedName,
           })
           .onConflictDoNothing();
       }

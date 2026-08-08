@@ -48,7 +48,13 @@ export const BookFileDetailSchema = BookFileSchema.extend({
 
 export const UploaderSummarySchema = z
   .object({
-    id: z.string().uuid(),
+    /**
+     * Opaque per-install reference for the uploader — NOT `users.id`. Stable for
+     * the life of the install, so it can be round-tripped as the `uploaderId`
+     * filter, but one-way, so it cannot be replayed against any endpoint that
+     * takes a user id. See `shared/uploader-ref.ts`.
+     */
+    id: z.string().openapi({ description: "Opaque uploader reference (not a user id)" }),
     label: z.string(),
   })
   .openapi("UploaderSummary");
@@ -59,10 +65,23 @@ export const InboxDetailFileSchema = BookFileSchema.extend({
 
 // ── Book summary / detail schemas ────────────────────────────────────
 
+/**
+ * `books.created_by` as a shared-library payload may carry it.
+ *
+ * The column is NOT NULL, but the organized library is shared and the owner's
+ * raw user id is not: a non-owner gets null and reads the attribution off
+ * `uploader` instead. The UI only ever compares this against the caller's own
+ * id, so nulling it for everyone else costs nothing.
+ */
+const ScopedCreatedBySchema = z.string().nullable().openapi({
+  description: "Owner's user id. Null unless the caller owns the book or is an admin.",
+});
+
 export const BookSummarySchema = BookBase.extend({
   // Override fileSize-derived fields and add the files relation
   files: z.array(BookFileSchema),
   uploader: UploaderSummarySchema.nullable(),
+  createdBy: ScopedCreatedBySchema,
 }).openapi("BookSummary");
 
 /** Aggregate progress for a book — the MAX(percentage) row across devices. */
@@ -101,6 +120,7 @@ export const ReadingStatusOverrideBodySchema = z
 export const BookDetailSchema = BookBase.extend({
   files: z.array(BookFileDetailSchema),
   uploader: UploaderSummarySchema.nullable(),
+  createdBy: ScopedCreatedBySchema,
   progress: ProgressAggregateSchema,
 }).openapi("BookDetail");
 

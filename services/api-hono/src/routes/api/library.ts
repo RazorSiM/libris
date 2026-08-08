@@ -19,6 +19,7 @@ import {
 } from "#db";
 import type { AppVariables } from "../../context.js";
 import { getUserId, isAdmin, requireBookOwnership } from "../../shared/auth.js";
+import { resolveUploaderRef, scopeCreatedBy, uploaderRef } from "../../shared/uploader-ref.js";
 import { invalidateRouteCache } from "../../services/cache.js";
 import { isUniqueViolation, uniqueViolationMessage } from "../../shared/db-errors.js";
 import { escapeIlike } from "../../shared/escape-ilike.js";
@@ -107,7 +108,8 @@ const listRoute = createRoute({
   path: "/",
   tags: ["library"],
   summary: "List library books",
-  description: "Paginated list of organized books with optional search and filtering",
+  description:
+    "Paginated list of organized books with optional search and filtering. The organized library is shared, so every caller sees every book together with its uploader's display label. `uploader.id` is an opaque per-install reference, never the uploader's user id; pass a value from `GET /api/library/facets` as `uploaderId` to filter. An unrecognised `uploaderId` returns an empty page.",
   request: {
     query: LibraryListQuerySchema,
   },
@@ -127,7 +129,7 @@ const syncRoute = createRoute({
   tags: ["library"],
   summary: "Bulk library sync feed",
   description:
-    "Single paginated endpoint optimised for full-vault mirror clients and CLIs. Returns BookSyncRecord[] bundling each organised book's metadata + a per-book progress aggregate (max % across devices + derived reading status). Optional ?since=<ISO> filters to books whose metadata or progress changed after that time.",
+    "Single paginated endpoint optimised for full-vault mirror clients and CLIs. Returns BookSyncRecord[] bundling each organised book's metadata + a per-book progress aggregate (max % across devices + derived reading status). Optional ?since=<ISO> filters to books whose metadata or progress changed after that time. `uploader.id` is an opaque per-install reference, never the uploader's user id.",
   request: {
     query: LibrarySyncQuerySchema,
   },
@@ -146,7 +148,8 @@ const getRoute = createRoute({
   path: "/{id}",
   tags: ["library"],
   summary: "Get library book",
-  description: "Retrieve a single organized book with its files",
+  description:
+    "Retrieve a single organized book with its files. `uploader.id` is an opaque per-install reference, never the uploader's user id.",
   request: {
     params: IdParamSchema,
   },
@@ -262,10 +265,10 @@ const facetsRoute = createRoute({
   tags: ["library"],
   summary: "Get library filter facets",
   description:
-    "Returns library filter values. Non-admin users receive only their own identity in the uploader facet; admins receive all uploaders.",
+    "Returns library filter values. The organized library is shared, so every caller receives every uploader who owns an organized book. Each uploader is identified by an opaque per-install reference plus a display label — never by user id. Pass the reference back as `uploaderId` on `GET /api/library`.",
   responses: {
     200: {
-      description: "Distinct authors, genres, languages, series, and authorized uploader values",
+      description: "Distinct authors, genres, languages, series, and uploader values",
       content: {
         "application/json": { schema: FacetsResponseSchema },
       },
@@ -407,9 +410,18 @@ const libraryDownloadRoute = createRoute({
 
 // ── Handlers ────────────────────────────────────────────────────────
 
-function formatUploader(row: { uploaderId: string | null; uploaderLabel: string | null }) {
+/**
+ * Uploader attribution for a book row.
+ *
+ * `id` is the opaque uploader reference, never `users.id` — see
+ * `shared/uploader-ref.ts` for why.
+ */
+function formatUploader(
+  row: { uploaderId: string | null; uploaderLabel: string | null },
+  secret: string,
+) {
   if (!row.uploaderId || !row.uploaderLabel) return null;
-  return { id: row.uploaderId, label: row.uploaderLabel };
+  return { id: uploaderRef(row.uploaderId, secret), label: row.uploaderLabel };
 }
 
 export const libraryRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
@@ -419,6 +431,9 @@ export const libraryRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
       c.req.valid("query");
     const offset = (page - 1) * limit;
     const db = c.get("db");
+    const secret = c.get("env").API_SECRET_KEY;
+    const userId = getUserId(c);
+    const callerIsAdmin = isAdmin(c);
 
     // Build WHERE conditions
     const conditions = [eq(books.status, "organized")];
@@ -436,7 +451,11 @@ export const libraryRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
     }
 
     if (uploaderId) {
-      conditions.push(eq(books.createdBy, uploaderId));
+      // uploaderId is the opaque reference handed out by /facets, not a user id.
+      // An unknown reference matches nothing, so a harvested or guessed raw user
+      // id cannot be replayed here as a filter.
+      const resolved = await resolveUploaderRef(db, uploaderId, secret);
+      conditions.push(resolved ? eq(books.createdBy, resolved) : sql`false`);
     }
 
     if (genre) {
@@ -521,7 +540,8 @@ export const libraryRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
       {
         data: items.map((book) => ({
           ...(({ uploaderId: _uploaderId, uploaderLabel: _uploaderLabel, ...rest }) => rest)(book),
-          uploader: formatUploader(book),
+          createdBy: scopeCreatedBy(book.createdBy, userId, callerIsAdmin),
+          uploader: formatUploader(book, secret),
           files: (filesByBook.get(book.id) ?? []).map((f) => ({
             id: f.id,
             format: f.format,
@@ -547,6 +567,8 @@ export const libraryRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
     const offset = (page - 1) * limit;
     const db = c.get("db");
     const userId = getUserId(c);
+    const secret = c.get("env").API_SECRET_KEY;
+    const callerIsAdmin = isAdmin(c);
 
     const conditions = [eq(books.status, "organized")];
     if (since) {
@@ -648,7 +670,8 @@ export const libraryRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
           const progress = progressByBook.get(book.id) ?? emptyProgressAggregate();
           return {
             ...(({ uploaderId: _u, uploaderLabel: _l, ...rest }) => rest)(book),
-            uploader: formatUploader(book),
+            createdBy: scopeCreatedBy(book.createdBy, userId, callerIsAdmin),
+            uploader: formatUploader(book, secret),
             files: (filesByBook.get(book.id) ?? []).map((f) => ({
               id: f.id,
               format: f.format,
@@ -668,9 +691,7 @@ export const libraryRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
   // --- GET /facets ---
   .openapi(facetsRoute, async (c) => {
     const db = c.get("db");
-    const uploaderFilter = isAdmin(c)
-      ? eq(books.status, "organized")
-      : and(eq(books.status, "organized"), eq(books.createdBy, getUserId(c)));
+    const secret = c.get("env").API_SECRET_KEY;
 
     const [authorsResult, genresResult, languagesResult, seriesResult, uploadersResult] =
       await Promise.all([
@@ -698,7 +719,7 @@ export const libraryRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
           .selectDistinct({ id: users.id, label: users.name })
           .from(books)
           .innerJoin(users, eq(users.id, books.createdBy))
-          .where(uploaderFilter)
+          .where(eq(books.status, "organized"))
           .orderBy(users.name),
       ]);
 
@@ -708,7 +729,9 @@ export const libraryRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
         genres: genresResult.map((r) => r.genre).filter(Boolean) as string[],
         languages: languagesResult.map((r) => r.language).filter(Boolean) as string[],
         series: seriesResult.map((r) => r.series).filter(Boolean) as string[],
-        uploaders: uploadersResult,
+        // Opaque references, never raw user ids — the list endpoint resolves
+        // them back when one is passed as ?uploaderId.
+        uploaders: uploadersResult.map((u) => ({ id: uploaderRef(u.id, secret), label: u.label })),
       },
       200,
     );
@@ -719,6 +742,7 @@ export const libraryRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
     const { id } = c.req.valid("param");
     const db = c.get("db");
     const userId = getUserId(c);
+    const secret = c.get("env").API_SECRET_KEY;
 
     const [book] = await db
       .select({
@@ -742,7 +766,8 @@ export const libraryRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
     return c.json(
       (({ uploaderId: _uploaderId, uploaderLabel: _uploaderLabel, ...rest }) => ({
         ...rest,
-        uploader: formatUploader(book),
+        createdBy: scopeCreatedBy(book.createdBy, userId, isAdmin(c)),
+        uploader: formatUploader(book, secret),
         files: files.map((f) => ({
           id: f.id,
           format: f.format,

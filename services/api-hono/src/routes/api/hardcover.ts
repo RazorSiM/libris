@@ -113,7 +113,7 @@ const searchRoute = createRoute({
   tags: ["hardcover"],
   summary: "Search Hardcover for metadata",
   description:
-    "Run a free-text search against Hardcover and return up to 5 normalized metadata candidates. Used by the UI when auto-fetched metadata is wrong or missing — the user picks a result to autofill the edit form.",
+    "Run a free-text search against Hardcover and return up to 5 normalized metadata candidates. Used by the UI when auto-fetched metadata is wrong or missing — the user picks a result to autofill the edit form. The search always spends the caller's own Hardcover token; a caller with no Hardcover credential of their own gets 503 and no request is made to Hardcover, matching what GET /api/hardcover/status reports for them.",
   request: {
     query: z.object({
       q: z
@@ -130,7 +130,10 @@ const searchRoute = createRoute({
         "application/json": { schema: HardcoverSearchResponseSchema },
       },
     },
-    503: { description: "Hardcover credential not configured or metadata search disabled" },
+    503: {
+      description:
+        "The caller has no Hardcover credential of their own, its token could not be decrypted, or metadata search is disabled",
+    },
   },
 });
 
@@ -245,6 +248,8 @@ export const hardcoverRoutes = createOpenApiRouter<{ Variables: AppVariables }>(
   .openapi(searchRoute, async (c) => {
     const { q } = c.req.valid("query");
     const db = c.get("db");
+    const env = c.get("env");
+    const userId = getUserId(c);
 
     // Surface clear status codes when Hardcover is unusable, instead of the
     // silent empty-array behavior of searchHardcover().
@@ -253,16 +258,29 @@ export const hardcoverRoutes = createOpenApiRouter<{ Variables: AppVariables }>(
       throw new HTTPException(503, { message: "Hardcover metadata search is disabled" });
     }
 
+    // The caller's OWN credential. The unscoped "does anyone on this server hold
+    // a Hardcover token" gate let a user who had never connected Hardcover
+    // search on someone else's token — billed to and rate-limited against that
+    // account — while /api/hardcover/status correctly reported them as
+    // disconnected.
     const [cred] = await db
-      .select({ id: serviceCredentials.id })
+      .select({ passwordHash: serviceCredentials.passwordHash })
       .from(serviceCredentials)
-      .where(eq(serviceCredentials.service, "hardcover"))
+      .where(
+        and(eq(serviceCredentials.service, "hardcover"), eq(serviceCredentials.userId, userId)),
+      )
       .limit(1);
     if (!cred) {
       throw new HTTPException(503, { message: "Hardcover credential not configured" });
     }
 
-    const results = await searchHardcover({ title: q });
+    const token = await unsealToken(cred.passwordHash, env.API_SECRET_KEY);
+    if (!token) {
+      throw new HTTPException(503, { message: "Failed to decrypt the stored Hardcover token" });
+    }
+
+    // Pass the token explicitly so the client cannot resolve an arbitrary one.
+    const results = await searchHardcover({ title: q }, { token });
     return c.json({
       results: results.map((r) => ({
         source: r.source,

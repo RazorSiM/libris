@@ -200,9 +200,9 @@ describe("createBookDetectedProcessor", () => {
     await rm(tempDir, { recursive: true, force: true });
   });
 
-  it("cleans up all registry rows for the checksum after processing", async () => {
+  it("consumes only the registry row for the file it actually ingested", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "libris-book-detected-"));
-    const filePath = join(tempDir, "cleanup-test.epub");
+    const filePath = join(tempDir, "c.epub");
     const fileContent = Buffer.from("cleanup test content");
 
     await writeFile(filePath, fileContent);
@@ -213,7 +213,8 @@ describe("createBookDetectedProcessor", () => {
 
     const checksum = computeChecksumFromBuffer(fileContent);
 
-    // Three different users uploaded the same file
+    // Three users raced an upload of the same bytes, so the second and third
+    // files were collision-renamed. The watcher reaches C's file.
     await db.insert(schema.uploadRegistry).values([
       {
         checksum,
@@ -243,9 +244,15 @@ describe("createBookDetectedProcessor", () => {
 
     await processor(createMockJob({ filePath, detectedAt: new Date().toISOString() }));
 
-    // ALL registry rows for this checksum must be deleted
+    // The book belongs to whoever's file was ingested, not to the oldest row.
+    const [book] = await db.select().from(schema.books);
+    expect(book.createdBy).toBe(userC.id);
+
+    // A and B's rows survive: their files have not been detected yet. Deleting
+    // every row for the checksum (the old behaviour) left those files with no
+    // attribution and nothing to clean them up afterwards.
     const registryAfter = await db.select().from(schema.uploadRegistry);
-    expect(registryAfter).toHaveLength(0);
+    expect(registryAfter.map((row) => row.userId).sort()).toEqual([userA.id, userB.id].sort());
 
     await rm(tempDir, { recursive: true, force: true });
   });

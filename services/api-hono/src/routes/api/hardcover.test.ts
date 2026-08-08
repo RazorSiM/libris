@@ -62,14 +62,14 @@ const TEST_ENV: Env = {
 let pglite: PGlite;
 let db: TestDb;
 
-async function seedApiKey() {
+async function seedApiKey(name = "Hardcover Test Key") {
   // A real Better Auth app password: the key column holds a hash the plugin
   // computes, so a hand-written api_keys row cannot authenticate.
-  return await seedAppPassword(createTestAuth(db, TEST_ENV), db, { name: "Hardcover Test Key" });
+  return await seedAppPassword(createTestAuth(db, TEST_ENV), db, { name });
 }
 
-async function seedHardcoverCredential(userId: string) {
-  const sealed = await sealToken("test-token", TEST_ENV.API_SECRET_KEY);
+async function seedHardcoverCredential(userId: string, token = "test-token") {
+  const sealed = await sealToken(token, TEST_ENV.API_SECRET_KEY);
   await db.insert(schema.serviceCredentials).values({
     service: "hardcover",
     userId,
@@ -144,7 +144,46 @@ describe("GET /api/hardcover/search", () => {
     expect(body.results[0]?.source).toBe("hardcover");
     expect(body.results[0]?.normalized.title).toBe("Dune");
     expect(body.results[0]?.confidence).toBe(0.88);
-    expect(searchHardcoverMock).toHaveBeenCalledWith({ title: "dune" });
+    // The caller's own token is threaded through, so the client cannot resolve
+    // an arbitrary one from the credentials table.
+    expect(searchHardcoverMock).toHaveBeenCalledWith({ title: "dune" }, { token: "test-token" });
+  });
+
+  it("refuses to spend another user's token for a caller with no credential", async () => {
+    // Alice connects her personal Hardcover account. Bob never does.
+    const alice = await seedApiKey("Hardcover Alice");
+    const bob = await seedApiKey("Hardcover Bob");
+    await seedHardcoverCredential(alice.userId, "alice-personal-token");
+
+    const { app } = createTestApp();
+
+    const bobSearch = await app.request("/api/hardcover/search?q=dune", {
+      headers: { Authorization: `Bearer ${bob.rawKey}` },
+    });
+
+    // Pre-fix: the gate was a bare `service = 'hardcover'` — "does anyone on
+    // this server have a token" — so Bob's request sailed past it and Alice's
+    // token paid for the search. This is the load-bearing assertion: a user
+    // with no credential must not cause a Hardcover API call at all.
+    expect(searchHardcoverMock).not.toHaveBeenCalled();
+    expect(bobSearch.status).toBe(503);
+
+    // /status and /search now agree about whether Bob is connected.
+    const bobStatus = await app.request("/api/hardcover/status", {
+      headers: { Authorization: `Bearer ${bob.rawKey}` },
+    });
+    expect((await bobStatus.json()).connected).toBe(false);
+
+    // Alice, who does have a credential, still gets results — on her own token.
+    searchHardcoverMock.mockResolvedValueOnce([]);
+    const aliceSearch = await app.request("/api/hardcover/search?q=dune", {
+      headers: { Authorization: `Bearer ${alice.rawKey}` },
+    });
+    expect(aliceSearch.status).toBe(200);
+    expect(searchHardcoverMock).toHaveBeenCalledExactlyOnceWith(
+      { title: "dune" },
+      { token: "alice-personal-token" },
+    );
   });
 
   it("returns 503 when no Hardcover credential is configured", async () => {
