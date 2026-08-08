@@ -1,4 +1,5 @@
 import { createMiddleware } from "hono/factory";
+import { HTTPException } from "hono/http-exception";
 import type { AppVariables } from "../context.js";
 import { enforceRateLimit } from "../services/rate-limit.js";
 import type { RateLimitTier } from "../services/rate-limit.js";
@@ -59,28 +60,61 @@ export function resolveRateLimitTiers(path: string, method: string): RateLimitTi
  * Ceiling on a body this middleware is willing to parse.
  *
  * The only fields it reads are a username and an email, so a few kilobytes is
- * already generous. bodyLimitMiddleware runs first (app.ts) and caps every body
- * at 1 MB, so this is defence in depth: if the two are ever reordered, the
- * limiter still refuses to buffer something large.
- *
- * A caller that pads its body past this loses its per-credential bucket and
- * falls back to the per-IP tiers, which is the safe direction — refusing the
- * request outright would turn a rate-limit detail into a new way to reject
- * legitimate traffic.
+ * already generous. bodyLimitMiddleware runs first (app.ts), but it caps bodies
+ * at 1 MB — three orders of magnitude above this — so it does NOT stand in for
+ * this guard on the credential paths.
  */
 const MAX_CREDENTIAL_BODY_BYTES = 8192;
 
+type CredentialBody =
+  /** Parsed, and small enough that we were willing to look at it. */
+  | { kind: "parsed"; body: Record<string, unknown> }
+  /** Over the ceiling. The caller must refuse the request, not fall back. */
+  | { kind: "oversized" }
+  /** Small enough, but not a JSON object — no credential to bucket by. */
+  | { kind: "unusable" };
+
+/**
+ * Read the credential body, refusing anything over the ceiling.
+ *
+ * This used to return null for an oversized body and let the caller fall
+ * through to the per-IP tiers, described as "the safe direction". It was not:
+ * `/api/auth/sign-in/email` has no per-IP tier of ours at all
+ * (resolveRateLimitTiers stands aside for the whole prefix), so padding the
+ * sign-in JSON past the ceiling dropped the attempt out of the per-credential
+ * bucket and into nothing, leaving only Better Auth's internal per-IP limiter —
+ * which a rotating address pool defeats by construction. Refusing instead costs
+ * nothing legitimate: a sign-in body is an email and a password, and a KoSync
+ * auth body a username and a password. Neither is 8 KB.
+ *
+ * The declared content-length is checked first so the common attack is refused
+ * without buffering anything, and the decoded length is checked afterwards so a
+ * request that understates or omits its length does not slip past.
+ */
 async function readCredentialBody(c: {
   req: { header: (name: string) => string | undefined; raw: Request };
-}): Promise<Record<string, unknown> | null> {
+}): Promise<CredentialBody> {
   const declared = c.req.header("content-length");
-  if (declared !== undefined && Number(declared) > MAX_CREDENTIAL_BODY_BYTES) return null;
+  if (declared !== undefined && Number(declared) > MAX_CREDENTIAL_BODY_BYTES) {
+    return { kind: "oversized" };
+  }
 
-  const body: unknown = await c.req.raw
+  const text = await c.req.raw
     .clone()
-    .json()
+    .text()
     .catch(() => null);
-  return typeof body === "object" && body !== null ? (body as Record<string, unknown>) : null;
+  if (text === null) return { kind: "unusable" };
+  if (Buffer.byteLength(text) > MAX_CREDENTIAL_BODY_BYTES) return { kind: "oversized" };
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return { kind: "unusable" };
+  }
+  return typeof parsed === "object" && parsed !== null
+    ? { kind: "parsed", body: parsed as Record<string, unknown> }
+    : { kind: "unusable" };
 }
 
 export const rateLimitMiddleware = createMiddleware<{ Variables: AppVariables }>(
@@ -114,6 +148,7 @@ export const rateLimitMiddleware = createMiddleware<{ Variables: AppVariables }>
     // Brute-force budgets also follow the credential being guessed, so rotating
     // source addresses cannot reset attempts against one account.
     let credentialIdentifier: string | undefined;
+    let oversized = false;
     if (path === "/kosync/users/auth") {
       // Two shapes for one credential check. GET carries the username in
       // x-auth-user; POST carries it in the JSON body — and takes the PLAINTEXT
@@ -123,11 +158,25 @@ export const rateLimitMiddleware = createMiddleware<{ Variables: AppVariables }>
       credentialIdentifier = c.req.header("x-auth-user");
       if (!credentialIdentifier && method === "POST") {
         const body = await readCredentialBody(c);
-        if (typeof body?.username === "string") credentialIdentifier = body.username;
+        oversized = body.kind === "oversized";
+        if (body.kind === "parsed" && typeof body.body.username === "string") {
+          credentialIdentifier = body.body.username;
+        }
       }
     } else if (path === "/api/auth/sign-in/email" && method === "POST") {
       const body = await readCredentialBody(c);
-      if (typeof body?.email === "string") credentialIdentifier = body.email;
+      oversized = body.kind === "oversized";
+      if (body.kind === "parsed" && typeof body.body.email === "string") {
+        credentialIdentifier = body.body.email;
+      }
+    }
+    // A body too big to bucket by is refused here rather than passed on
+    // unbucketed. Padding it is otherwise a way out of the per-credential
+    // budget, and on the sign-in path there is no per-IP budget of ours behind
+    // it to catch the overflow. The handler never runs, so no credential is
+    // checked and nothing is leaked by the 413.
+    if (oversized) {
+      throw new HTTPException(413, { message: "Request body too large" });
     }
     if (credentialIdentifier) {
       await applyTier("auth", getCredentialRateLimitKey(credentialIdentifier));

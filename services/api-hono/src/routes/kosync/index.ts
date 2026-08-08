@@ -71,7 +71,7 @@ const postAuthRoute = createRoute({
   tags: ["kosync"],
   summary: "Authenticate via JSON body",
   description:
-    "Validate KoSync credentials provided as a JSON body. Returns the md5-hashed password as the userkey for subsequent sync requests.",
+    "Validate KoSync credentials provided as a JSON body. Returns the md5-hashed password as the userkey for subsequent sync requests. The rate limiter buckets attempts by the username in this body, so a body over 8 KB — which no KOReader login sends — is refused with 413 rather than let through unbucketed.",
   request: {
     body: {
       required: true,
@@ -93,6 +93,7 @@ const postAuthRoute = createRoute({
     },
     400: { description: "Invalid request body" },
     401: { description: "Invalid credentials" },
+    413: { description: "Request body too large to bucket a brute-force budget against" },
   },
 });
 
