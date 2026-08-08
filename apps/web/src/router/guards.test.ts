@@ -15,22 +15,32 @@ const checked = ref(false);
 const check = vi.fn(async () => {
   checked.value = true;
 });
+const logout = vi.fn(async () => {
+  authenticated.value = false;
+  checked.value = true;
+});
 
 vi.mock("~/composables/useAuth", () => ({
   useAuth: () => ({
     isAuthenticated: computed(() => authenticated.value),
     checked,
     check,
+    logout,
   }),
 }));
 
-const { installRouterGuards } = await import("./guards");
+const { installRouterGuards, installSessionRecovery } = await import("./guards");
+const { reportSessionInvalidated, setSessionRecovery } = await import("~/lib/session-invalidation");
 
 /** Capture the guard the installer registers, so it can be called directly. */
 type Guard = (to: { path: string; fullPath: string }) => Promise<unknown>;
 function makeGuard(): Guard {
   let guard!: Guard;
-  installRouterGuards({ beforeEach: (fn: Guard) => (guard = fn) } as never);
+  installRouterGuards({
+    beforeEach: (fn: Guard) => (guard = fn),
+    currentRoute: ref({ path: "/", fullPath: "/" }),
+    replace: vi.fn(),
+  } as never);
   return guard;
 }
 
@@ -38,6 +48,8 @@ beforeEach(() => {
   authenticated.value = false;
   checked.value = false;
   check.mockClear();
+  logout.mockClear();
+  setSessionRecovery(null);
 });
 
 describe("auth guard", () => {
@@ -81,5 +93,108 @@ describe("auth guard", () => {
     // The loop this prevents is total: the guard redirects to /login, which
     // the guard then redirects to /login, forever.
     expect(await makeGuard()({ path: "/login", fullPath: "/login" })).toBe(true);
+  });
+});
+
+/**
+ * Recovery from a session killed on the server.
+ *
+ * The guard above runs on navigation and check() runs once per page load, so
+ * without this nothing in a tab that is already open ever discovers that its
+ * cookie stopped working — a ban, a revoke from another device, an admin
+ * setting your password, plain expiry. The tab keeps rendering a signed-in
+ * shell while every request 401s into a toast.
+ */
+describe("session recovery", () => {
+  /** A router stub sitting on `where`, with its replace() calls recorded. */
+  function routerAt(path: string, fullPath = path) {
+    const replace = vi.fn(async () => {});
+    installSessionRecovery({
+      currentRoute: ref({ path, fullPath }),
+      replace,
+    } as never);
+    return replace;
+  }
+
+  /** reportSessionInvalidated() is fire-and-forget; let its promise chain run. */
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  it("signs out and redirects when the server refuses the session", async () => {
+    authenticated.value = true;
+    const replace = routerAt("/library", "/library?author=Wight");
+
+    reportSessionInvalidated();
+    await settle();
+
+    expect(logout).toHaveBeenCalledTimes(1);
+    // The deep link is carried, same as the guard: a session that expires
+    // mid-browse should return you where you were, not to the dashboard.
+    expect(replace).toHaveBeenCalledWith({
+      path: "/login",
+      query: { redirect: "/library?author=Wight" },
+    });
+  });
+
+  it("signs out and redirects exactly once for a burst of 401s", async () => {
+    // A page mounting six components fires six queries; if the session died,
+    // all six come back 401. Six sign-outs and six redirects is a visible mess.
+    authenticated.value = true;
+    const replace = routerAt("/");
+
+    reportSessionInvalidated();
+    reportSessionInvalidated();
+    reportSessionInvalidated();
+    await settle();
+
+    expect(logout).toHaveBeenCalledTimes(1);
+    expect(replace).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not navigate when the user is already on /login", async () => {
+    // The redirect loop this prevents: /login 401s on something, recovery
+    // replaces with /login, which 401s again.
+    authenticated.value = true;
+    const replace = routerAt("/login");
+
+    reportSessionInvalidated();
+    await settle();
+
+    expect(logout).toHaveBeenCalledTimes(1);
+    expect(replace).not.toHaveBeenCalled();
+  });
+
+  it("ignores a 401 for someone who is already signed out", async () => {
+    // A refused sign-in on the login page is a 401 too. Reacting to it would
+    // clear the form the user is still typing in.
+    authenticated.value = false;
+    const replace = routerAt("/login");
+
+    reportSessionInvalidated();
+    await settle();
+
+    expect(logout).not.toHaveBeenCalled();
+    expect(replace).not.toHaveBeenCalled();
+  });
+
+  it("stays armed after a recovery, and after one that throws", async () => {
+    authenticated.value = true;
+    const replace = routerAt("/library");
+
+    reportSessionInvalidated();
+    await settle();
+    expect(replace).toHaveBeenCalledTimes(1);
+
+    // A second, later invalidation must still be handled — a latch that stuck
+    // shut would silently disable recovery for the rest of the page's life.
+    authenticated.value = true;
+    replace.mockRejectedValueOnce(new Error("navigation cancelled"));
+    reportSessionInvalidated();
+    await settle();
+    expect(replace).toHaveBeenCalledTimes(2);
+
+    authenticated.value = true;
+    reportSessionInvalidated();
+    await settle();
+    expect(replace).toHaveBeenCalledTimes(3);
   });
 });

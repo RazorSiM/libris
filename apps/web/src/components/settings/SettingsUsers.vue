@@ -18,7 +18,7 @@ import {
  */
 
 const toast = useToast();
-const { userId: currentUserId } = useAuth();
+const { userId: currentUserId, refresh: refreshSession } = useAuth();
 
 const { data: users, status: usersStatus } = useUsersQuery();
 const { mutateAsync: createUser, isLoading: creating } = useCreateUser();
@@ -77,6 +77,12 @@ async function toggleRole(user: ManagedUser) {
   try {
     await setRole({ userId: user.id, role });
     toast.add({ title: `${user.name} is now ${role}`, color: "success" });
+    // Demoting yourself changes what YOU are allowed to see. Better Auth
+    // refreshes the affected session server-side immediately, so without
+    // re-reading it the store keeps isAdmin true, this very panel keeps
+    // rendering, and its queries start 403ing. Re-reading also drops the admin
+    // tabs, which sends the page back to the default tab on its own.
+    if (isSelf(user)) await refreshSession();
   } catch (err) {
     report(err, "Could not change the role");
   }
@@ -98,6 +104,13 @@ async function toggleBan(user: ManagedUser) {
 async function handleSetPassword() {
   const user = passwordTarget.value;
   if (!user) return;
+  // The button is disabled for your own row; this is the second lock, because
+  // the consequence of getting here is signing yourself out mid-action.
+  if (isSelf(user)) {
+    passwordTarget.value = null;
+    toast.add({ title: "Change your own password on the Account tab", color: "warning" });
+    return;
+  }
   try {
     await setPassword({ userId: user.id, newPassword: newPassword.value });
     toast.add({
@@ -217,10 +230,17 @@ async function handleSetPassword() {
           :data-testid="`toggle-ban-btn-${user.id}`"
           @click="toggleBan(user)"
         />
+        <!-- Not on your own row. The server deletes every session belonging to
+             the target, so pointing this at yourself destroys the cookie in the
+             tab you are using — and the Account tab is where you change your
+             own password anyway, with the current-password check that belongs
+             on it. -->
         <UButton
           label="Set password"
           variant="ghost"
           size="sm"
+          :disabled="isSelf(user)"
+          :title="isSelf(user) ? 'Change your own password on the Account tab' : undefined"
           :data-testid="`set-password-btn-${user.id}`"
           @click="passwordTarget = user"
         />
