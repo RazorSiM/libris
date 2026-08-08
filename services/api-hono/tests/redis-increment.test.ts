@@ -25,6 +25,7 @@ import { createRedisKVStore } from "../src/services/kv-store.js";
 import { createRedisSecondaryStorage } from "../src/services/auth-secondary-storage.js";
 import { checkRateLimit } from "../src/services/rate-limit.js";
 import {
+  announceSkip,
   connectTestRedis,
   isRedisReachable,
   SERVICES_ARE_REQUIRED,
@@ -44,7 +45,7 @@ if (!reachable) {
   if (SERVICES_ARE_REQUIRED) {
     throw new Error(`${why} CI is set, so this is a failure rather than a skip.`);
   }
-  console.warn(`\n[SKIPPED — NOT COVERED] redis-increment.test.ts\n${why}\n`);
+  announceSkip("redis-increment.test.ts", why);
 }
 
 /** How many callers arrive at once. Large enough that a lost update is certain. */

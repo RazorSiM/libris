@@ -21,6 +21,7 @@ import { users } from "../src/db/schema.js";
 import type { Db } from "../src/db/client.js";
 import { withLastAdminLock } from "../src/middleware/last-admin.js";
 import {
+  announceSkip,
   createScratchDatabase,
   isPostgresReachable,
   SERVICES_ARE_REQUIRED,
@@ -44,7 +45,7 @@ if (!reachable) {
   }
   // Loud on purpose: a quiet skip in a terminal full of green is how the
   // previous version of this test went unnoticed for a release.
-  console.warn(`\n[SKIPPED — NOT COVERED] last-admin-lock.postgres.test.ts\n${why}\n`);
+  announceSkip("last-admin-lock.postgres.test.ts", why);
 }
 
 describe.skipIf(!reachable)("withLastAdminLock against real PostgreSQL", () => {

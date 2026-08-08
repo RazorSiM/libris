@@ -22,6 +22,7 @@ import * as schema from "../src/db/schema.js";
 import { createMemorySecondaryStorage } from "../src/services/auth-secondary-storage.js";
 import { createMemoryKVStore } from "../src/services/kv-store.js";
 import {
+  announceSkip,
   createScratchDatabase,
   isPostgresReachable,
   SERVICES_ARE_REQUIRED,
@@ -41,7 +42,7 @@ if (!reachable) {
   if (SERVICES_ARE_REQUIRED) {
     throw new Error(`${why} CI is set, so this is a failure rather than a skip.`);
   }
-  console.warn(`\n[SKIPPED — NOT COVERED] reading-status-isolation.postgres.test.ts\n${why}\n`);
+  announceSkip("reading-status-isolation.postgres.test.ts", why);
 }
 
 const TEST_PASSWORD = "correct-horse-battery-staple";

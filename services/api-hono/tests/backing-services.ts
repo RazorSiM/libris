@@ -49,6 +49,19 @@ export const TEST_REDIS_URL = process.env.LIBRIS_TEST_REDIS_URL ?? "redis://loca
  */
 export const SERVICES_ARE_REQUIRED = Boolean(process.env.CI);
 
+/**
+ * Say — visibly — that a suite checked nothing.
+ *
+ * `console.warn` at module scope does NOT reach the terminal: Vitest's reporter
+ * only surfaces console output it can attach to a running test, so a file that
+ * skips every test prints nothing but "8 skipped" among hundreds of passes.
+ * That is indistinguishable from coverage, which is the whole failure mode
+ * libris-59m.31 exists to remove. `process.stderr.write` bypasses the capture.
+ */
+export function announceSkip(file: string, why: string): void {
+  process.stderr.write(`\n[SKIPPED - NOT COVERED] ${file}\n${why}\n\n`);
+}
+
 /** Close a Drizzle handle's underlying postgres-js pool. */
 async function closeDb(db: Db): Promise<void> {
   const client = (db as unknown as { $client?: { end?: (o?: object) => Promise<void> } }).$client;
@@ -87,6 +100,10 @@ export async function connectTestRedis(): Promise<Redis> {
     maxRetriesPerRequest: 2,
     lazyConnect: true,
   });
+  // ioredis logs "Unhandled error event" when nothing is listening, which turns
+  // the reachability probe's expected failure into alarming output. Commands
+  // still reject, so a real mid-run failure is not hidden by this.
+  redis.on("error", () => {});
   await withTimeout(redis.connect(), 5_000, "redis connect");
   return redis;
 }
