@@ -1,6 +1,8 @@
 import { and, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { bookFiles, readingProgress, readingProgressHistory } from "#db";
 import type { Db } from "#db";
+// Relative, not "#db/rows": see the note in lib/reading-status.ts.
+import { rowCount } from "../db/rows.js";
 
 /**
  * Resolve the book a KoReader `document` hash belongs to by matching it against
@@ -51,13 +53,6 @@ export async function linkOrphanProgressForBook(
     );
 
   return linked.length;
-}
-
-/** Count the rows returned by a Drizzle `db.execute` regardless of driver. */
-function rowCount(result: unknown): number {
-  if (Array.isArray(result)) return result.length;
-  const rows = (result as { rows?: unknown[] }).rows;
-  return Array.isArray(rows) ? rows.length : 0;
 }
 
 /**

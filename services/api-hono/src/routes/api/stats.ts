@@ -2,6 +2,11 @@ import { createRoute, z } from "@hono/zod-openapi";
 import { createOpenApiRouter } from "../../shared/openapi.js";
 import { sql } from "drizzle-orm";
 import { books, readingAggregate, readingProgress, readingProgressHistory } from "#db";
+// Relative rather than the "#db/rows" subpath import: apps/web typechecks this
+// file transitively through the RPC client's exported types, and a
+// package-private subpath resolves against the IMPORTING package (see the same
+// note in lib/auth.ts).
+import { rowsOf } from "../../db/rows.js";
 import type { AppVariables } from "../../context.js";
 import { getUserId } from "../../shared/auth.js";
 import { FINISHED_THRESHOLD, PAUSED_DAYS } from "../../lib/reading-status.js";
@@ -118,20 +123,6 @@ const statsRoute = createRoute({
 
 const router = createOpenApiRouter<{ Variables: AppVariables }>();
 router.use("/", cachedRoute({ maxAge: 60 }));
-
-/**
- * Normalizes Drizzle `db.execute()` return shape across drivers.
- * - postgres-js resolves to an array-like RowList (supports `.map`, `[i]`).
- * - PGlite (used in unit tests) resolves to a `Results` object with a `.rows`
- *   array. Without this helper, chart CTEs hit `.map is not a function` in
- *   tests while working in production.
- */
-function rowsOf<T>(result: unknown): T[] {
-  const r = result as { rows?: T[] } | T[];
-  if (Array.isArray(r)) return r;
-  if (r && typeof r === "object" && Array.isArray(r.rows)) return r.rows;
-  return Array.from(r as Iterable<T>);
-}
 
 /**
  * SQL CTEs that derive per-book effective reading status for a single user,
