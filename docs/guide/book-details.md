@@ -16,7 +16,7 @@ The detail page is organized top to bottom.
 - **Cover image** on the left. A placeholder icon is shown when no cover was downloaded.
 - **Title and author** at the top, followed by the series name and number when set. The series name links to the series page.
 - **Genre chips** below the title, rendered as badges. Tags, when present, appear as a second row of badges.
-- **Uploader attribution** -- "Uploaded by `<label>`", showing the API key label that added the book. The catalog is shared across all users, so this tells you who originally uploaded it.
+- **Uploader attribution** -- "Uploaded by `<name>`", the display name of the account that added the book. The catalog is shared across all users, so this tells you who originally uploaded it — and who, along with any admin, may edit or delete it.
 - **Expandable description** -- clamped to four lines with a **Show more** / **Show less** toggle.
 
 ![Book detail page, full view](./images/book-detail-full.webp)
@@ -38,7 +38,7 @@ A two-column grid lists the stored metadata. Empty fields are omitted, except **
 
 ### Reading Progress
 
-The Reading Progress section reflects per-user KoReader sync data and any manual override. Reading progress is the one part of this page that is private to your API key; the rest of the catalog is shared.
+The Reading Progress section reflects per-user KoReader sync data and any manual override. Reading progress is the one part of this page that is private to your account; the rest of the catalog is shared.
 
 ![Book detail reading progress](./images/book-detail-progress.webp)
 

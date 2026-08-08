@@ -29,13 +29,32 @@ so revoking a credential now takes effect immediately.
 
 The legacy `/api/auth/setup`, `/login`, `/logout`, `/session` and `/keys` routes are
 removed. Sign-in, sign-out and session are Better Auth's; first-run bootstrap moves
-to `POST /api/setup`, which creates the first admin only while no user exists.
+to `POST /api/setup`, which establishes the first admin credential and is available
+only while nobody on the install can sign in with a password yet.
 
 Breaking:
 
-- `NODE_ENV` is now required instead of silently defaulting to `development`.
-  Test-support routes are mounted only for `NODE_ENV=test` or `E2E_TEST=1`, and
-  require a separate 32+ character `TEST_ROUTE_TOKEN` even then.
+- **`BETTER_AUTH_SECRET` is now required, with no fallback.** It signs Better Auth
+  session cookies, and there is deliberately no fallback to `API_SECRET_KEY`: the
+  two rotate independently, and silently reusing a long-lived secret for session
+  signing is worse than failing to boot. An unmodified upgrade therefore
+  crash-loops at startup until it is set. Generate one with
+  `openssl rand -base64 32`; published placeholders and low-diversity values are
+  rejected. Changing it later signs out every user.
+
+- **`BETTER_AUTH_URL` is now required when `NODE_ENV=production`**, and must be a
+  bare http(s) origin — scheme and host only, no path, query or credentials. It
+  names the origin users actually reach. Better Auth does not infer an https
+  origin behind a TLS-terminating proxy, so without it the container's own
+  plain-http socket origin becomes the entire trusted-origin list and every
+  browser sign-in is answered `403 INVALID_ORIGIN`. It is validated at boot, so
+  a missing value is a startup error rather than a server that runs happily and
+  refuses every login.
+
+- `NODE_ENV` is now required instead of silently defaulting to `development`. An
+  omitted value must not be able to disable a production safeguard. Test-support
+  routes are mounted only for `NODE_ENV=test` or `E2E_TEST=1`, and require a
+  separate 32+ character `TEST_ROUTE_TOKEN` even then.
 
 - Self-registration is now disabled outright (`disableSignUp`). Previously enabling
   email/password auth would have exposed `POST /api/auth/sign-up/email` publicly.

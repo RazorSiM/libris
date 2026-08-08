@@ -188,7 +188,8 @@ Requests are organized by OpenAPI tag into folders:
 
 | Folder            | Endpoints                                            |
 | ----------------- | ---------------------------------------------------- |
-| `auth/`           | Setup, API key CRUD                                  |
+| `auth/`           | First-run setup status and bootstrap (`/api/setup`)  |
+| `app-passwords/`  | Mint, list, and revoke app passwords                 |
 | `books/`          | Approve metadata, delete, get candidates             |
 | `credentials/`    | Service credential management                        |
 | `dashboard/`      | Dashboard data                                       |

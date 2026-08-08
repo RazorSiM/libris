@@ -53,6 +53,7 @@ books.example.com/_docs/*  → Hono API (OpenAPI docs)
 
 | Variable              | Purpose                                                                                                                                                                                                                                                                                                                                                                                                                |
 | --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `NODE_ENV`            | `development`, `production`, or `test`. Never inferred: an omitted value must not silently disable a production safeguard. The published image runs `production`, which is what makes `BETTER_AUTH_URL` mandatory below.                                                                                                                                                                                               |
 | `POSTGRES_HOST`       | Postgres host. The app assembles the connection URL from the `POSTGRES_*` split vars.                                                                                                                                                                                                                                                                                                                                  |
 | `POSTGRES_PORT`       | Postgres port. Optional, defaults to `5432`.                                                                                                                                                                                                                                                                                                                                                                           |
 | `POSTGRES_USER`       | Postgres user.                                                                                                                                                                                                                                                                                                                                                                                                         |
@@ -91,8 +92,10 @@ Rate limits are configurable through the validated env schema. The defaults are 
 There are three tiers, each with a request limit and a window anchored to the client's first request:
 
 - `general` — applies to every path except Better Auth's own `/api/auth/*`, which Better Auth limits itself. `/api/health` is included: it is unauthenticated and costs a database round-trip per call, and the fail-open described below keeps it answerable when Redis is down. Defaults to 600 requests per 60 seconds.
-- `auth` — applies to authentication endpoints (login, setup). Defaults to 30 requests per 60 seconds.
-- `keyCreation` — applies to API-key creation. Defaults to 30 requests per 3600 seconds (1 hour).
+- `auth` — applies to `/kosync/users/auth`, the one credential check outside Better Auth's reach, since KOReader speaks its own protocol on its own prefix. It also stacks on top of the two credential-creation routes below. Defaults to 30 requests per 60 seconds.
+- `keyCreation` — applies to `POST /api/setup` and `POST /api/app-passwords`. Each costs a password hash, and `/api/setup` is public by necessity — nobody can authenticate on a fresh install — so it carries the strictest budget in the app. Defaults to 30 requests per 3600 seconds (1 hour).
+
+Sign-in, sign-out, password and email changes, the admin plugin and app-password management all sit under `/api/auth/*` and are **not** governed by these variables. Better Auth limits that prefix itself, with much tighter per-endpoint windows than a shared tier can express, and the app's limiter stands aside for it so the two budgets cannot stack. Those counters live in the same Redis as sessions. To change them, edit `rateLimit` in `services/api-hono/src/lib/auth.ts`.
 
 | Variable                                       | Purpose                                                  | Default |
 | ---------------------------------------------- | -------------------------------------------------------- | ------- |
@@ -196,6 +199,25 @@ volumes:
   library:
 ```
 
+## First Run: Create the Admin Account
+
+There is no seeded account and no default password. The first admin is created through the UI, once, on a running server.
+
+1. Bring the stack up and wait for the API to answer. Migrations apply on boot.
+2. Open the origin you set in `BETTER_AUTH_URL` in a browser. Any path redirects to `/login`.
+3. Because nobody on this install can sign in yet, `/login` offers the **first-run setup form** instead of the sign-in form. Enter a display name, an email address, and a password of at least 8 characters.
+4. Submit. That creates the first user with the `admin` role and signs you in immediately.
+
+The endpoint behind the form (`POST /api/setup`) is public by necessity — there is no account to authenticate with yet — and self-guarding: it answers `409` the moment any account has a password, and the form stops being offered. It is safe to leave mounted.
+
+Everyone else is created by an admin from **Settings → Users**. Self-registration is disabled outright, so `POST /api/auth/sign-up/email` is not exposed.
+
+::: warning Keep one admin credential recoverable
+There is no mail transport, so there is no password-reset email. Password recovery is an admin setting someone else's password from **Settings → Users**. If the only admin password is lost, and no admin session survives anywhere, there is no supported way back in short of writing to the database by hand — `POST /api/setup` will not reopen while any credential exists.
+:::
+
+If the setup form does not appear on a server you believe is fresh, some account already has a password. Sign in with it.
+
 ## Reverse Proxy
 
 When the proxy terminates TLS, `BETTER_AUTH_URL` must name the origin the browser uses:
@@ -247,30 +269,108 @@ Caddy and Traefik proxy WebSocket upgrades automatically; no extra configuration
 
 Migrations apply automatically on API startup — `runMigrations()` in `services/api-hono/src/bootstrap.ts` runs before the server starts accepting requests. No manual migration step is needed when deploying a new image. The migrations directory is resolved from `MIGRATIONS_PATH` (default `./migrations`, which the Dockerfile copies into the image alongside the bundled server).
 
-### Upgrading from a pre-Better-Auth install
+## Upgrading to the Better Auth Release
 
-Skip this section for a fresh install — it applies only when upgrading a deployment that predates the Better Auth cutover, i.e. one whose `api_keys` table was still the identity table.
+Skip this section for a fresh install; follow [First Run](#first-run-create-the-admin-account) instead.
 
-The cutover migration (`20260801115500_auth_cutover`) creates one `users` row per existing API key so that books, reading history and Hardcover tokens keep their owner. It deliberately creates **no password** for those users: the old `api_keys.key_hash` values are bcrypt hashes of API keys, and a Better Auth password hash cannot be derived from one.
+This release replaces API-key identity with Better Auth accounts. For an existing deployment it is a **hard cutover**, not a rolling upgrade: three new or newly-required environment variables, one variable removed, and every credential in the system invalidated. Everyone is signed out, and every e-reader stops working until it is re-paired. Read the whole section before you start — several steps have no undo.
 
-So immediately after the upgrade nobody can sign in yet. Recovery is self-service and needs no SQL:
+Take a database backup first. The cutover migration rewrites seven foreign-key columns from `uuid` to `text` and there is no down migration.
 
-1. Deploy the new image and let it start. Migrations apply on boot.
-2. Open Libris in a browser. The sign-in page shows the **first-run setup form** — `GET /api/setup` reports `required: true` because no credential exists anywhere on the install, even though users do.
-3. Submit your real email, a password, and your display name.
+### 1. Generate `BETTER_AUTH_SECRET`
 
-That does **not** create a new person. It attaches the credential to a user that already exists, choosing:
+New, required, no fallback. The server refuses to start without it.
+
+```bash
+openssl rand -base64 32
+```
+
+It is deliberately separate from `API_SECRET_KEY` — the two rotate independently, and silently reusing a long-lived secret to sign sessions would be worse than failing to boot. Published placeholders and low-diversity strings are rejected at startup, so it cannot be filled in with something memorable.
+
+### 2. Set `NODE_ENV` explicitly
+
+Also newly required. It used to default to `development`; an omitted value must not be able to disable a production safeguard silently, so it is now validated as one of `development`, `production`, or `test`. For a real deployment this is `production` — which is what makes step 3 mandatory.
+
+### 3. Set `BETTER_AUTH_URL` to the origin your users actually type
+
+```env
+BETTER_AUTH_URL=https://libris.example.com
+```
+
+Required when `NODE_ENV=production`; the server refuses to boot without it. Scheme and host only — no path, query, credentials or trailing segments, because Better Auth appends its own `/api/auth` base path and a value carrying one produces a subtly wrong cookie and redirect origin rather than an error.
+
+**Behind a TLS-terminating reverse proxy this is the step that decides whether anyone can sign in.** Better Auth does not infer an https origin from `X-Forwarded-Proto`, deliberately: that would make a client-settable header authoritative for the origin that signs and scopes sessions. With no `BETTER_AUTH_URL` it falls back to the origin of the request socket — the container's plain-http address — and because `trustedOrigins` is empty in production, that single derived origin becomes the entire trusted list. Every browser request arriving with `Origin: https://libris.example.com` is then answered `403 INVALID_ORIGIN`. The server starts fine, serves the SPA fine, and refuses every sign-in.
+
+The value must match what the browser sends, including a non-default port. `https://libris.example.com` and `https://libris.example.com:8443` are different origins.
+
+### 4. Delete `COOKIE_DOMAIN`
+
+Removed. The session cookie is now host-only — no `Domain` attribute — so a sibling subdomain cannot set or shadow it for the app origin.
+
+::: warning This one fails silently
+`COOKIE_DOMAIN` is no longer read anywhere, and the env schema ignores unknown variables rather than rejecting them. A compose file that still sets it gets **no error at all**. If your deployment relied on it to share the session across subdomains, that no longer works and nothing will tell you why. Serve Libris from a single origin.
+:::
+
+### 5. Deploy the new image
+
+Migrations apply on boot, before the server accepts requests. The cutover migration (`20260801115500_auth_cutover`) creates one `users` row per existing API key, so books, reading history and Hardcover tokens keep their owner.
+
+Expect **everyone to be signed out**. The old `books-auth` cookie is gone, along with the `/api/auth/login`, `/logout`, `/session` and `/keys` routes.
+
+### 6. Get back in: the first-run form is the recovery path
+
+The migration deliberately creates **no password** for the users it migrates: the old `api_keys.key_hash` values are bcrypt hashes of API keys, and a Better Auth password hash cannot be derived from one. So immediately after the upgrade users exist but nobody can sign in.
+
+Recovery is self-service and needs **no SQL**:
+
+1. Open Libris in a browser. `/login` shows the **first-run setup form**, because `GET /api/setup` reports `required: true` while no credential exists anywhere on the install — even though users do.
+2. Submit your real email, a password, and your display name.
+
+That does **not** create a new person. It attaches the credential to a user that already exists, choosing, in order:
 
 1. the user already holding the email you submitted, if there is one;
 2. otherwise the oldest admin — the same row the migration assigned any ownerless books to;
 3. otherwise the oldest user, promoted to admin.
 
-The email, display name and `admin` role of that row are updated to what you submitted. Everything owned by it — books, reading progress, app passwords, Hardcover token — stays attached.
+The email, display name and `admin` role of that row are updated to what you submitted. Everything owned by it — books, reading progress, Hardcover token — stays attached to the same id.
 
-Once that first credential exists, `POST /api/setup` returns 409 again and the sign-in page stops offering the form. From there:
+Once that first credential exists, `POST /api/setup` returns `409` again and the form stops being offered.
 
-- Set the remaining users' real addresses and passwords from **Settings → Users** (admin only). Until you do, they keep placeholder `<uuid>@migrated.invalid` emails and cannot sign in.
-- Every OPDS and e-reader credential must be reissued from the app-passwords page. The old key hashes are bcrypt and Better Auth uses SHA-256; they cannot be converted.
-- KoSync credentials must be regenerated for the same reason.
+::: tip If the form does not appear
+Some account already has a password. Sign in with it, then use **Settings → Users** to set anyone else's.
+:::
 
-If the setup form does not appear, some account already has a password — sign in with it, or use **Settings → Users** to set another user's password.
+### 7. Give the remaining users real addresses and passwords
+
+Migrated users carry a placeholder `<uuid>@migrated.invalid` email and no password, so they cannot sign in until an admin fixes both from **Settings → Users**. Use **Set password**, and correct the address in the same pass.
+
+### 8. Reissue every e-reader and OPDS credential
+
+Existing API keys are **not** carried over — their hashes are bcrypt, Better Auth uses SHA-256, and one cannot be converted to the other. There is also no OPDS username/password service any more.
+
+Each person mints their own from **Settings → Connections → App Passwords**, one per device, and re-pairs their readers with their account email as the Basic username and the app password as the Basic password. See [Getting Started](/guide/getting-started#pairing-an-e-reader-app-passwords).
+
+Scripted automation changes too: an app password may no longer drive `/api/jobs`, `/api/auth/*`, `/api/app-passwords`, `/api/credentials` or `/api/settings`. Anything hitting those needs a browser session instead. Sending a key as the Basic **username** no longer works either — use `Authorization: Bearer`, `x-api-key`, or Basic with the key as the password.
+
+### 9. Regenerate KoSync credentials
+
+Same reason, and additionally the stored form changed. Each user re-creates theirs from **Settings → Connections → KoSync** and re-enters them on each KOReader device. KoSync passwords now have a 12-character minimum.
+
+### 10. Before deleting anyone, deal with their books
+
+`books.created_by` is now `NOT NULL` with `ON DELETE RESTRICT`, so the database refuses to delete a user who owns books. Removing a user through the admin UI reassigns their books to the acting admin first; a direct `DELETE` against the database will fail partway and leave the account half-removed. Delete users through the app.
+
+Note also that books picked up by the inbox watcher rather than uploaded through the API are owned by the oldest admin, and `created_by` being `NOT NULL` means ingestion fails outright on an install with no admin. Complete step 6 before dropping files into the inbox.
+
+## Rotating Secrets
+
+Neither secret can be rotated without consequences, and neither consequence is announced by the app.
+
+- **`BETTER_AUTH_SECRET`** signs session cookies. Changing it invalidates every session: everybody is signed out and signs in again. Nothing else is lost.
+- **`API_SECRET_KEY`** encrypts third-party tokens at rest and peppers the stored KoSync secrets. Changing it has two consequences, neither of which produces an error message:
+  - Every stored **Hardcover token** becomes unreadable. The tokens are sealed with this key, not hashed, so each user must reconnect their Hardcover account from **Settings → Connections**.
+  - Every **KoSync credential** stops matching, so every paired KOReader device has to be re-paired after its owner regenerates the credential.
+
+  Books, reading history and app passwords are unaffected.
+
+Rotate one at a time, and tell your users first — an operator rotating secrets on a schedule would otherwise silently break every reader.

@@ -5,7 +5,7 @@ order: 5
 
 # Library
 
-Once a book is approved in the inbox, it moves to `organized` status and appears in the library. The library is the shared catalog: every API key sees every organized book, regardless of who uploaded it. Each book carries an uploader attribution so you can tell who added it, and there is a filter to narrow by uploader. Only reading progress, manual status overrides, service credentials, and stats are per user.
+Once a book is approved in the inbox, it moves to `organized` status and appears in the library. The library is the shared catalog: every signed-in user sees every organized book, regardless of who uploaded it. Each book carries an uploader attribution so you can tell who added it, and there is a filter to narrow by uploader. Only reading progress, manual status overrides, per-account connections, and stats are per user.
 
 The library page offers two views and several ways to find what you are looking for.
 
@@ -25,7 +25,7 @@ Toggle to list view for a table. The columns are:
 - **Series** (name plus `#` position when set)
 - **Format** (for example `EPUB`)
 - **Genres** (first two shown as badges)
-- **Uploaded by** (the API key label of the uploader)
+- **Uploaded by** (the display name of the account that added it)
 - **Added** (the date the book was organized)
 
 ![Library list view](./images/library-list.webp)
@@ -44,7 +44,7 @@ The Filters popover offers five facets, each a searchable select populated from 
 - **Genre** -- narrow to a specific genre.
 - **Language** -- narrow by language. Options are shown as full names; the value sent is the ISO 639-1 code (for example `en`, `fr`).
 - **Series** -- narrow to a single series.
-- **Uploaded by** -- narrow to the books added under a specific API key label.
+- **Uploaded by** -- narrow to the books added by a specific account. Admins see everyone in this list; a regular user sees only themselves.
 
 Use **Clear filters** inside the popover to reset all facets, or **Done** to close it.
 

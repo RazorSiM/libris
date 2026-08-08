@@ -32,7 +32,7 @@ libris/
 | Job Queue       | BullMQ, Redis 7                                                                    |
 | File Watching   | Chokidar                                                                           |
 | Metadata Source | Hardcover GraphQL API (requires API token via Settings) — the sole external source |
-| Auth            | bcrypt-hashed API keys, httpOnly session cookies                                   |
+| Auth            | Better Auth 1.6 (email + password sessions, `admin` and `apiKey` plugins)          |
 | Testing         | Playwright (E2E), Vitest (unit)                                                    |
 | Toolchain       | Vite+ (`vp`), Vitest, Oxlint, Oxfmt, tsdown                                        |
 | CI/CD           | GitHub Actions                                                                     |
@@ -72,7 +72,7 @@ This is a private, self-hosted app behind authentication. Every page requires lo
 
 `vite build` produces pure static files in `apps/web/dist/`. In production, Hono serves these directly — no separate nginx container or Node.js runtime for the frontend. The build output is also ready for a native app shell (Capacitor/Tauri) in the future.
 
-Auth uses httpOnly cookies set by the Hono API directly. Since the SPA and API are served from the same origin, cookies work without any cross-domain configuration.
+Auth uses httpOnly session cookies issued by Better Auth, mounted on the Hono API. Since the SPA and API are served from the same origin in production, the cookie is host-only and needs no cross-domain configuration. In production `BETTER_AUTH_URL` must name the origin the browser actually reaches, because that value — not the request socket — is what Better Auth trusts.
 
 ## How the Pieces Connect
 
@@ -110,7 +110,7 @@ graph TB
 ```
 
 1. **Browser** loads the Vue SPA and makes API calls directly to the Hono backend
-2. **Hono API** handles auth via httpOnly cookies or API keys and manages all business logic: REST endpoints, job processing, file management
+2. **Hono API** resolves every caller through one Better Auth session lookup — browser cookie or app password alike — and manages all business logic: REST endpoints, job processing, file management
 3. **Chokidar** watches the inbox directory and enqueues jobs when files appear
 4. **BullMQ workers** process jobs: detect → parse → fetch metadata → organize
 
@@ -216,13 +216,15 @@ Routing is file-based via `unplugin-vue-router`. The top-level pages are:
 | `/series`, `/series/:name`     | Series grid and per-series detail (books ordered by series position)                 |
 | `/stats`                       | Reading analytics (ECharts: summary cards, yearly heatmap, six charts)               |
 | `/reading`, `/reading/:status` | Reading shelves (`reading` / `finished` / `unread` / `paused`); `/reading` redirects |
-| `/settings`                    | Settings (also the logged-out setup + login route)                                   |
+| `/settings`                    | Settings (tabbed; requires a session)                                                |
+
+There is also `/login`, which carries both sign-in and — while nobody on the install can sign in with a password yet — the first-run admin form. It is the only route reachable without a session; every other path redirects there.
 
 Series, the Reading shelves, and Stats each have their own sidebar entry. See [docs/frontend.md](./frontend.md) for the full page list, composables, and components.
 
 ### OPDS Feed Surface
 
-The OPDS catalog (`/opds/*`, Basic auth, realm `libris-opds`) serves the shared organized library to e-readers. The root navigation feed links four browse feeds plus an OpenSearch descriptor:
+The OPDS catalog (`/opds/*`, Basic auth, realm `Libris OPDS`) serves the shared organized library to e-readers. The root navigation feed links four browse feeds plus an OpenSearch descriptor:
 
 | Feed                      | Purpose                                                                                              |
 | ------------------------- | ---------------------------------------------------------------------------------------------------- |
@@ -237,50 +239,87 @@ The OPDS catalog (`/opds/*`, Basic auth, realm `libris-opds`) serves the shared 
 | `/opds/covers/{id}`       | Cover image for a book                                                                               |
 | `/opds/download/{fileId}` | Download a book file                                                                                 |
 
-Only EPUB is a recognized download format (`FORMAT_MIMES` maps `epub` only). The feed is the shared catalog: every authenticated OPDS user sees all organized books, though OPDS credentials are per user.
+Only EPUB is a recognized download format (`FORMAT_MIMES` maps `epub` only). The feed is the shared catalog: every authenticated OPDS user sees all organized books. There is no OPDS-specific credential — a reader signs in with the owner's email as the Basic username and an app password as the Basic password. Only the password component is checked; the username is informational.
 
 ## Multi-User Auth
 
 ### Auth Model
 
-Authentication is API key-based. During initial setup (`POST /api/auth/setup`), the first key is created and marked as admin. Admin users can create additional keys via `POST /api/auth/keys`. Keys are 32-byte random hex strings, bcrypt-hashed at rest.
+Identity and credential are separate things. A **user** (`users`, plus `accounts` for the password hash) is a person; a **credential** is one of three ways that person proves who they are.
 
-Clients authenticate via `Authorization: Bearer <key>` header or httpOnly session cookie (set at login). Route-level auth policies are declared in a lookup table (`route-policy.ts`) — first match wins:
+| Credential        | Stored in                        | Used by                                            |
+| ----------------- | -------------------------------- | -------------------------------------------------- |
+| Email + password  | `accounts` (Better Auth hashing) | The browser. Yields a session cookie.              |
+| App password      | `api_keys` (SHA-256, no expiry)  | E-readers, OPDS, Bruno, curl, cron.                |
+| KoSync credential | `kosync_credentials` (SHA-256)   | KOReader's progress-sync protocol, on `/kosync/*`. |
 
-| Policy     | Applied to                                 | Behavior                                         |
-| ---------- | ------------------------------------------ | ------------------------------------------------ |
-| `public`   | `/api/auth/setup`, `/api/auth/login`, etc. | No authentication                                |
-| `optional` | `/api/health`                              | Enriched response when authenticated             |
-| `api-key`  | `/api/*` (default)                         | Requires valid API key                           |
-| `admin`    | `/api/jobs/*`                              | Requires valid API key with `isAdmin` flag       |
-| `opds`     | `/opds/*`                                  | Basic auth against per-user service credentials  |
-| `kosync`   | `/kosync/*`                                | Header-based auth (`x-auth-user` / `x-auth-key`) |
+Authentication is [Better Auth](https://better-auth.com) (`services/api-hono/src/lib/auth.ts`), mounted on `/api/auth/*`, with the `admin` plugin for roles and user management and the `apiKey` plugin for app passwords. Sessions live in Redis (`secondaryStorage`) and are mirrored into the `sessions` table so the Account tab can list and revoke devices. Better Auth's signed cookie cache is deliberately off, so a revoked session, a role change or a ban takes effect on the very next request.
+
+Self-registration is disabled outright (`emailAndPassword.disableSignUp`). Accounts are created in exactly two places:
+
+- `POST /api/setup` — first-run bootstrap, public because nobody can authenticate yet. It is available only while **no credential exists anywhere on the install**, not merely while no user exists: on a deployment upgraded from the pre-Better-Auth schema, the cutover migration created users with no password, and this endpoint attaches the submitted email and password to one of those existing rows rather than adding a duplicate person. It returns 409 once any credential exists.
+- The admin plugin's user-management endpoints, driven from **Settings → Users**.
+
+`enableSessionForAPIKeys` makes the `apiKey` plugin resolve a valid app password into a full session, so `authMiddleware` answers for cookies and app passwords with a single `auth.api.getSession()` call. The cost is authority — a credential pasted into a KOReader config carries everything its owner can do — which is why app passwords are scoped by path (see below) rather than by per-key permissions.
+
+#### Route policy table
+
+Route-level policies are declared in `shared/route-policy.ts` — first match wins, and anything that matches nothing (SPA static files, favicon) is `skip`:
+
+| Order | Pattern       | Match  | Policy     | Behaviour                                                                                               |
+| ----- | ------------- | ------ | ---------- | ------------------------------------------------------------------------------------------------------- |
+| 1     | `/api/auth/`  | prefix | `skip`     | Better Auth authenticates its own endpoints. A prefix, so nested plugin routes stay covered.            |
+| 2     | `/api/setup`  | exact  | `public`   | No authentication. Self-guarding: 409s once any credential exists.                                      |
+| 3     | `/api/health` | exact  | `optional` | Session resolved if one is presented; the response is enriched when it is.                              |
+| 4     | `/kosync/`    | prefix | `kosync`   | `x-auth-user` / `x-auth-key` against `kosync_credentials`. `users/auth` and `users/create` self-handle. |
+| 5     | `/opds`       | prefix | `opds`     | Same session lookup as `api-key`; a 401 also carries `WWW-Authenticate: Basic realm="Libris OPDS"`.     |
+| 6     | `/__test/`    | prefix | `test`     | Constant-time compare of `x-test-token` against `TEST_ROUTE_TOKEN` (32+ chars). Never anonymous.        |
+| 7     | `/_`          | prefix | `skip`     | Scalar UI and the OpenAPI JSON.                                                                         |
+| 8     | `/api/jobs`   | prefix | `admin`    | Requires a session whose user has role `admin`. App passwords refused.                                  |
+| 9     | `/api/`       | prefix | `api-key`  | Default for the API: requires a session, from either credential.                                        |
+
+The policy name `api-key` is historical; it means "authenticated", not "app password only".
+
+#### App-password scoping
+
+A second table in the same file, `APP_PASSWORD_DENIED`, lists paths that refuse an app-password credential outright with 403, whatever role its owner holds. The refusal happens **before** the session is resolved, and the signal is the credential the caller presented (`apiKeyFromHeaders`), not anything on the resolved session.
+
+| Prefix               | Why                                                                                                                                                                                                          |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `/api/auth/`         | Password and email changes, admin user management, and the plugin route that mints app passwords.                                                                                                            |
+| `/api/app-passwords` | A credential must not mint or revoke credentials.                                                                                                                                                            |
+| `/api/credentials`   | Sets the KoSync password and the Hardcover token — one credential rewriting another.                                                                                                                         |
+| `/api/settings`      | `PATCH` calls `requireAdmin()` in its handler, and both GETs widen for admins (queue counts, failed-job arguments, filesystem paths). The table matches on path only, so this cannot move to policy `admin`. |
+
+Policy `admin` refuses app passwords on its own, so a path already declared `admin` needs no entry here. A handler that instead calls `requireAdmin()` or branches on `isAdmin()` internally resolves to plain `api-key` and **must** be listed — `route-policy.test.ts` scans the routes directory and fails the build otherwise.
+
+#### Bans
+
+Banning is the admin plugin's, applied from Settings → Users, but Better Auth only checks `banned` when it _creates_ a session — which an app password never does. `shared/user-ban.ts` exports `isUserBanned`, applied in the middleware's session resolution (covering cookies and app passwords in one place) and again in `validateKosyncCredentials`. Banning additionally sets `enabled = false` on every one of that user's `api_keys` rows.
+
+**Unbanning does not restore them.** The rows stay visible on the devices page so the user can see what was cut off, and an unban must never silently re-authorize a device that may be the reason for the ban. An unbanned user mints a fresh app password and re-pairs.
+
+#### CSRF
+
+Unsafe methods (`POST`/`PUT`/`PATCH`/`DELETE`) that carry a cookie are rejected with 403 when `Sec-Fetch-Site: cross-site` is present, or when an `Origin` header names a host other than the server's own (plus `localhost:3100`/`:3000` outside production). Headerless clients — an app password or OPDS request, which sends no cookie and no browser `Origin` — fall through untouched.
 
 ### Book Ownership
 
-Each book tracks its uploader via `books.created_by` (foreign key to `api_keys.id`). Upload attribution flows through the `upload_registry` table, which deduplicates by file checksum so re-uploads of the same file are ignored.
+Each book tracks its uploader via `books.created_by`, a `NOT NULL` text column referencing `users.id` with `ON DELETE RESTRICT`. Upload attribution flows through the `upload_registry` table, which deduplicates by file checksum so re-uploads of the same file are ignored. Books found by the inbox watcher rather than uploaded through the API are owned by the oldest admin.
 
-`requireBookOwnership(c, db, bookId)` enforces access control on mutations: only the uploading user or an admin can modify or delete a book. Unowned books (legacy data with `created_by = null`) are admin-only.
+`requireBookOwnership(c, db, bookId)` enforces access control on mutations: only the uploading user or an admin can modify or delete a book. Because the column is `NOT NULL` there is no "unowned book" branch, and deleting a user who owns books is refused by the database — `reassignBooksOnRemoveUser` (`lib/user-deletion.ts`) moves them to the acting admin before Better Auth's deletion runs.
 
 ### Data Isolation
 
-Per-user data is scoped by API key ID:
+Per-user data is scoped by user id:
 
-- **Reading progress** — KoSync progress records are tied to the authenticated key
-- **Service credentials** — OPDS and KoSync credentials in `service_credentials` are linked to an `api_key_id`
-- **Stats and streaks** — Dashboard data (reading stats, streak counts) are computed per user
-- **Hardcover sync** — External service credentials and sync state are per user
+- **Reading progress** — `reading_progress.user_id`, unique on `(user_id, document, device)`
+- **App passwords** — `api_keys.reference_id`, one row per paired device or script
+- **KoSync credentials** — one row per user in `kosync_credentials`
+- **Hardcover token and sync state** — `service_credentials` and `hardcover_sync_log`, per user
+- **Stats and streaks** — dashboard reading stats and streak counts are computed per user
 
 Shared data (the book catalog, library organization, metadata) is visible to all authenticated users.
-
-### Auth Caching
-
-The auth middleware uses in-memory `TtlCache` instances (5-minute TTL, max 500 entries) to avoid running bcrypt on every request:
-
-- **`apiKeyCache`** — caches Bearer/session key verification results (keyed by SHA-256 of the raw key)
-- **`opdsCache`** — caches OPDS Basic auth verification results
-
-Any operation that changes key validity or privileges (deletion, role changes, credential rotation) must call `clearAuthCaches()` to prevent stale authorization data.
 
 ### Rate Limiting
 

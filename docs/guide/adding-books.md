@@ -21,7 +21,9 @@ From the Inbox page, click the **Upload** button in the top bar. A modal opens w
 
 ![Upload Books modal](./images/upload-modal.webp)
 
-Only EPUB files are accepted, with a maximum size of 100 MB per file. The upload endpoint writes the file into the inbox directory and records the uploading API key as the file's owner (keyed on the file checksum). It does not start the pipeline itself. The file watcher detects the newly written file and starts processing, exactly as it does for files dropped directly into the inbox folder.
+Only EPUB files are accepted, with a maximum size of 100 MB per file. The upload endpoint writes the file into the inbox directory and records the uploading account as the file's owner (keyed on the file checksum). It does not start the pipeline itself. The file watcher detects the newly written file and starts processing, exactly as it does for files dropped directly into the inbox folder.
+
+Ownership is the one difference between the two routes in. A book uploaded through the web UI belongs to whoever uploaded it. A file dropped straight into the inbox directory has no uploader to attribute it to, so it is owned by the oldest admin account — which is who can then edit or delete it.
 
 ## The Ingestion Pipeline
 
