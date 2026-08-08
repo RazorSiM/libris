@@ -2,6 +2,7 @@ import { count, eq, inArray } from "drizzle-orm";
 import type { MiddlewareHandler } from "hono";
 import { books } from "#db";
 import type { AppVariables } from "../context.js";
+import { sessionHeaders } from "../shared/request-ip.js";
 import { getLogger } from "./logger.js";
 
 const logger = getLogger("user-deletion");
@@ -41,9 +42,46 @@ function hasAdminRole(role: unknown): boolean {
  * (`YOU_CANNOT_REMOVE_YOURSELF`), so they are always someone other than the
  * target.
  *
- * Ordering with `lastAdminMiddleware`: both wrap the same path. This one only
- * needs to run before Better Auth's handler; it does not participate in the
- * last-admin invariant.
+ * ── Why this commits OUTSIDE lastAdminMiddleware's transaction (libris-cyg) ──
+ *
+ * Both middlewares wrap this path, `lastAdminMiddleware` first (pinned by
+ * app.wiring.test.ts). It opens a transaction, takes `SELECT ... FOR UPDATE` on
+ * the lock row and holds it across `next()` — and this middleware, inside that
+ * `next()`, writes through `c.get("db")`, the pooled handle. So the books move
+ * and commit on a different connection while the guard's transaction is still
+ * open, which reads like a hole in the guard's atomicity. It is deliberate, and
+ * threading the guard's `tx` in here is not a stricter version of it but a
+ * broken one:
+ *
+ *   Better Auth's write is on a THIRD connection. `createAuth` hands
+ *   `drizzleAdapter` the pooled `Db` and the adapter keeps it, so its DELETE
+ *   cannot see an uncommitted reassignment. `books.created_by` is ON DELETE
+ *   RESTRICT, so that DELETE checks `books` against its own snapshot, still
+ *   finds the target owning them, and fails with SQLSTATE 23503 — while the
+ *   guard's transaction sits open waiting for a `next()` that can now only
+ *   return an error. tests/user-deletion-atomicity.postgres.test.ts runs
+ *   exactly that and asserts the rejection, so a future "let's make this one
+ *   transaction" refactor meets a red test rather than production.
+ *
+ * The reassignment therefore HAS to be committed before Better Auth's delete
+ * runs. What covers a refusal is split in two, and only the second half is the
+ * compensation below:
+ *
+ *  - The guard's own 409 never reaches here at all. `withLastAdminLock` throws
+ *    before running its action, so `next()` is never called and no book moves
+ *    (user-deletion.test.ts, "never reaches the reassignment when the guard
+ *    refuses").
+ *  - Anything Better Auth itself refuses lands after the reassignment has
+ *    committed, and the compensating update below is what returns the books.
+ *
+ * Residual risk, stated rather than hidden: a process that dies between the
+ * reassignment and the compensation leaves the books with the acting admin.
+ * That is the weakness of compensation-after-commit, and it is not removable in
+ * this topology. Its consequence is bounded to the point of being benign — the
+ * books stay in the shared library owned by an existing admin, which is exactly
+ * the state a SUCCESSFUL removal produces. Nothing is lost, orphaned or hidden;
+ * at worst one row's `created_by` names the wrong housemate after a crash
+ * during a removal that had already failed.
  */
 export const reassignBooksOnRemoveUser: MiddlewareHandler<{ Variables: AppVariables }> = async (
   c,
@@ -70,7 +108,13 @@ export const reassignBooksOnRemoveUser: MiddlewareHandler<{ Variables: AppVariab
 
   // Let Better Auth produce its own unauthorized/forbidden response rather than
   // moving books on behalf of a caller it is about to refuse.
-  const session = await c.get("auth").api.getSession({ headers: c.req.raw.headers });
+  //
+  // sessionHeaders, not c.req.raw.headers: this was a fourth copy of the
+  // libris-59m.42 defect, still live. This middleware runs BEFORE the
+  // /api/auth/* catch-all — the only place app.ts overwrote the private
+  // client-IP header — so an attacker's own `x-libris-client-ip` reached Better
+  // Auth here and became the address its records and its limiter saw.
+  const session = await c.get("auth").api.getSession({ headers: sessionHeaders(c) });
   const actingUserId = session?.user.id;
   if (!actingUserId || !hasAdminRole(session?.user.role)) {
     await next();

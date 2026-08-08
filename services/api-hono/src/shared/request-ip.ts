@@ -171,10 +171,35 @@ export function getCredentialRateLimitKey(identifier: string): string {
   return `credential:${createHash("sha256").update(identifier.trim().toLowerCase()).digest("hex")}`;
 }
 
-/** Better Auth must only see the address resolved from the trusted TCP peer. */
-export function withTrustedClientIp(headers: Headers, clientIp: string): Headers {
-  const trusted = new Headers(headers);
-  trusted.set(INTERNAL_CLIENT_IP_HEADER, clientIp);
+/**
+ * The headers to hand Better Auth for this request — the ONLY supported way.
+ *
+ * lib/auth.ts configures `advanced.ipAddress.ipAddressHeaders` to a single
+ * private header, on the invariant that no Request reaching Better Auth ever
+ * carries a client-supplied value for it. That invariant used to be held by
+ * three independent open-coded copies of "copy the headers, overwrite the
+ * private one", one per call site — and libris-59m.42 was exactly one of those
+ * copies being missing, so `lastAdminMiddleware` handed Better Auth whatever
+ * address the client claimed.
+ *
+ * A helper that takes the Context is what makes the safe form the SHORTEST form
+ * to write: there is nothing to remember to pass, and the raw-headers spelling
+ * is now strictly more typing than the correct one. The private
+ * header-rewriting primitive is deliberately NOT exported, so the compiler —
+ * not a convention — is what stops a fourth copy appearing.
+ * `request-ip.test.ts` pins the remaining call-site rules that types cannot
+ * express.
+ *
+ * The header is DELETED rather than left alone when `clientIp` is unset (a
+ * request stack assembled without `clientIpMiddleware`, which only happens in
+ * tests): absent means Better Auth records no address, whereas passing the
+ * client's own value through would be recording a forged one.
+ */
+export function sessionHeaders(c: AppContext): Headers {
+  const trusted = new Headers(c.req.raw.headers);
+  const clientIp = c.get("clientIp");
+  if (clientIp) trusted.set(INTERNAL_CLIENT_IP_HEADER, clientIp);
+  else trusted.delete(INTERNAL_CLIENT_IP_HEADER);
   return trusted;
 }
 

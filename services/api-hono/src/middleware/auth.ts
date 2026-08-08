@@ -5,7 +5,7 @@ import { getLogger } from "../lib/logger.js";
 import type { AppVariables } from "../context.js";
 import { deniesAppPasswords, resolvePolicy } from "../shared/route-policy.js";
 import { requireKosyncAuth } from "../shared/kosync-auth.js";
-import { withTrustedClientIp } from "../shared/request-ip.js";
+import { sessionHeaders } from "../shared/request-ip.js";
 import { isAdmin } from "../shared/auth.js";
 import { isUserBanned } from "../shared/user-ban.js";
 import { apiKeyFromHeaders } from "../lib/auth.js";
@@ -151,7 +151,7 @@ export const authMiddleware = createMiddleware<{ Variables: AppVariables }>(asyn
     // store outage indistinguishable from a wrong password in the logs, which
     // is the difference between diagnosing an incident and guessing at it.
     const session = await auth.api
-      .getSession({ headers: withTrustedClientIp(c.req.raw.headers, c.get("clientIp")) })
+      .getSession({ headers: sessionHeaders(c) })
       .catch((err: unknown) => {
         if (err instanceof Error && err.name === "APIError") {
           logger.withError(err).debug(`Credential rejected on ${path}`);

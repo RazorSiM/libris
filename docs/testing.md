@@ -322,6 +322,7 @@ Paths relative to `services/api-hono/`. Test DB uses in-memory PGlite with mocke
 | `src/workers/cleanup-orphaned-files.test.ts`        | Scheduled orphan-file cleanup worker                                                                   |
 | `tests/last-admin-lock.postgres.test.ts`            | The last-admin row lock under real contention (needs PostgreSQL)                                       |
 | `tests/admin-subtree-http.postgres.test.ts`         | `/api/auth/admin/*` over HTTP: last-admin 409s and remove-user book reassignment (needs PostgreSQL)    |
+| `tests/user-deletion-atomicity.postgres.test.ts`    | Why remove-user's book reassignment must commit outside the last-admin transaction (needs PostgreSQL)  |
 | `tests/reading-status.test.ts`                      | Per-user `/api/reading-status/counts` and `/{status}` over HTTP                                        |
 | `tests/reading-status-isolation.postgres.test.ts`   | The same two endpoints on the postgres-js driver's result shape (needs PostgreSQL)                     |
 | `tests/redis-increment.test.ts`                     | Atomicity of both rate-limit increments (needs Redis)                                                  |

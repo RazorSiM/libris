@@ -499,6 +499,48 @@ describe.skipIf(!reachable)("the admin subtree over HTTP, against real PostgreSQ
       ]);
     });
 
+    /**
+     * libris-bmg. The same defect as 59m.42, in the copy nobody had looked at.
+     *
+     * `reassignBooksOnRemoveUser` also resolves the acting session before
+     * Better Auth's catch-all runs, and it was still passing
+     * `c.req.raw.headers` — so on the one endpoint that has TWO middlewares
+     * ahead of the handler, one of them had been fixed and the other had not.
+     * The fix is structural: `sessionHeaders(c)` is now the only way to build
+     * these headers, and request-ip.test.ts fails on a call site that does not
+     * use it.
+     */
+    it("never lets a client-supplied private IP header reach Better Auth", async () => {
+      const seen: string[] = [];
+      const { app, auth } = createTestApp({
+        onGetSession: (headers) => seen.push(headers.get(betterAuthClientIpHeader) ?? "<absent>"),
+      });
+      const admin = await createUser(auth, "spoof-remover@example.test", "admin");
+      const housemate = await createUser(auth, "spoof-removed@example.test", "user");
+      await db.insert(schema.books).values({ createdBy: housemate.id, title: "Dune" });
+      seen.length = 0;
+
+      const response = await app.request("/api/auth/admin/remove-user", {
+        method: "POST",
+        headers: {
+          cookie: admin.cookie,
+          "content-type": "application/json",
+          origin: "http://localhost:3000",
+          [betterAuthClientIpHeader]: "203.0.113.9",
+        },
+        body: JSON.stringify({ userId: housemate.id }),
+      });
+
+      expect(response.status).toBe(200);
+      // Both middlewares consult Better Auth on this path; without this the
+      // assertions below could pass by asserting nothing.
+      expect(seen.length).toBeGreaterThanOrEqual(2);
+      // THE ASSERTION THAT FAILS AGAINST THE OLD CODE: reassignBooksOnRemoveUser
+      // handed the spoofed value straight through.
+      expect(seen).not.toContain("203.0.113.9");
+      expect(new Set(seen)).toEqual(new Set(["127.0.0.1"]));
+    });
+
     it("removes the row and invalidates their session and app passwords", async () => {
       const { app, auth } = createTestApp();
       const admin = await createUser(auth, "admin@example.test", "admin");

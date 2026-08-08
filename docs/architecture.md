@@ -258,6 +258,8 @@ Identity and credential are separate things. A **user** (`users`, plus `accounts
 
 Authentication is [Better Auth](https://better-auth.com) (`services/api-hono/src/lib/auth.ts`), mounted on `/api/auth/*`, with the `admin` plugin for roles and user management and the `apiKey` plugin for app passwords. Sessions live in Redis (`secondaryStorage`) and are mirrored into the `sessions` table so the Account tab can list and revoke devices. Better Auth's signed cookie cache is deliberately off, so a revoked session, a role change or a ban takes effect on the very next request.
 
+Redis is read **before** the `sessions` table, which makes the Redis copy authoritative for as long as it exists — deleting a session row behind Better Auth's back is not a revocation. Better Auth's own `deleteUser` only removes session rows, so `createAuth` installs a `user.delete` database hook that clears the matching Redis entries; without it a removed account's sessions kept resolving until their TTL lapsed.
+
 Self-registration is disabled outright (`emailAndPassword.disableSignUp`). Accounts are created in exactly two places:
 
 - `POST /api/setup` — first-run bootstrap, public because nobody can authenticate yet. It is available only while **no credential exists anywhere on the install**, not merely while no user exists: on a deployment upgraded from the pre-Better-Auth schema, the cutover migration created users with no password, and this endpoint attaches the submitted email and password to one of those existing rows rather than adding a duplicate person. It returns 409 once any credential exists.

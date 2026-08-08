@@ -16,6 +16,7 @@ import type { Env } from "../env.js";
 // package.json — which in web's case has no #db mapping.
 import * as schema from "../db/schema.js";
 import { betterAuthClientIpHeader } from "../shared/request-ip.js";
+import { clearUserSessions } from "../services/auth-secondary-storage.js";
 import { isUserBanned, type BannableUser } from "../shared/user-ban.js";
 import { eventSocketRegistry } from "./event-socket-registry.js";
 
@@ -239,6 +240,26 @@ export function createAuth({ db, secondaryStorage, env, secret, baseURL }: Creat
         },
         delete: {
           after: async (user) => {
+            /**
+             * Finish the job `internalAdapter.deleteUser` leaves half-done
+             * (libris-jyp).
+             *
+             * It deletes session ROWS and never the matching secondary-storage
+             * entries, and `findSession` reads secondary storage before
+             * Postgres — so a deleted account's session can still resolve, with
+             * its cached user object attached, until the TTL lapses.
+             * `/admin/remove-user` happens to call `deleteUserSessions` first,
+             * which hides this; nothing makes that ordering a property of
+             * deletion rather than one caller's habit.
+             *
+             * A database hook rather than a call bolted onto the admin route,
+             * for the same reason the rest of this block is: it fires on the
+             * write, so every caller of `deleteUser` is covered — including
+             * ones a Better Auth upgrade adds — and it cannot run for a request
+             * that was refused. Idempotent, so the remove-user path pays one
+             * missing-key read for it.
+             */
+            await clearUserSessions(secondaryStorage, user.id);
             eventSocketRegistry.closeForUser(user.id, "account removed");
           },
         },
