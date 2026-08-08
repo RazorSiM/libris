@@ -152,7 +152,7 @@ describe("hardcover-sync scope", () => {
   });
 });
 
-describe("hardcover-sync edition page count handling (libris-26gy)", () => {
+describe("hardcover-sync edition page count handling", () => {
   it("syncs a read (with finished_at, no page progress) when the edition has null pages", async () => {
     const bookId = await seedFinishedBook({ editionId: 32769766, pageCount: 312 });
     vi.mocked(client.getEditionPages).mockResolvedValue({ ok: true, data: null });

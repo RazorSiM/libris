@@ -1,5 +1,5 @@
 /**
- * Whose Hardcover quota the scheduled install-wide phase spends (libris-nw0).
+ * Whose Hardcover quota the scheduled install-wide phase spends.
  *
  * ISBN matching and the page-count backfill run once per scheduled sync over
  * the whole catalog. The worker used to fund them from `validUsers[0]` — the
@@ -132,7 +132,7 @@ describe("selectGlobalMetadataUser", () => {
   });
 });
 
-describe("scheduled Hardcover sync — whose quota funds the global phase (libris-nw0)", () => {
+describe("scheduled Hardcover sync — whose quota funds the global phase", () => {
   it("spends an admin's token, not the first connected user's", async () => {
     // The member is deliberately the older account and is inserted first, so a
     // worker taking validUsers[0] takes theirs. That is the regression: before

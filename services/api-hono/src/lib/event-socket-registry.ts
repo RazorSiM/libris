@@ -4,7 +4,7 @@ const logger = getLogger("ws");
 
 /**
  * How often an open /api/events socket re-asks the authoritative store whether
- * the credential it was upgraded with is still good (libris-e0p).
+ * the credential it was upgraded with is still good.
  *
  * This is the BACKSTOP, not the primary mechanism — the database hooks in
  * lib/auth.ts close a socket the instant its session row is deleted. Sixty
@@ -40,7 +40,7 @@ export const EVENT_SOCKET_REVOKED_CLOSE_CODE = 4401;
 
 /**
  * Close code sent to a socket whose BINDING is stale while its credential is
- * still perfectly good (libris-abt).
+ * still perfectly good.
  *
  * The subscription's user id and admin flag are baked in at upgrade time and
  * never change afterwards, so when the session behind the socket comes back
@@ -82,7 +82,7 @@ export interface EventSocketBinding {
  * tab is open. Without this index, revoking the session behind one — signing out
  * elsewhere, an admin ban, an admin-set password, plain expiry — left it
  * streaming events to a principal who was no longer authenticated, while every
- * HTTP path for the same person had already stopped answering (libris-59m.6).
+ * HTTP path for the same person had already stopped answering.
  *
  * Linear scan on purpose: MAX_EVENT_SOCKET_CONNECTIONS caps the set at 100 per
  * process, so two maps to keep in agreement would buy nothing and could drift.

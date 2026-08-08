@@ -32,7 +32,7 @@ export function installRouterGuards(router: Router) {
 
   installSessionRecovery(router);
   // The other half of "the server said something about your session": a 4409
-  // on the event socket, which needs no router — only a refresh (libris-cxy).
+  // on the event socket, which needs no router — only a refresh.
   installSessionRescope();
 }
 

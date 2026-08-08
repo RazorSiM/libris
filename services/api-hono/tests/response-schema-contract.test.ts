@@ -1,5 +1,5 @@
 /**
- * A response must be the shape its own OpenAPI schema says it is (libris-dnx).
+ * A response must be the shape its own OpenAPI schema says it is.
  *
  * `PATCH /api/library/{id}` and `POST /api/library/{id}/apply-metadata` both
  * declare `BookUpdatedSchema` and both fulfilled it with a bare

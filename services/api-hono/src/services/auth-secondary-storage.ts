@@ -41,7 +41,7 @@ return value
 `;
 
 /**
- * Counters that survive a Redis outage without failing open (libris-59m.15).
+ * Counters that survive a Redis outage without failing open.
  *
  * Better Auth's `onRequestRateLimit` calls `secondaryStorage.increment` from
  * `onRequest` and does not catch — a rejecting client turned every
@@ -177,7 +177,7 @@ interface ActiveSessionEntry {
  * `{ token, expiresAt }` entry shape written by `createSession`. Verified
  * against better-auth 1.6.25.
  *
- * Needed because `internalAdapter.deleteUser` does NOT do this (libris-jyp). It
+ * Needed because `internalAdapter.deleteUser` does NOT do this. It
  * issues three statements — delete session ROWS, delete account rows, delete the
  * user row — and never touches secondary storage. `findSession` reads secondary
  * storage FIRST and returns whatever it finds without re-checking that the user

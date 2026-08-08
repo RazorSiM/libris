@@ -22,14 +22,14 @@ const logger = getLogger("kosync-auth");
  * guessable as `H(pw)`. The old docstring's "128 bits to search" confused md5's
  * OUTPUT space with the space an offline attacker actually enumerates, which is
  * a human password space. That claim was the load-bearing part of the argument
- * for a bare unsalted sha256, and it was wrong (libris-59m.24).
+ * for a bare unsalted sha256, and it was wrong.
  *
  * WHY NOT JUST USE A PASSWORD HASH
  *
  * The other half of the old rationale is right. This digest is verified on an
  * unauthenticated endpoint that KOReader hits on every progress read and write,
  * so a per-request work factor is a CPU-exhaustion lever anyone can pull for
- * free (libris-7h7.9). bcrypt here taxes the server far more reliably than it
+ * free. bcrypt here taxes the server far more reliably than it
  * taxes an attacker with a GPU.
  *
  * THE SCHEME
@@ -157,7 +157,7 @@ export function verifyKosyncSecret(
  * leaks nothing worth the complexity -- whereas bcrypt-per-attempt was itself a
  * CPU exhaustion vector on an unauthenticated endpoint.
  *
- * The join onto `users` is the ban check (libris-59m.6). This is the one
+ * The join onto `users` is the ban check. This is the one
  * credential path that never touches Better Auth, so nothing else here would
  * ever consult the account's state: before the join, a banned user's KOReader
  * kept reading and writing progress under their id, and `POST

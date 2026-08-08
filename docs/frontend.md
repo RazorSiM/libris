@@ -157,7 +157,7 @@ Reconnection is unbounded (`retries` never gives up, backoff doubles to a 30s ce
 
 Both codes are restated in the plugin (`SESSION_REVOKED_CLOSE_CODE`, `SOCKET_RESCOPE_CLOSE_CODE`) rather than imported from the API package — they are wire constants, and importing would pull server code into the SPA bundle. The two-code contract is documented server-side in [architecture.md](architecture.md#revoking-a-live-event-socket). The terminal flag is per-socket and cleared when the identity changes, so the next person to sign in on the tab gets an ordinary socket.
 
-### What a `4409` does (libris-cxy)
+### What a `4409` does
 
 The socket that comes back is correctly scoped whatever the client does — the server reads the current session at upgrade. The **store** is what goes stale, and the store is what renders: the sidebar's admin navigation, the name in the chrome. `check()` short-circuits on `checked` after the first call, so nothing was ever going to ask again, and a promoted user got an admin-scoped event feed behind a sidebar with no admin links.
 

@@ -43,7 +43,7 @@ export function getRegisteredQueues(): Queue[] {
  *
  * Queue counts are install-wide and cannot be attributed to a person, which is
  * how a non-admin's dashboard ended up reporting how many books *other* people
- * were having processed (libris-44c). Job ids can be attributed: intersect
+ * were having processed. Job ids can be attributed: intersect
  * these with `books.created_by` and the count becomes the caller's own.
  *
  * `bookDetected` is deliberately not scanned — its payload is a file path, and

@@ -40,7 +40,7 @@ const ROUTE_TABLE: RouteRule[] = [
   // any user exists (routes/api/setup.ts).
   { pattern: "/api/setup", match: "exact", policy: "public" },
 
-  // Liveness probe (libris-tnu). "public", not "optional": the point of the
+  // Liveness probe. "public", not "optional": the point of the
   // route is that it performs no I/O, and "optional" would resolve a session —
   // a Redis read, and a Postgres one on a miss — for any caller that happened
   // to present a cookie. It also has to sit above the /api/ catch-all, or a
@@ -127,7 +127,7 @@ const APP_PASSWORD_DENIED: PathRule[] = [
   // one credential rewriting another.
   { pattern: "/api/credentials", match: "prefix" },
 
-  // Admin authority that ROUTE_TABLE cannot express (59m.13).
+  // Admin authority that ROUTE_TABLE cannot express.
   //
   // PATCH /api/settings calls requireAdmin() in its handler, and
   // GET /api/settings/status widens its payload for admins — queue counts,

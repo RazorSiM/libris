@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 /**
- * The app's answer to a re-scoped socket (libris-cxy).
+ * The app's answer to a re-scoped socket.
  *
  * `server-events.test.ts` pins the plugin's half — that a 4409 asks for a
  * refresh, waits for it, and dials exactly once. This pins the other half: that

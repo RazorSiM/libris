@@ -489,7 +489,7 @@ describe("credential isolation", () => {
 // ═══════════════════════════════════════════════════════════════════
 //
 // These blocks used to insert both users' rows themselves, run their own
-// UPDATE, and then assert the other row was untouched (libris-59m.31). No
+// UPDATE, and then assert the other row was untouched. No
 // application code ran, so they held whatever the KoSync routes did — the
 // invariant was really being kept by schema.ts's per-user unique index, and
 // the tests would have stayed green with the routes' user scoping deleted.

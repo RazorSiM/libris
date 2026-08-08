@@ -18,7 +18,7 @@ describe("checkRateLimit", () => {
   afterEach(() => vi.useRealTimers());
 
   it("admits exactly the configured limit and refuses the rest", async () => {
-    // Renamed from "under concurrency" (libris-59m.31), which it never tested:
+    // Renamed from "under concurrency", which it never tested:
     // createMemoryKVStore's increment is a synchronous Map read-modify-write in
     // a single JS turn, so it cannot lose an update however many callers there
     // are, and the production path (createRedisKVStore) was not involved. What
@@ -60,7 +60,7 @@ describe("checkRateLimit", () => {
 });
 
 /**
- * What happens when the store is down (libris-59m.31).
+ * What happens when the store is down.
  *
  * `checkMemoryFallback` is what guards sign-in while Redis is unreachable, and
  * it had no tests at all — including the part that matters most, which is that

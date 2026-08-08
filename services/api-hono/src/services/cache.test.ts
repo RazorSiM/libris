@@ -1,5 +1,5 @@
 /**
- * Route cache invalidation degrades instead of failing the request (libris-hs5).
+ * Route cache invalidation degrades instead of failing the request.
  *
  * The durable write has already committed by the time a route calls
  * `invalidateRouteCache`, so a KV outage must not turn a successful mutation
@@ -258,7 +258,7 @@ describe("a mutating route under a KV outage", () => {
     const auth = createTestAuth(db, TEST_ENV);
     // This test used to drive PATCH /api/settings, which no longer invalidates
     // anything: nothing under /api/settings is cached, so the call was a no-op
-    // and could not exercise the outage path (libris-kej). PATCH
+    // and could not exercise the outage path. PATCH
     // /api/library/{id} does invalidate — /opds and /api/stats — so it is the
     // route that actually puts a KV write in the way of a committed DB write.
     const { userId, rawKey } = await seedAppPassword(auth, db, { name: "Cache Outage" });

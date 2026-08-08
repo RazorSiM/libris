@@ -4,7 +4,7 @@ import { getLogger } from "../lib/logger.js";
 const logger = getLogger("cache");
 
 /**
- * The only path roots `cachedRoute` is mounted under (libris-kej).
+ * The only path roots `cachedRoute` is mounted under.
  *
  * Every cached entry's key is `routes:<pathname>[:<query>][:user:<id>]`, so a
  * prefix can only match something if a `cachedRoute` mount lives under it.
@@ -152,7 +152,7 @@ async function drain(
 /**
  * Invalidate cached responses for routes matching the given path prefixes.
  *
- * **Never rejects** (libris-hs5). Redis is a cache in front of durable
+ * **Never rejects**. Redis is a cache in front of durable
  * Postgres, and by the time a route calls this the durable write has already
  * committed. Propagating the KV error turned a 200 into a 500 while leaving the
  * mutation applied, so every mutating route failed for the duration of a Redis
@@ -181,7 +181,7 @@ async function drain(
  * entries written before the outage began.
  *
  * Prefixes are restricted to {@link CachedRoutePrefix} so a call cannot name a
- * path nothing caches (libris-kej). Over-invalidating is fine — `/opds` clears
+ * path nothing caches. Over-invalidating is fine — `/opds` clears
  * the whole catalogue, which is a handful of small feed entries — but naming a
  * path that holds no entries is not, because it reads as coverage while doing
  * nothing.

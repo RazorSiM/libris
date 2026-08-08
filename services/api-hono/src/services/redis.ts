@@ -12,7 +12,7 @@ let _request: Redis | null = null;
  * retries, but HTTP requests need commands to reject promptly so middleware
  * can fail open, fall back, or fail authentication closed.
  *
- * The connection is opened eagerly (libris-59m.14). `lazyConnect` on its own
+ * The connection is opened eagerly. `lazyConnect` on its own
  * leaves the client in status "wait" until the first command, and ioredis'
  * `sendCommand` forces `writable = false` while `this.stream` is undefined — so
  * with `enableOfflineQueue: false` the very first command after boot was

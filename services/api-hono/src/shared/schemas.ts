@@ -417,7 +417,7 @@ export const CredentialDeletedSchema = z
 // the two, so the response leaked `search_vector` AND left the fields callers
 // genuinely read off it (isbn13, publisher, language, approvedAt) undocumented.
 // The route now declares `BookUpdatedSchema` — the same derived-from-the-table
-// shape the library edit routes use — and returns `bookColumns` (libris-dnx).
+// shape the library edit routes use — and returns `bookColumns`.
 
 export const BookCandidatesResponseSchema = z
   .object({

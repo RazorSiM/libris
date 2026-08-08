@@ -6,7 +6,7 @@ import { bookColumns } from "#db";
 import { BookUpdatedSchema } from "./schemas.js";
 
 /**
- * The response must be the shape the route says it is (libris-dnx).
+ * The response must be the shape the route says it is.
  *
  * `PATCH /api/library/{id}` and `POST /api/library/{id}/apply-metadata` both
  * declare `BookUpdatedSchema` and both fulfilled it with

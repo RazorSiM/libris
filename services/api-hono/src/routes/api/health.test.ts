@@ -1,5 +1,5 @@
 /**
- * Two health endpoints, two costs (libris-tnu).
+ * Two health endpoints, two costs.
  *
  * `/api/health` is the readiness/deep check: it verifies Postgres, Redis and
  * the event bus, and an operator reads its answer during an incident. That is

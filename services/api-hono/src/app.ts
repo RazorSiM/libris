@@ -86,12 +86,12 @@ export function createApp({ services, env }: CreateAppOptions) {
   // through the Better Auth client instead.
   // The whole admin subtree, not a list of endpoint names: /admin/update-user
   // writes the same role and ban fields as /admin/set-role and /admin/ban-user,
-  // and an enumerated list had already missed it (59m.12). The middleware
+  // and an enumerated list had already missed it. The middleware
   // classifies each endpoint itself — see ADMIN_ENDPOINT_EFFECTS.
   app.use("/api/auth/admin/*", lastAdminMiddleware);
   // books.created_by references users with RESTRICT, so removing a user who owns
   // books made Better Auth's delete fail half-way: the accounts row was already
-  // gone and the user row survived (59m.21). This moves their books to the acting
+  // gone and the user row survived. This moves their books to the acting
   // admin first, so the constraint has nothing left to reject. It must run AFTER
   // lastAdminMiddleware, so a refused last-admin removal never moves any books.
   app.use("/api/auth/admin/remove-user", reassignBooksOnRemoveUser);

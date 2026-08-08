@@ -108,7 +108,7 @@ export async function bootstrap(env: Env): Promise<AppServices> {
   }
 
   // Through the singleton rather than built here, so the workers started below
-  // invalidate the SAME store the request path reads (libris-021). In dev and
+  // invalidate the SAME store the request path reads. In dev and
   // test that store is a per-process Map, and two of them would silently
   // disagree.
   cacheStorage = getCacheStorage();

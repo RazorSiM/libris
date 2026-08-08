@@ -9,7 +9,7 @@
  * PGlite, "works in production, 500s in tests" is the shape of the bug. That is
  * not a flake to route around: an endpoint that cannot run on the harness gets
  * no integration coverage at all, which is how `/api/reading-status/counts`
- * stayed untested through a multi-user cutover (libris-6lt).
+ * stayed untested through a multi-user cutover.
  *
  * Three call sites had grown their own private copy of this before it was
  * extracted here (`routes/api/stats.ts`, `lib/progress-linking.ts`, and the

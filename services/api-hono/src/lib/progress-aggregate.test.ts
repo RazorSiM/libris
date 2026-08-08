@@ -18,7 +18,7 @@ describe("buildProgressAggregate", () => {
   it("returns unread when nothing is recorded", () => {
     const result = buildProgressAggregate([], []);
 
-    // A literal, not `emptyProgressAggregate()` (libris-59m.31): comparing the
+    // A literal, not `emptyProgressAggregate()`: comparing the
     // function against the factory it delegates to means both can change
     // together and this test never notices.
     expect(result).toEqual({

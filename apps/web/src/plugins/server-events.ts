@@ -21,12 +21,12 @@ export const serverEventsKey: InjectionKey<ServerEventsApi> = Symbol("libris:ser
  * with a transport-level code.
  *
  * They exist as a pair because the server has two different things to say, and
- * one code could only ever express one of them (libris-abt).
+ * one code could only ever express one of them.
  */
 
 /**
  * The credential behind this socket is gone — a ban, a sign-out from another
- * device, an admin revoking the session, plain expiry (libris-e0p).
+ * device, an admin revoking the session, plain expiry.
  *
  * TERMINAL: every re-dial would be refused at the upgrade, so the only useful
  * response is to take the user to sign in.
@@ -34,7 +34,7 @@ export const serverEventsKey: InjectionKey<ServerEventsApi> = Symbol("libris:ser
 export const SESSION_REVOKED_CLOSE_CODE = 4401;
 
 /**
- * The credential is still good; this socket's scope is stale (libris-abt).
+ * The credential is still good; this socket's scope is stale.
  *
  * The server binds a subscription's user id and admin flag at upgrade and never
  * changes them, so when the session comes back with a different role — or a
@@ -86,7 +86,7 @@ function createServerEventsApi(config: AppConfig): ServerEventsApi {
 
   /**
    * Set between a 4409 — or a 4401 this tab's own rotation caused — and the
-   * refreshed session that answers it (libris-cxy).
+   * refreshed session that answers it.
    *
    * While it is set, @vueuse/core's own reconnect is switched off and THIS
    * module owns the re-dial. That is the whole double-dial fix, and it is not
@@ -245,7 +245,7 @@ function createServerEventsApi(config: AppConfig): ServerEventsApi {
 
   /**
    * Catch the app up with the session the server just re-scoped against, then
-   * re-dial — but only if nobody else is going to (libris-cxy).
+   * re-dial — but only if nobody else is going to.
    *
    * The server rebinds scope at upgrade, so the socket alone was already
    * correct after a 4409. The store was not, and it is what renders: the

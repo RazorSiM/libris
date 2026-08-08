@@ -1,10 +1,10 @@
 /**
- * The one place the app is told its socket's SCOPE went stale (libris-cxy).
+ * The one place the app is told its socket's SCOPE went stale.
  *
  * The sibling of `session-invalidation.ts`, and deliberately shaped like it.
  * That module handles the verdict "this credential is gone"; this one handles
  * "this credential is fine, but what the app believes about it is out of date"
- * — the server's 4409 (libris-abt), sent when the session behind an open event
+ * — the server's 4409, sent when the session behind an open event
  * socket comes back with a different role, or a different person.
  *
  * The server rebinds the new socket's scope by itself: `isAdmin(c)` and the
@@ -73,7 +73,7 @@ export function reportSessionRescoped(): Promise<void> {
  * refresh() rather than check(): check() is a once-per-load cache and would
  * return the stale copy this exists to get past. refresh() goes through
  * beginNewSession(), which is the single funnel for an identity change
- * (libris-59m.25) — it bumps the generation so a session request issued under
+ * — it bumps the generation so a session request issued under
  * the previous identity cannot land on top of this one.
  *
  * Installed from installRouterGuards(), beside installSessionRecovery().

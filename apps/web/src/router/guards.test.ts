@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 /**
- * Router auth guard (libris-5ng.18).
+ * Router auth guard.
  *
  * The guard is four lines, and each one is a decision that is wrong in an
  * interesting way if you get it backwards: sending a signed-out user in a

@@ -31,7 +31,7 @@ describe("createDestinationDirectory", () => {
     await createDestinationDirectory(library, destination);
 
     // `destination` is built with join(library, ...) a few lines up, so
-    // asserting it starts with `library` was a tautology (libris-59m.31). What
+    // asserting it starts with `library` was a tautology. What
     // matters is where the directory RESOLVED to on disk once ".." was
     // sanitized — a real ".." would have escaped into the library's parent.
     expect((await stat(destination)).isDirectory()).toBe(true);

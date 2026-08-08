@@ -16,7 +16,7 @@ const API_PORT = 3000;
 const WEB_PORT = 3100;
 
 /**
- * The production-configuration run (libris-59m.11).
+ * The production-configuration run.
  *
  * Set by the `e2e-prod-config` CI job, which boots the API with
  * `NODE_ENV=production` and no `E2E_TEST`. That combination is refused by

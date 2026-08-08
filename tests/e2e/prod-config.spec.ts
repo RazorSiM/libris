@@ -6,7 +6,7 @@
  * E2E_PROD_CONFIG=1. THE REST OF THE SUITE NEVER SEES IT.
  * ─────────────────────────────────────────────────────────────────────────
  *
- * Why it exists (libris-59m.11): every other E2E run boots the API with
+ * Why it exists: every other E2E run boots the API with
  * `NODE_ENV=development`, because `bootstrap.ts` refuses `E2E_TEST=1` in
  * production and the support routes the suite depends on need that switch. So
  * a 150-test green suite only ever exercised the development side of every

@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 /**
- * A skipped duplicate is not a failed upload (libris-s7t).
+ * A skipped duplicate is not a failed upload.
  *
  * The upload endpoint used to report a file it refused to re-ingest through
  * `errors[]`, so the modal toasted it in the same lane as "unsupported format"

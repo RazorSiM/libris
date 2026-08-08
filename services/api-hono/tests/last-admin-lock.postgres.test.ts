@@ -6,7 +6,7 @@
  * test that was supposed to prove that ran two calls through
  * `Promise.allSettled` against PGlite — one embedded backend on one connection,
  * where transactions are queued and a row lock can only ever block a *different*
- * session. Deleting the `for update` line left it green (libris-59m.31).
+ * session. Deleting the `for update` line left it green.
  *
  * These run against a real PostgreSQL server through `createDb`, the same
  * pooled postgres-js factory production uses, so the two transactions land on

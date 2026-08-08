@@ -295,7 +295,7 @@ export const kosyncRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
       })
       // Only the fields the KoSync response carries. A bare `.returning()`
       // drags `raw_payload` — the whole client request, as jsonb — back out of
-      // the DB on every progress push for nothing (libris-dnx).
+      // the DB on every progress push for nothing.
       .returning({
         document: readingProgress.document,
         progress: readingProgress.progress,
@@ -336,7 +336,7 @@ export const kosyncRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
         : Promise.resolve();
 
     /**
-     * Drop the cached /api/stats once those writes have landed (libris-021).
+     * Drop the cached /api/stats once those writes have landed.
      *
      * Every number on the stats page is derived from the three rows this
      * handler writes — booksFinished and avgDaysToFinish from the aggregate,

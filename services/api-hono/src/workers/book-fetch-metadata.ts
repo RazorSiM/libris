@@ -226,7 +226,7 @@ export async function processBookFetchMetadata(job: Job<BookFetchMetadataPayload
 
   // A book that is already in the catalogue got here through the "refresh
   // metadata" path (skipStatusChange), and the transaction above bumped its
-  // updatedAt — which is the OPDS entry's <updated> element (libris-021).
+  // updatedAt — which is the OPDS entry's <updated> element.
   //
   // Deliberately conditional: every other run of this worker happens to a book
   // in inbox or review, which no cached surface renders, so invalidating

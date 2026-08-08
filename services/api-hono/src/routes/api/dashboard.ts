@@ -184,7 +184,7 @@ export const dashboardRoutes = createOpenApiRouter<{ Variables: AppVariables }>(
 
       // Total bytes held by the shared library.
       //
-      // Scoped to organized books for everyone, admins included (libris-44c).
+      // Scoped to organized books for everyone, admins included.
       // A bare sum over `book_files` included every user's inbox and review
       // uploads, so the home page quietly published the byte volume of other
       // people's pre-approval files. "Organized only" is also the reading that
@@ -209,7 +209,7 @@ export const dashboardRoutes = createOpenApiRouter<{ Variables: AppVariables }>(
 
     const topGenre = (topGenreResult as unknown as { genre: string }[])[0]?.genre;
 
-    // Pipeline and processing counts (libris-44c).
+    // Pipeline and processing counts.
     //
     // Per-queue counts are a property of the install, not of a person: they
     // say how much work is in flight and how much of it has failed, across

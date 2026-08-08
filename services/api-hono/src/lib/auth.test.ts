@@ -162,7 +162,7 @@ describe("createAuth", () => {
   it("keeps the session cookie host-only (no cross-subdomain cookies)", () => {
     const { options } = build();
 
-    // COOKIE_DOMAIN was dropped in the security audit (libris-7h7.56): a Domain
+    // COOKIE_DOMAIN was dropped in the security audit: a Domain
     // attribute is what lets a sibling subdomain shadow or fix the session
     // cookie. Host-only __Secure- denies that. The absence is structural now —
     // Better Auth's advanced config carries no crossSubDomainCookies key.

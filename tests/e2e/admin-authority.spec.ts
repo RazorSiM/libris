@@ -15,7 +15,7 @@
  *
  * and get back the server's filesystem paths, live database and Redis health,
  * queue depths and the arguments of every failed job — then flip settings with
- * a PATCH. (libris-59m.13)
+ * a PATCH.
  *
  * Every test pairs the refusal with the same person's SESSION succeeding. A
  * one-sided version would still pass if the fix had overshot into "nobody may

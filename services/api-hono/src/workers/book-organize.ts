@@ -371,7 +371,7 @@ export async function processBookOrganize(job: Job<BookOrganizePayload>): Promis
     .where(eq(books.id, bookId));
 
   // 6b. Everything the catalogue renders about this book has just changed
-  // underneath whatever the cache is still serving (libris-021).
+  // underneath whatever the cache is still serving.
   //
   // POST /{id}/approve set the status and invalidated on its way out, so the
   // feed an e-reader refreshed a second later already listed this book — with

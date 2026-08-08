@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 /**
- * What has to be re-read after you act on your own account (libris-59m.40).
+ * What has to be re-read after you act on your own account.
  *
  * Both mutations here change something the UI is already rendering, and neither
  * response carries the new value:

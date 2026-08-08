@@ -821,7 +821,7 @@ export const libraryRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
         .where(eq(books.id, id))
         // `bookColumns`, not a bare `.returning()`: the bare form returns every
         // column, `search_vector` included, which BookUpdatedSchema does not
-        // declare and no client can use (libris-dnx). Both sides of the
+        // declare and no client can use. Both sides of the
         // contract now derive from the same list — see the drift test in
         // shared/schemas.test.ts.
         .returning(bookColumns);
@@ -1066,7 +1066,7 @@ export const libraryRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
           .set(bookUpdates)
           .where(eq(books.id, id))
           // Same contract as PATCH /{id} above — BookUpdatedSchema, so
-          // bookColumns (libris-dnx).
+          // bookColumns.
           .returning(bookColumns);
 
         for (const [candidateId, fields] of candidateSelections) {

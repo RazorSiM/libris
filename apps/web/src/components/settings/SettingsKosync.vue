@@ -15,7 +15,7 @@ function copyToClipboard(text: string) {
 // `credentials.kosync` is the only KoSync signal in the status payload. The
 // `settings` block used to carry a second `kosyncConfigured` flag computed from
 // a table the kosync migration emptied, so this card showed "not configured"
-// however many times you saved (libris-59m.18).
+// however many times you saved.
 const { kosyncCredentials } = useSettingsStatusQuery();
 
 const credentialSchema = z.object({
@@ -34,7 +34,7 @@ const { mutateAsync: putCredential, isLoading: kosyncSaving } = usePutCredential
  *
  * KOReader sends md5(password) as the bearer secret and md5 adds no entropy, so
  * whatever the user picks here is what an offline attacker would enumerate if
- * the credential table ever leaked (libris-59m.24). The server pepper is what
+ * the credential table ever leaked. The server pepper is what
  * makes that leak worthless; generating the value removes the human choice
  * underneath it as well, and stops anyone reusing their account password for a
  * credential that lives in plaintext on an e-reader.

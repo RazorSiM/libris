@@ -3,7 +3,7 @@
  *
  * Banning is the only revocation an admin can perform short of deleting the
  * account, and it has to hold on every credential path — cookie session, app
- * password and KoSync alike (libris-59m.6). Three copies of a three-line
+ * password and KoSync alike. Three copies of a three-line
  * predicate is three chances for one of them to drift, so both enforcement
  * points call this.
  *

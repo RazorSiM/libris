@@ -74,7 +74,7 @@ export function createEventsRoutes(upgradeWebSocket: UpgradeWebSocket) {
     upgradeWebSocket(async (c) => {
       /**
        * Refuse anything that is not a WebSocket handshake, before any slot is
-       * reserved (libris-59m.17).
+       * reserved.
        *
        * `upgradeWebSocket` runs this callback on EVERY GET to /api/events —
        * hono/ws is `const events = await createEvents(c); const result = await
@@ -147,7 +147,7 @@ export function createEventsRoutes(upgradeWebSocket: UpgradeWebSocket) {
        *                     unknown or disabled app password).
        *  - undefined      — could not tell. An infrastructure fault (Redis or
        *                     Postgres unreachable) is not a verdict on the
-       *                     credential (libris-59m.15), and severing every open
+       *                     credential, and severing every open
        *                     socket in the install because a cache blinked would
        *                     turn a degraded store into an outage.
        *

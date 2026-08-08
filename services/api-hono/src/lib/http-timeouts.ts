@@ -23,7 +23,7 @@ type HttpTimeoutConfig = Pick<
  *
  * `LIBRIS_HTTP_IDLE_TIMEOUT_MS` used to be applied through a separate
  * `configureHttpIdleTimeout(server, env)` calling `server.setTimeout(ms, socket
- * => socket.destroy())` (libris-59m.28). That is a socket INACTIVITY timeout,
+ * => socket.destroy())`. That is a socket INACTIVITY timeout,
  * armed for the entire life of a non-upgraded connection — including the window
  * in which a handler is running and has not yet written any bytes. It is not an
  * idle-connection timeout, which is precisely why Node changed `server.timeout`

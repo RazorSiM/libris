@@ -18,7 +18,7 @@ const CheckSchema = z.object({
  * Liveness: is this process up and serving?
  *
  * Deliberately separate from the readiness check below, and deliberately
- * I/O-free (libris-tnu). `/api/health` answers the question an operator asks
+ * I/O-free. `/api/health` answers the question an operator asks
  * during an incident — "can the API reach Postgres and Redis?" — and answering
  * it costs a `SELECT 1` plus a Redis `PING` on an unauthenticated path. A
  * container liveness probe asks a much narrower question on a timer, forever,
