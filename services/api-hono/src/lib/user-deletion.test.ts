@@ -181,52 +181,18 @@ beforeEach(async () => {
 });
 
 describe("POST /api/auth/admin/remove-user — target owns books", () => {
-  it("succeeds and reassigns the books to the acting admin", async () => {
-    const { app, auth } = createTestApp();
-    const admin = await createUser(auth, "admin@example.test", "admin");
-    const housemate = await createUser(auth, "housemate@example.test", "user");
-
-    const [book] = await db
-      .insert(schema.books)
-      .values({ createdBy: housemate.id, title: "Dune" })
-      .returning();
-
-    const res = await removeUser(app, admin.cookie, housemate.id);
-    // The assertion that fails against the old code: it was a 500.
-    expect(res.status).toBe(200);
-
-    expect(
-      await db.select().from(schema.users).where(eq(schema.users.id, housemate.id)),
-    ).toHaveLength(0);
-
-    // The library is shared; the books must not leave with the person.
-    const [kept] = await db.select().from(schema.books).where(eq(schema.books.id, book.id));
-    expect(kept.title).toBe("Dune");
-    expect(kept.createdBy).toBe(admin.id);
-  });
-
-  it("does not touch books the acting admin already owned", async () => {
-    const { app, auth } = createTestApp();
-    const admin = await createUser(auth, "admin@example.test", "admin");
-    const housemate = await createUser(auth, "housemate@example.test", "user");
-
-    await db.insert(schema.books).values([
-      { createdBy: admin.id, title: "Admin's own" },
-      { createdBy: housemate.id, title: "Housemate's" },
-    ]);
-
-    expect((await removeUser(app, admin.cookie, housemate.id)).status).toBe(200);
-
-    const owned = await db
-      .select({ title: schema.books.title })
-      .from(schema.books)
-      .where(eq(schema.books.createdBy, admin.id));
-    expect(owned.map((b) => b.title).sort((a, b) => (a ?? "").localeCompare(b ?? ""))).toEqual([
-      "Admin's own",
-      "Housemate's",
-    ]);
-  });
-
+  /**
+   * The two cases that drove the real `createApp` — "succeeds and reassigns the
+   * books" and "does not touch books the acting admin already owned" — moved to
+   * tests/admin-subtree-http.postgres.test.ts (libris-8mx).
+   *
+   * createApp mounts lastAdminMiddleware ahead of reassignBooksOnRemoveUser, and
+   * that middleware now holds a `SELECT ... FOR UPDATE` transaction open for the
+   * whole of `next()` in every environment. Better Auth's write inside `next()`
+   * needs a second connection, and PGlite — one embedded backend behind an
+   * exclusive mutex — has none to give, so the request deadlocks. The two cases
+   * below build a bare Hono app without that middleware, so they still run here.
+   */
   it("half-deletes the account without the middleware, which is the bug", async () => {
     // Pins the mechanism rather than the symptom: Better Auth's deletion is
     // three un-transacted statements, so the accounts row is already gone by
@@ -299,48 +265,5 @@ describe("POST /api/auth/admin/remove-user — target owns books", () => {
       body: { email: "housemate@example.test", password: PASSWORD },
     });
     expect(signedIn.user.id).toBe(housemate.id);
-  });
-});
-
-describe("POST /api/auth/admin/remove-user — target owns no books", () => {
-  it("removes the row and invalidates their session and app passwords", async () => {
-    const { app, auth } = createTestApp();
-    const admin = await createUser(auth, "admin@example.test", "admin");
-    const housemate = await createUser(auth, "housemate@example.test", "user");
-
-    const appPassword = await auth.api.createApiKey({
-      body: { userId: housemate.id, name: "Kobo" },
-    });
-
-    // Both credentials work beforehand, so their failure afterwards means
-    // something.
-    expect(
-      (await app.request("/api/health", { headers: { cookie: housemate.cookie } })).status,
-    ).toBe(200);
-    expect(
-      (await app.request("/api/library", { headers: { "x-api-key": appPassword.key } })).status,
-    ).toBe(200);
-
-    expect((await removeUser(app, admin.cookie, housemate.id)).status).toBe(200);
-
-    expect(
-      await db.select().from(schema.users).where(eq(schema.users.id, housemate.id)),
-    ).toHaveLength(0);
-
-    // The session goes through Better Auth's own deleteUserSessions, which
-    // clears secondary storage too — deleting session ROWS behind its back does
-    // not (lib/auth.integration.test.ts, "secondaryStorage session survives").
-    const session = await auth.api.getSession({
-      headers: new Headers({ cookie: housemate.cookie }),
-    });
-    expect(session).toBeNull();
-
-    // App passwords cascade from users.id at the database level.
-    expect(
-      await db.select().from(schema.apiKeys).where(eq(schema.apiKeys.referenceId, housemate.id)),
-    ).toHaveLength(0);
-    expect(
-      (await app.request("/api/library", { headers: { "x-api-key": appPassword.key } })).status,
-    ).toBe(401);
   });
 });

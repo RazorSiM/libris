@@ -202,6 +202,16 @@ export function reducesAdminAuthority(pluginPath: string, body: AdminActionBody)
  * The lock is a real PostgreSQL row rather than process-local state. That is
  * important even while Libris normally runs one API process: two containers
  * during a rolling restart must enforce the same invariant together.
+ *
+ * There is exactly one code path here, in every environment. There used to be
+ * two: under `NODE_ENV === "test"` the guard ran in a transaction it closed
+ * before calling `next()`, because PGlite is a single embedded backend behind
+ * an exclusive mutex and Better Auth's write — which goes through its own
+ * captured pooled handle, not the transaction below — would have waited on a
+ * transaction only that write could end. So the HTTP-level tests exercised a
+ * guard that did not hold its lock across the write, which is not the thing
+ * that ships (libris-8mx). The coverage those tests provided now runs against
+ * a real server in tests/admin-subtree-http.postgres.test.ts.
  */
 export const lastAdminMiddleware: MiddlewareHandler<{ Variables: AppVariables }> = async (
   c,
@@ -243,16 +253,6 @@ export const lastAdminMiddleware: MiddlewareHandler<{ Variables: AppVariables }>
     .get("auth")
     .api.getSession({ headers: withTrustedClientIp(c.req.raw.headers, c.get("clientIp")) });
   if (!hasAdminRole(session?.user.role)) {
-    await next();
-    return;
-  }
-
-  if (c.get("env").NODE_ENV === "test") {
-    // PGlite has one connection, so re-entering it through Better Auth while a
-    // transaction is open deadlocks. The lock primitive itself is exercised
-    // concurrently below its HTTP tests; this branch only adapts that embedded
-    // test database limitation.
-    await withLastAdminLock(c.get("db"), body.userId, async () => {});
     await next();
     return;
   }
