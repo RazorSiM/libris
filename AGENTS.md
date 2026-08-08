@@ -83,11 +83,17 @@ The collection is generated locally and is not committed to git. Run `vp run bru
 ### Database
 
 ```bash
-cd services/api-hono && vp exec drizzle-kit generate --ignore-conflicts  # Generate migration from schema diff
-vp run -F @libris/api-hono db:studio                                     # Visual DB browser
-vp run -F @libris/api-hono db:reset                                      # Drop + recreate the local DB
-vp run -F @libris/api-hono reset:bullmq                                  # Clear BullMQ queues
+cd services/api-hono && vp exec drizzle-kit generate  # Generate migration from schema diff
+vp run -F @libris/api-hono db:studio                 # Visual DB browser
+vp run -F @libris/api-hono db:reset                  # Drop + recreate the local DB
+vp run -F @libris/api-hono reset:bullmq              # Clear BullMQ queues
 ```
+
+**Never pass `--ignore-conflicts`.** It suppresses drizzle-kit's check that the
+snapshot chain has a single leaf — which is exactly the check that catches two
+migrations generated from the same parent. It hid a branched chain on this
+branch until the snapshots had to be repaired by hand. If `generate` reports a
+conflict, fix the chain; do not silence it.
 
 ### Releasing
 

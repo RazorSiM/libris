@@ -30,7 +30,7 @@ vp run -F @libris/api-hono dev   # API on port 3000
 vp run -F @libris/web dev        # SPA on port 3100
 ```
 
-On first visit, the settings page prompts you to create an API key.
+On first visit you land on `/login`, which offers a first-run setup form because no account exists yet. Enter a name, an email and a password (8+ characters) to create the first admin; it signs you in immediately. Every account after that is created from **Settings → Users** — there is no self-registration.
 
 ## Project Structure
 
@@ -76,7 +76,7 @@ Always run `vp run check` before pushing. CI runs the same checks. `vp run check
 3. The `hc` client on the frontend automatically picks up the new route — no codegen step
 4. Verify the OpenAPI docs at `http://localhost:3000/_docs/scalar`
 
-Authentication is policy-driven. `services/api-hono/src/shared/route-policy.ts` maps request paths to an auth policy (`public`, `optional`, `api-key`, `admin`, `opds`, `kosync`, or `skip`); first match wins and the default for `/api/` routes is `api-key`. Admin-only prefixes (e.g. `/api/jobs`) are marked `admin` in that table. For finer-grained checks inside a handler, use the guards in `services/api-hono/src/shared/auth.ts`: `requireAdmin(c)` for admin-only actions and `requireBookOwnership(...)` to gate book mutations to the uploader or an admin.
+Authentication is policy-driven. `services/api-hono/src/shared/route-policy.ts` maps request paths to an auth policy (`public`, `optional`, `api-key`, `admin`, `opds`, `kosync`, `test`, or `skip`); first match wins and the default for `/api/` routes is `api-key`, which means "authenticated" rather than "app password only". Admin-only prefixes (e.g. `/api/jobs`) are marked `admin` in that table. See [architecture.md § Multi-User Auth](architecture.md#multi-user-auth) for the full table. For finer-grained checks inside a handler, use the guards in `services/api-hono/src/shared/auth.ts`: `requireAdmin(c)` for admin-only actions and `requireBookOwnership(...)` to gate book mutations to the uploader or an admin.
 
 **A handler that gates on `requireAdmin(c)`, or branches on `isAdmin(c)` to widen a response, must also declare its path in `route-policy.ts`** — as policy `admin` in `ROUTE_TABLE`, or in `APP_PASSWORD_DENIED` when the same prefix legitimately serves non-admin callers too (as `/api/settings` does). An in-handler check is invisible to the middleware, so without the declaration the path resolves to plain `api-key` and an app password — the credential that sits in plaintext in a KOReader config on a device that leaves the house — reaches it carrying its owner's full authority. `route-policy.test.ts` scans the routes directory and fails if a new in-handler admin check is left undeclared; the only exemption is `isAdmin(c)` used purely to widen a `WHERE` clause, which must be listed with a reason in that test.
 
@@ -168,18 +168,20 @@ The test suite supports two authenticated sessions: an **admin** and a **regular
 - `authedPage` / `adminPage` — admin session (loaded from `.auth/user.json`)
 - `userPage` — non-admin session (loaded from `.auth/regular-user.json`, created in its own browser context)
 
-**API-level helpers** (from `tests/e2e/helpers/index.ts`):
+**API-level helpers** (from `tests/e2e/helpers/index.ts` and `helpers/accounts.ts`):
 
-- `authHeaders()` — Bearer headers for the admin key
-- `userAuthHeaders()` — Bearer headers for the regular-user key
-- `getAdminKeyId()` — fetches the admin API key ID, useful for seeding `created_by` on books
+- `authHeaders()` / `userAuthHeaders()` — `Authorization: Bearer` headers carrying each account's **app password**
+- `sessionHeaders()` / `userSessionHeaders()` — replayable session cookies
+- `getAdminUserId()` / `getRegularUserId()` — the two `users.id` values, for seeding `created_by` and per-user rows
+
+**Which of the two to reach for.** An app password is scoped: `authMiddleware` refuses it on admin routes and on the `/api/auth/`, `/api/app-passwords`, `/api/credentials` and `/api/settings` prefixes. A spec that drives any of those must use the cookie helpers — a Bearer key gets a 403 with "App passwords cannot be used here", not a 401.
 
 **Gotchas when seeding data:**
 
-- `reading_progress.api_key_id` is NOT NULL. Always include it when inserting rows — use `getAdminKeyId()` or the equivalent user key ID.
-- The unique constraint on `reading_progress` is `(api_key_id, document, device)`, not `(document, device)`. ON CONFLICT clauses must target all three columns.
+- `books.created_by` is NOT NULL and references `users.id` with `ON DELETE RESTRICT`. Always supply a real user id.
+- `reading_progress.user_id` is NOT NULL, and the unique constraint is `(user_id, document, device)`. `ON CONFLICT` clauses must target all three columns.
 
-See `tests/e2e/multi-user-auth.spec.ts` for working examples of ownership checks, credential rotation, and cross-user 403 assertions.
+See `tests/e2e/auth.spec.ts` and `tests/e2e/isolation.spec.ts` for working examples of ownership checks, app-password rotation and revocation, and cross-user 403 assertions.
 
 ## Issue-First Workflow
 
