@@ -1,6 +1,7 @@
 import type { RouteLocationRaw, Router } from "vue-router";
 import { useAuth } from "~/composables/useAuth";
 import { setSessionRecovery } from "~/lib/session-invalidation";
+import { installSessionRescope } from "~/lib/session-rescope";
 
 /** Reachable without a session. Everything else redirects to sign-in. */
 const PUBLIC_PATHS = new Set(["/login"]);
@@ -30,6 +31,9 @@ export function installRouterGuards(router: Router) {
   });
 
   installSessionRecovery(router);
+  // The other half of "the server said something about your session": a 4409
+  // on the event socket, which needs no router — only a refresh (libris-cxy).
+  installSessionRescope();
 }
 
 /**

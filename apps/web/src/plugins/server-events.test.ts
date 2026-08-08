@@ -44,6 +44,7 @@ const {
 } = await import("./server-events");
 const { useAuthStore } = await import("~/stores/auth");
 const { setSessionRecovery } = await import("~/lib/session-invalidation");
+const { setSessionRescope } = await import("~/lib/session-rescope");
 
 /** Run setupServerEvents and hand back whatever it provided. */
 function mount(): ServerEventsApi {
@@ -101,6 +102,7 @@ beforeEach(() => {
   status.value = "CLOSED";
   setDisabled(false);
   setSessionRecovery(null);
+  setSessionRescope(null);
 });
 
 describe("the socket's identity", () => {
@@ -291,11 +293,12 @@ describe("a socket the server refuses", () => {
     expect(SOCKET_RESCOPE_CLOSE_CODE).toBe(4409);
     expect(SESSION_REVOKED_CLOSE_CODE).toBe(4401);
     const { recovery } = await signedIn();
+    open.mockClear();
 
     disconnect(SOCKET_RESCOPE_CLOSE_CODE, "role changed");
     await settle();
 
-    expect(willReconnect()).toBe(true);
+    expect(open).toHaveBeenCalledTimes(1);
     expect(recovery).not.toHaveBeenCalled();
   });
 
@@ -340,6 +343,148 @@ describe("a socket the server refuses", () => {
 
     expect(close).toHaveBeenCalled();
     expect(recovery).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * A re-scope has to catch the STORE up too, and dial exactly once (libris-cxy).
+ *
+ * libris-abt stopped a 4409 from signing the user out, and the socket that came
+ * back was correctly scoped — the server reads the current session at upgrade.
+ * Nothing refreshed the SPA, though, and check() short-circuits on `checked`
+ * for the rest of the page's life, so a promoted user got an admin-scoped feed
+ * behind a sidebar with no admin navigation, and an identity change left the
+ * chrome naming the previous user until the tab was reloaded.
+ *
+ * Adding the refresh introduces the race these tests exist for. @vueuse/core
+ * schedules its own retry synchronously from `ws.onclose`, before any session
+ * request can answer; if the refresh then moves the identity, the watcher
+ * dials as well, and `open()` clears the `explicitlyClosed` flag that would
+ * otherwise have neutered the pending timer. Two sockets for one principal is
+ * what the server's per-principal cap refuses.
+ */
+describe("a socket the server re-scopes", () => {
+  /** Mount signed in as Alice, with a recovery installed and `open` reset. */
+  async function signedInAsAlice() {
+    const recovery = vi.fn(async () => {});
+    setSessionRecovery(recovery);
+    mount();
+    const store = useAuthStore();
+    store.userId = "alice";
+    store.admin = false;
+    await nextTick();
+    open.mockClear();
+    close.mockClear();
+    return { recovery, store };
+  }
+
+  it("refreshes the session behind a promotion", async () => {
+    // THE FAILURE: the socket rebound as an admin and the sidebar did not.
+    // The handler stands in for useAuth().refresh(); what is pinned here is
+    // that the plugin asks for one at all, and waits for it.
+    const { store, recovery } = await signedInAsAlice();
+    setSessionRescope(async () => {
+      store.admin = true;
+    });
+
+    disconnect(SOCKET_RESCOPE_CLOSE_CODE, "role changed");
+    await settle();
+
+    expect(store.admin).toBe(true);
+    expect(recovery).not.toHaveBeenCalled();
+    expect(open).toHaveBeenCalledTimes(1);
+  });
+
+  it("dials once, after the refresh, instead of racing the transport's retry", async () => {
+    // THE DOUBLE-DIAL: @vueuse/core's retry and the plugin's own open() are two
+    // dialers for one close. The predicate has to hand the dial over for
+    // exactly this close, and hand it back afterwards.
+    const { store } = await signedInAsAlice();
+    let refreshed: () => void = () => {};
+    const pending = new Promise<void>((resolve) => {
+      refreshed = resolve;
+    });
+    setSessionRescope(() => pending);
+
+    disconnect(SOCKET_RESCOPE_CLOSE_CODE, "role changed");
+
+    // Nothing may be scheduled behind our back while the session is unknown.
+    expect(willReconnect()).toBe(false);
+    expect(open).not.toHaveBeenCalled();
+
+    store.admin = true;
+    refreshed();
+    await settle();
+
+    expect(open).toHaveBeenCalledTimes(1);
+    // ...and the next close is an ordinary drop again, retried by the transport.
+    expect(willReconnect()).toBe(true);
+  });
+
+  it("leaves the dial to the identity watcher when the person changed", async () => {
+    // The other half of the double-dial: the refresh moves userId, the watcher
+    // closes and re-opens, and a second open() here would be the extra socket.
+    const { store } = await signedInAsAlice();
+    setSessionRescope(async () => {
+      store.userId = "bob";
+    });
+
+    disconnect(SOCKET_RESCOPE_CLOSE_CODE, "identity changed");
+    await settle();
+
+    expect(store.userId).toBe("bob");
+    expect(open).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not dial when the refresh finds no session at all", async () => {
+    // A re-scope is not a revocation, but the refresh answering "nobody" is.
+    // Dialling anyway would be a reconnect loop against a 401.
+    const { store } = await signedInAsAlice();
+    setSessionRescope(async () => {
+      store.userId = null;
+    });
+
+    disconnect(SOCKET_RESCOPE_CLOSE_CODE, "identity changed");
+    await settle();
+
+    expect(open).not.toHaveBeenCalled();
+    expect(close).toHaveBeenCalled();
+  });
+
+  it("does not dial when a revocation overtakes the refresh", async () => {
+    // 4401 is terminal and outranks a re-scope still waiting on its session.
+    const { recovery } = await signedInAsAlice();
+    let refreshed: () => void = () => {};
+    setSessionRescope(
+      () =>
+        new Promise<void>((resolve) => {
+          refreshed = resolve;
+        }),
+    );
+
+    disconnect(SOCKET_RESCOPE_CLOSE_CODE, "role changed");
+    disconnect(SESSION_REVOKED_CLOSE_CODE, "account banned");
+    refreshed();
+    await settle();
+
+    expect(open).not.toHaveBeenCalled();
+    expect(willReconnect()).toBe(false);
+    expect(recovery).toHaveBeenCalledTimes(1);
+  });
+
+  it("asks for one refresh however many closes arrive together", async () => {
+    // Two tabs' worth of sockets, or a re-scope that races a reconnect, must
+    // not turn into a session request per close.
+    const refresh = vi.fn(async () => {});
+    await signedInAsAlice();
+    setSessionRescope(refresh);
+
+    disconnect(SOCKET_RESCOPE_CLOSE_CODE, "role changed");
+    disconnect(SOCKET_RESCOPE_CLOSE_CODE, "role changed");
+    await settle();
+
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(open).toHaveBeenCalledTimes(1);
   });
 });
 

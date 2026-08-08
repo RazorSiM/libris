@@ -9,6 +9,7 @@ import { validateKosyncCredentials } from "../../shared/kosync-auth.js";
 import type { KosyncAuthResponse, KosyncProgressResponse } from "../../types/kosync.js";
 
 import { getLogger } from "../../lib/logger.js";
+import { invalidateRouteCache } from "../../services/cache.js";
 import { upsertReadingAggregate } from "../../lib/reading-aggregate.js";
 import { resolveBookIdForDocument } from "../../lib/progress-linking.js";
 
@@ -305,7 +306,7 @@ export const kosyncRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
       });
 
     // Append to history (fire-and-forget, don't block the response)
-    void db
+    const history = db
       .insert(readingProgressHistory)
       .values({
         bookId,
@@ -325,13 +326,34 @@ export const kosyncRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
     // Update per-(user, book) lifecycle aggregate. Fire-and-forget so a slow
     // aggregate write never blocks the kosync response. COALESCE semantics
     // inside upsertReadingAggregate ensure existing values are never clobbered.
-    if (bookId !== null) {
-      void upsertReadingAggregate(db, userId, bookId, body.document).catch((err) =>
-        logger
-          .withMetadata({ error: String(err), bookId, document: body.document })
-          .warn("Failed to upsert reading aggregate"),
-      );
-    }
+    const aggregate =
+      bookId !== null
+        ? upsertReadingAggregate(db, userId, bookId, body.document).catch((err) =>
+            logger
+              .withMetadata({ error: String(err), bookId, document: body.document })
+              .warn("Failed to upsert reading aggregate"),
+          )
+        : Promise.resolve();
+
+    /**
+     * Drop the cached /api/stats once those writes have landed (libris-021).
+     *
+     * Every number on the stats page is derived from the three rows this
+     * handler writes — booksFinished and avgDaysToFinish from the aggregate,
+     * the heatmap and velocity from the history. A reader who finished a book
+     * on their e-reader saw the old counts for the rest of the entry's 60s TTL
+     * because nothing on this path invalidated anything.
+     *
+     * Chained behind them rather than fired here: an invalidation that runs
+     * before the aggregate write would clear the entry and let the very next
+     * request re-cache the pre-write answer. Still off the response path — a
+     * KOReader sync must not wait on a cache chore, and invalidateRouteCache
+     * never rejects, so nothing here can turn a stored progress into a 500.
+     */
+    const cacheStorage = c.get("cacheStorage");
+    void Promise.all([history, aggregate]).then(() =>
+      invalidateRouteCache(cacheStorage, "/api/stats"),
+    );
 
     return c.json({
       document: result!.document,

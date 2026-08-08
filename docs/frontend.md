@@ -149,15 +149,28 @@ Realtime transport is owned by `src/plugins/server-events.ts`, which runs once a
 
 The socket is **keyed on `userId`**, not opened once per tab. The server binds a subscription's user id and admin flag at upgrade time and never re-checks them, so a socket that outlives its session is a subscription in somebody else's name — and sign-out/sign-in are both SPA navigations, with no page load to reset anything. A watcher closes and re-dials whenever the signed-in identity changes, and no socket is opened at all while signed out.
 
-Reconnection is unbounded (`retries` never gives up, backoff doubles to a 30s ceiling) with **one** exception, decided by the close code the plugin reads in `onDisconnected`:
+Reconnection is unbounded (`retries` never gives up, backoff doubles to a 30s ceiling) with **two** exceptions, decided by the close code the plugin reads in `onDisconnected`:
 
 - **`4401` — terminal.** The credential behind the socket is gone: banned, revoked from another device, expired. The plugin stops re-dialling and reports into `reportSessionInvalidated()`, so the user gets the same sign-out-and-redirect as a 401 from either HTTP transport instead of a page that quietly stops updating. Without this a banned tab re-dialled every 30s for as long as it stayed open and explained nothing.
-- **`4409` — reconnect.** The session is fine; only this socket's scope is stale (the account was promoted or demoted, or the cookie now resolves to somebody else). The server wants a fresh socket it can rebind, not a sign-out. This is handled explicitly rather than by falling through, because "any 4xxx means signed out" is precisely the shortcut that made a promotion log the user out.
+- **`4409` — refresh, then re-dial, and the plugin owns the dial.** The session is fine; only this socket's scope is stale (the account was promoted or demoted, or the cookie now resolves to somebody else). The server wants a fresh socket it can rebind, not a sign-out. This is handled explicitly rather than by falling through, because "any 4xxx means signed out" is precisely the shortcut that made a promotion log the user out. See below.
 - **Everything else — reconnect.** 1006 from a dropped connection, 1001/1012 from a restart or proxy timeout, 1000 from a missed heartbeat. Treating any of these as terminal would sign people out over a flaky network, which is worse than the bug the 4401 handling fixes.
 
 Both codes are restated in the plugin (`SESSION_REVOKED_CLOSE_CODE`, `SOCKET_RESCOPE_CLOSE_CODE`) rather than imported from the API package — they are wire constants, and importing would pull server code into the SPA bundle. The two-code contract is documented server-side in [architecture.md](architecture.md#revoking-a-live-event-socket). The terminal flag is per-socket and cleared when the identity changes, so the next person to sign in on the tab gets an ordinary socket.
 
-A `4409` re-dial goes through the normal backoff, which is **1s** in practice, not 30s: `retries` resets to 0 on every successful open and the re-scope close can only reach a socket that was open, so the delay is always the first step of the curve. The 30s ceiling is only ever reached after six consecutive failed dials.
+### What a `4409` does (libris-cxy)
+
+The socket that comes back is correctly scoped whatever the client does — the server reads the current session at upgrade. The **store** is what goes stale, and the store is what renders: the sidebar's admin navigation, the name in the chrome. `check()` short-circuits on `checked` after the first call, so nothing was ever going to ask again, and a promoted user got an admin-scoped event feed behind a sidebar with no admin links.
+
+So the plugin reports into `reportSessionRescoped()` (`src/lib/session-rescope.ts`), the sibling of `session-invalidation.ts` and installed the same way — `installSessionRescope()` from `installRouterGuards()`. The handler calls `useAuth().refresh()`, which goes through `beginNewSession()`, the single funnel for an identity change.
+
+Adding that refresh introduces a race, and the fix for it is the `rescoping` flag:
+
+- `@vueuse/core` schedules its own retry synchronously from `ws.onclose`, long before a session request can answer.
+- If the refresh then moves `userId`, the identity watcher answers with `close()` + `open()` — and `open()` clears the `explicitlyClosed` flag that would otherwise have neutered the pending timer. The timer fires anyway and builds a **second** socket, orphaning the first, which stays open server-side until it notices. Two sockets for one principal is exactly what `eventSocketConnectionGuard` caps.
+
+`retries: () => !revoked && !rescoping` therefore hands the dial to the plugin for this one close, and the plugin dials **once**, after the refresh, and only if it is the one that should: not when the identity moved (the watcher's dial covers it), not when the refresh found no session, and not when a `4401` overtook it. A re-scope re-dial is consequently immediate rather than waiting out the 1s first backoff step — the delay curve still governs ordinary transport drops, where `retries` resets to 0 on every successful open and the 30s ceiling is only reached after six consecutive failed dials.
+
+Still uncovered, and deliberately: the Pinia Colada query cache is not purged on an identity change detected this way, and an identity swap that never touches the socket (a second tab signing in as someone else) leaves the first tab's HTTP requests succeeding as the new user with no signal at all. Only the socket-triggered case is handled here.
 
 ## Keyboard Shortcuts
 

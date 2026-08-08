@@ -4,6 +4,7 @@ import { storeToRefs } from "pinia";
 import { useWebSocket } from "@vueuse/core";
 import { useAuthStore } from "~/stores/auth";
 import { reportSessionInvalidated } from "~/lib/session-invalidation";
+import { reportSessionRescoped } from "~/lib/session-rescope";
 import type { ServerEvent, EventHandler, ServerEventsApi } from "~/types/server-events";
 import type { AppConfig } from "~/composables/useLibrisConfig";
 
@@ -76,6 +77,41 @@ function createServerEventsApi(config: AppConfig): ServerEventsApi {
    */
   let revoked = false;
 
+  /**
+   * Set between a 4409 and the refreshed session that answers it (libris-cxy).
+   *
+   * While it is set, @vueuse/core's own reconnect is switched off and THIS
+   * module owns the re-dial. That is the whole double-dial fix, and it is not
+   * an optimisation: the two dialers would race.
+   *
+   * @vueuse/core schedules its retry from `ws.onclose` — synchronously, before
+   * anything here can await a session. A re-scope that turns out to be an
+   * IDENTITY change also moves the store's userId, and the identity watcher
+   * below answers that with close() + open(). `close()` sets useWebSocket's
+   * `explicitlyClosed`, which would make the pending retry a no-op — but
+   * `open()` clears it again, so a retry timer that fires after the watcher
+   * builds a SECOND socket and orphans the first, which stays open on the
+   * server until it notices. Two live sockets for one principal is exactly what
+   * eventSocketConnectionGuard caps, so the third re-scope in a session would
+   * be refused with a 429 rather than reconnecting.
+   *
+   * Taking the dial rather than trying to cancel theirs is also the more
+   * correct reading: a re-scope's whole point is that the NEXT socket must be
+   * upgraded with the new scope, so it should not be dialled before the app
+   * knows what that scope is — and if the refresh finds no session, it should
+   * not be dialled at all.
+   */
+  let rescoping = false;
+
+  /**
+   * The identity this tab's socket belongs to.
+   *
+   * Read in two places: the watcher at the bottom, which re-keys the socket
+   * when it changes, and the re-scope handler, which has to tell an identity
+   * change (the watcher's dial) from a role change (its own).
+   */
+  const { userId } = storeToRefs(useAuthStore());
+
   const {
     status: socketStatus,
     open,
@@ -88,12 +124,13 @@ function createServerEventsApi(config: AppConfig): ServerEventsApi {
     immediate: false,
     autoClose: true,
     autoReconnect: {
-      // Still "forever", with one exception carved out. A predicate rather than
-      // `retries: -1` because the number form has no way to say "not this one":
-      // a banned user's tab re-dialled every 30s for the life of the tab, and
-      // learned it was signed out only if some unrelated request happened to
-      // 401.
-      retries: () => !revoked,
+      // Still "forever", with two exceptions carved out. A predicate rather
+      // than `retries: -1` because the number form has no way to say "not this
+      // one": a banned user's tab re-dialled every 30s for the life of the tab,
+      // and learned it was signed out only if some unrelated request happened
+      // to 401. `rescoping` is the second exception — that dial is ours, see
+      // the flag's declaration.
+      retries: () => !revoked && !rescoping,
       delay: (retries: number) => Math.min(1000 * 2 ** (retries - 1), 30000),
     },
     heartbeat: {
@@ -131,13 +168,60 @@ function createServerEventsApi(config: AppConfig): ServerEventsApi {
       // Spelled out rather than left to fall through the check below: the two
       // application codes are one contract, and reading only half of it — "any
       // 4xxx means signed out" — is exactly how a promotion became a sign-out.
-      // A re-scope is an ordinary reconnect; the server rebinds on the way in.
-      if (event.code === SOCKET_RESCOPE_CLOSE_CODE) return;
+      if (event.code === SOCKET_RESCOPE_CLOSE_CODE) {
+        // One resolution at a time. A second 4409 landing before the first is
+        // answered is covered by the dial the first will make, and starting
+        // another would produce the extra socket by a different route.
+        if (rescoping) return;
+        // Set BEFORE anything async: @vueuse/core reads the retries predicate
+        // on the next line of its own onclose, so this is the only moment at
+        // which the dial can be claimed.
+        rescoping = true;
+        void resyncThenRedial();
+        return;
+      }
       if (event.code !== SESSION_REVOKED_CLOSE_CODE) return;
       revoked = true;
       reportSessionInvalidated();
     },
   });
+
+  /**
+   * Catch the app up with the session the server just re-scoped against, then
+   * re-dial — but only if nobody else is going to (libris-cxy).
+   *
+   * The server rebinds scope at upgrade, so the socket alone was already
+   * correct after a 4409. The store was not, and it is what renders: the
+   * sidebar's admin navigation, and the name in the chrome.
+   *
+   * Exactly one dial happens per re-scope, and which code performs it depends
+   * on what the refresh found:
+   *
+   *  - the identity changed — the store's userId moved, so the watcher below
+   *    is already closing and re-opening. Dialling here too is the double-dial.
+   *  - the role changed, or nothing the store can see did — the userId is
+   *    unchanged, no watcher fires, and this is the only thing left to dial.
+   *  - there is no session any more — the refresh found nobody. Do not dial;
+   *    the identity watcher has already closed the socket, and the guard sends
+   *    the user to sign in on their next navigation.
+   *  - a 4401 arrived while the refresh was in flight — that is terminal and
+   *    outranks a re-scope, so leave the socket down.
+   */
+  async function resyncThenRedial(): Promise<void> {
+    const before = userId.value;
+    try {
+      await reportSessionRescoped();
+    } finally {
+      // Cleared unconditionally: leaving it set would suppress the reconnect
+      // for an ordinary dropped connection on the next socket.
+      rescoping = false;
+    }
+
+    if (revoked) return;
+    if (!userId.value) return;
+    if (userId.value !== before) return;
+    open();
+  }
 
   /**
    * One socket per identity, not one per tab.
@@ -154,8 +238,6 @@ function createServerEventsApi(config: AppConfig): ServerEventsApi {
    * that any route to a new identity re-dials, including ones that never went
    * through login() at all.
    */
-  const { userId } = storeToRefs(useAuthStore());
-
   watch(
     userId,
     (id) => {
@@ -165,6 +247,12 @@ function createServerEventsApi(config: AppConfig): ServerEventsApi {
       // not this one's problem. Safe to clear here — Vue flushes watchers in a
       // microtask, long after the synchronous retry decision that reads it.
       revoked = false;
+      // Handing the dial back to @vueuse/core as well. This watcher IS the
+      // re-scope's dial when the identity moved, so an in-flight
+      // resyncThenRedial() is done deciding; leaving the flag set would mean a
+      // socket that dropped for an ordinary transport reason before that
+      // decision landed never retried.
+      rescoping = false;
       if (id) open();
     },
     { immediate: true },

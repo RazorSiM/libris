@@ -30,6 +30,7 @@ import { setWorkers } from "./services/workers.js";
 import { getDb } from "./services/db.js";
 import { getSharedRedis, getRequestRedis, closeSharedRedis } from "./services/redis.js";
 import { createRedisKVStore, createMemoryKVStore, type KVStore } from "./services/kv-store.js";
+import { getCacheStorage } from "./services/cache-storage.js";
 import {
   createMemorySecondaryStorage,
   createRedisSecondaryStorage,
@@ -98,15 +99,19 @@ export async function bootstrap(env: Env): Promise<AppServices> {
 
   if (isDev || isTest) {
     redisStorage = createMemoryKVStore();
-    cacheStorage = createMemoryKVStore();
     authStorage = createMemorySecondaryStorage();
   } else {
     const requestRedis = getRequestRedis();
     redisStorage = createRedisKVStore(requestRedis, "kv");
-    cacheStorage = createRedisKVStore(requestRedis, "cache");
     authStorage = createRedisSecondaryStorage(requestRedis, "ba");
     logger.info("Redis request-path stores mounted (bounded connection).");
   }
+
+  // Through the singleton rather than built here, so the workers started below
+  // invalidate the SAME store the request path reads (libris-021). In dev and
+  // test that store is a per-process Map, and two of them would silently
+  // disagree.
+  cacheStorage = getCacheStorage();
 
   const auth = createAuth({
     db,
