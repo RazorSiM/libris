@@ -298,6 +298,7 @@ Paths relative to `services/api-hono/`. Test DB uses in-memory PGlite with mocke
 | `src/lib/socket-guard.test.ts`                      | WebSocket connection auth guard                                                   |
 | `src/middleware/rate-limit.test.ts`                 | Per-IP tiered rate limiting (auth / keyCreation / general)                        |
 | `src/routes/api/books.test.ts`                      | `/api/books/*` approve, delete, candidates (integration)                          |
+| `src/routes/api/events.test.ts`                     | `/api/events` upgrade guard, connection cap, and closing sockets on revocation    |
 | `src/routes/api/hardcover.test.ts`                  | `/api/hardcover/*` search, sync status, trigger, log (integration)                |
 | `src/routes/api/inbox.test.ts`                      | `/api/inbox/*` list, detail, approve, delete (integration)                        |
 | `src/routes/api/library.test.ts`                    | `/api/library/*` list, detail, covers, downloads (integration)                    |

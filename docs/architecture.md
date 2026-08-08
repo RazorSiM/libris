@@ -299,6 +299,16 @@ Banning is the admin plugin's, applied from Settings → Users, but Better Auth 
 
 **Unbanning does not restore them.** The rows stay visible on the devices page so the user can see what was cut off, and an unban must never silently re-authorize a device that may be the reason for the ban. An unbanned user mints a fresh app password and re-pairs.
 
+#### Revoking a live event socket
+
+Every HTTP path re-checks the credential on each request. A WebSocket does not: `/api/events` authenticates once, at upgrade, and then stays open for as long as the tab does. Revocation therefore has to reach the socket separately, and it does so two ways at once. `lib/event-socket-registry.ts` holds every open socket, indexed by session token and user id.
+
+**Eagerly, from database hooks.** `createAuth`'s `databaseHooks` close a socket when Better Auth deletes its `sessions` row (`session.delete`), when a user row is written with `banned` set (`user.update`), and when an account is removed (`user.delete`). These are hooks on the WRITE, not on the endpoint, which matters twice over: a dozen endpoints across the core and the `admin` plugin revoke sessions and all of them funnel through `internalAdapter.deleteSession` / `deleteUserSessions` / `updateUser` / `deleteUser`, so there is no list of endpoints to keep current — and a hook that fires on the write cannot fire for a call that was refused.
+
+**As a backstop, on a timer.** Each open socket re-resolves its own credential every 60 seconds and closes with WebSocket code `4401` if the session is gone, the account is banned, the identity changed, or the role changed. This is not redundancy: it is the only thing that covers a session that merely _expired_ (nothing deletes it, so no hook fires), an app password that was disabled (those sockets have no session row to fire on), and a revocation served by a different process. A store outage is deliberately **not** treated as revocation — an unreachable Redis or Postgres leaves the socket open rather than severing every stream on the install.
+
+Closing tears the event-bus subscription down before the transport, so "closed" means "receives nothing" rather than "will stop receiving shortly" — `ws.close()` is a handshake, and the socket stays writable until the peer answers. The connection slot is returned to the per-principal cap at the same time.
+
 #### CSRF
 
 Unsafe methods (`POST`/`PUT`/`PATCH`/`DELETE`) that carry a cookie are rejected with 403 when `Sec-Fetch-Site: cross-site` is present, or when an `Origin` header names a host other than the server's own (plus `localhost:3100`/`:3000` outside production). Headerless clients — an app password or OPDS request, which sends no cookie and no browser `Origin` — fall through untouched.
