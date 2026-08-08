@@ -40,6 +40,14 @@ const ROUTE_TABLE: RouteRule[] = [
   // any user exists (routes/api/setup.ts).
   { pattern: "/api/setup", match: "exact", policy: "public" },
 
+  // Liveness probe (libris-tnu). "public", not "optional": the point of the
+  // route is that it performs no I/O, and "optional" would resolve a session —
+  // a Redis read, and a Postgres one on a miss — for any caller that happened
+  // to present a cookie. It also has to sit above the /api/ catch-all, or a
+  // probe path one segment deeper than /api/health falls through to "api-key"
+  // and answers 401 to the orchestrator.
+  { pattern: "/api/health/live", match: "exact", policy: "public" },
+
   // Optional auth (enriched response if authed)
   { pattern: "/api/health", match: "exact", policy: "optional" },
 

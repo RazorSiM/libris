@@ -91,7 +91,7 @@ Rate limits are configurable through the validated env schema. The defaults are 
 
 There are three tiers, each with a request limit and a window anchored to the client's first request:
 
-- `general` — applies to every path except Better Auth's own `/api/auth/*`, which Better Auth limits itself. `/api/health` is included: it is unauthenticated and costs a database round-trip per call, and the fail-open described below keeps it answerable when Redis is down. Defaults to 600 requests per 60 seconds.
+- `general` — applies to every path except Better Auth's own `/api/auth/*`, which Better Auth limits itself. `/api/health` is included: it is unauthenticated and costs a database round-trip per call, and the fail-open described below keeps it answerable when Redis is down. `/api/health/live` is included too, but costs nothing to serve — see _Health Endpoints_ below for which one to probe. Defaults to 600 requests per 60 seconds.
 - `auth` — applies to `/kosync/users/auth`, the one credential check outside Better Auth's reach, since KOReader speaks its own protocol on its own prefix. It also stacks on top of the two credential-creation routes below. Defaults to 30 requests per 60 seconds.
 - `keyCreation` — applies to `POST /api/setup` and `POST /api/app-passwords`. Each costs a password hash, and `/api/setup` is public by necessity — nobody can authenticate on a fresh install — so it carries the strictest budget in the app. Defaults to 30 requests per 3600 seconds (1 hour).
 
@@ -143,6 +143,59 @@ The `OTEL_*` variables are standard OpenTelemetry SDK environment variables. The
 | `OTEL_TRACES_EXPORTER`        | Trace exporter. SDK default `otlp`. Set to `none` to disable traces.                                                 |
 | `OTEL_LOGS_EXPORTER`          | Log exporter. SDK default `otlp`. Set to `none` to disable OTel log export (stdout Pino output is unaffected).       |
 | `OTEL_METRICS_EXPORTER`       | Metrics exporter. SDK default `otlp`. Set to `none` to disable metrics.                                              |
+
+## Health Endpoints
+
+There are two, and they answer different questions. Pointing an orchestrator at
+the wrong one is the difference between a container that recovers and one that
+restart-loops through an outage it cannot fix.
+
+| Endpoint           | Question                                    | Cost                                   | Auth                          | Probe with it for |
+| ------------------ | ------------------------------------------- | -------------------------------------- | ----------------------------- | ----------------- |
+| `/api/health/live` | Is the process up and serving HTTP?         | None — no database, Redis or event bus | None                          | **Liveness**      |
+| `/api/health`      | Can the process reach all its dependencies? | One `SELECT 1` and one Redis `PING`    | Optional (detail when authed) | **Readiness**     |
+
+**Use `/api/health/live` for container liveness probes** (Docker `HEALTHCHECK`,
+Kubernetes `livenessProbe`, Compose `healthcheck`). It answers `200 {"status":
+"ok", "service": "api"}` the moment the HTTP server is accepting connections and
+performs no I/O at all, so probing it every few seconds costs nothing and it
+never fails because Postgres or Redis is down. That last property is the point:
+a liveness probe on the deep check kills and restarts the container during a
+database outage, which cannot help and removes the one process that would have
+served cached reads and reported the failure.
+
+**Use `/api/health` for readiness, uptime monitoring and incident triage.** It
+verifies the database, Redis and the event bus, answers `503` when any of them
+is degraded, and returns per-dependency status with latencies to an
+authenticated caller:
+
+```console
+$ curl -s localhost:3000/api/health
+{"status":"ok","service":"api"}
+
+$ curl -s -H "Authorization: Bearer $APP_PASSWORD" localhost:3000/api/health
+{"status":"ok","service":"api","checks":{"database":{"status":"ok","latencyMs":1},"redis":{"status":"ok","latencyMs":1},"eventBus":{"status":"ok"}}}
+```
+
+Kubernetes:
+
+```yaml
+livenessProbe:
+  httpGet: { path: /api/health/live, port: 3000 }
+  periodSeconds: 10
+readinessProbe:
+  httpGet: { path: /api/health, port: 3000 }
+  periodSeconds: 30
+```
+
+Both paths are in the `general` rate-limit tier (600 requests per 60 seconds by
+default, per client IP). At one probe every 10 s that is nowhere near the
+budget, but if you point several monitors at the same address through a proxy
+without `TRUST_PROXY_HEADERS`, they share one bucket. A rejected probe is
+logged: probes that succeed are logged at `debug` (silent under the default
+`LOG_LEVEL=info`), and anything else — a `429`, a `503`, a `500` — is logged at
+`info` with its status code, so a health check that has started failing is
+visible in the access log rather than invisible.
 
 ## Volumes
 
@@ -210,6 +263,21 @@ services:
       - library:/data/library
     ports:
       - "3000:3000"
+    # Liveness, not readiness — see Health Endpoints above. The image is
+    # node:*-slim and ships neither curl nor wget, so the probe runs through
+    # node itself, which is always there.
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000/api/health/live').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
 
 volumes:
   db_data:
