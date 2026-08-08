@@ -27,7 +27,8 @@ The SPA authenticates directly with the Hono API via httpOnly cookies.
 1. User enters API key on `/settings` (or runs first-time setup)
 2. The SPA calls the Hono API's `/api/auth/login` endpoint, which validates the key and sets an httpOnly auth cookie
 3. All subsequent API requests include the cookie automatically — the Hono API reads it to authenticate
-4. A `router.beforeEach` guard (`src/router/guards.ts`) checks auth state on every navigation and redirects unauthenticated users to `/settings`
+4. A `router.beforeEach` guard (`src/router/guards.ts`) checks auth state on every navigation and redirects unauthenticated users to `/login`, carrying the intended destination as `?redirect=`
+5. A session that dies server-side (a ban, a revoke from another device, expiry) is caught by the recovery handler — see [Recovering from a dead session](#recovering-from-a-dead-session) below
 
 ## Layout
 
@@ -103,9 +104,35 @@ Detail pages additionally use route-level data loaders defined inline via `defin
 
 ## Auth
 
-**`useAuth()` composable** (backed by a Pinia `auth` store in `src/stores/auth.ts`): Exposes `isAuthenticated`, `isAdmin`, `userLabel`, `apiKeyId` (computed) and `checked` refs. Methods: `check()`, `login(apiKey)`, `logout()`, `setAuthenticated(value)`. Auth state is checked via the Hono API `/api/auth/session` endpoint using the typed RPC client. Login sets an httpOnly cookie directly on the API. On both successful login and logout, `clearFrontendQueryCache()` cancels and removes all Pinia Colada cached queries (via `useQueryCache()` from `@pinia/colada`) to prevent stale data from one user being visible to another after switching accounts.
+**`useAuth()` composable** (backed by a Pinia `auth` store in `src/stores/auth.ts`): Exposes `isAuthenticated`, `isAdmin`, `userLabel`, `userName`, `userEmail`, `userId` (computed) and `checked` refs. Methods: `check()`, `login(email, password)`, `logout()`, `refresh()`, `setAuthenticated(value)`. Auth goes through the Better Auth browser client (`src/lib/auth-client.ts`), which sets an httpOnly cookie. On both successful login and logout, `clearFrontendQueryCache()` cancels and removes all Pinia Colada cached queries (via `useQueryCache()` from `@pinia/colada`) to prevent stale data from one user being visible to another after switching accounts.
 
-Realtime transport is owned by `src/plugins/server-events.ts`, which runs once at app bootstrap in `main.ts` and opens a single `/api/events` WebSocket per browser tab (the WebSocket base URL comes from the runtime `wsBaseUrl` config, see `useLibrisConfig()`). The bus is exposed via `app.provide(serverEventsKey, api)`; `useServerEvents()` injects it and is just a subscriber wrapper that unregisters listeners when the calling component scope is disposed.
+### One source of truth for who is signed in
+
+`useAuth()` is a plain function with no memoisation, and it is called separately from the router guard, `pages/settings.vue`, several settings components and the mutation composables. Everything that has to agree **across** those call sites therefore lives in the store, not in the closure:
+
+| Store field  | What it is for                                                                                                                                                                                                                                                |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `generation` | Bumped by anything that changes _who_ is signed in. A session request already on the wire compares the generation it was issued under and discards itself if it no longer matches, so a sign-out cannot be overwritten by a `check()` that started before it. |
+| `inFlight`   | The single session request in flight, shared so that N components mounting at once produce one `getSession()`.                                                                                                                                                |
+
+`login()`, `logout()` and `refresh()` all go through `beginNewSession()`, which bumps `generation` and drops `inFlight`.
+
+### Recovering from a dead session
+
+A session can die while a tab sits open — an admin bans you, another device revokes your session, an admin sets your password, or it simply expires. `check()` short-circuits on `checked` for the rest of the page's life, so nothing would notice.
+
+`src/lib/session-invalidation.ts` is the single point that learns about it. Both transports report into it — the `fetch` wrapper in `useApiClient()` and `authClient`'s `fetchOptions.onError` — and `installSessionRecovery()` in `src/router/guards.ts` installs the one handler: `logout()` (which clears the store _and_ the query cache) followed by `router.replace('/login?redirect=…')`.
+
+Two exclusions keep it from firing wrongly:
+
+- 401s from `/sign-in`, `/sign-up`, `/sign-out` and `/get-session` are ignored. Better Auth answers a wrong password on sign-in with 401, and treating that as a dead session would sign out a user who mistyped.
+- The handler no-ops when the store already says nobody is signed in, and does not navigate when the user is already on `/login`.
+
+Recoveries do not stack: a page that fires six queries and collects six 401s signs out and redirects once.
+
+Realtime transport is owned by `src/plugins/server-events.ts`, which runs once at app bootstrap in `main.ts` and provides the bus via `app.provide(serverEventsKey, api)`; `useServerEvents()` injects it and is just a subscriber wrapper that unregisters listeners when the calling component scope is disposed. The WebSocket base URL comes from the runtime `wsBaseUrl` config (see `useLibrisConfig()`).
+
+The socket is **keyed on `userId`**, not opened once per tab. The server binds a subscription's user id and admin flag at upgrade time and never re-checks them, so a socket that outlives its session is a subscription in somebody else's name — and sign-out/sign-in are both SPA navigations, with no page load to reset anything. A watcher closes and re-dials whenever the signed-in identity changes, and no socket is opened at all while signed out.
 
 ## Keyboard Shortcuts
 
