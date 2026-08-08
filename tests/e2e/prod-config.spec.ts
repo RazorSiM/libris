@@ -28,14 +28,41 @@
  *
  * There are no support routes here, so this drives everything the way a person
  * would: first-run setup, sign out, sign in, replay the cookie.
+ *
+ * ─────────────────────────────────────────────────────────────────────────
+ * SIGN-IN BUDGET: THIS FILE MAY PERFORM AT MOST TWO SIGN-INS. DO NOT ADD MORE.
+ * ─────────────────────────────────────────────────────────────────────────
+ *
+ * Better Auth's own rate limiter is ON here, and only here. Every other E2E
+ * harness sets `E2E_TEST=1`, which turns it off (`rateLimit.enabled` in
+ * lib/auth.ts); this job deliberately does not, because the limiter running is
+ * part of the production configuration under test. Its default rule for
+ * `/sign-in*` is **3 requests per 10 seconds per IP** (better-auth
+ * `getDefaultSpecialRules()`), and every test in this file shares one IP.
+ *
+ * A 429 does not surface as "rate limited". The SPA can only render it as a
+ * generic failed login, so the run fails inside `signInThroughUi` with
+ * `expect(page).not.toHaveURL(/\/login/)` timing out — pointing at the origin
+ * check, which is fine, rather than at the limiter, which is the actual cause.
+ * That is exactly how the first version of this file failed.
+ *
+ * The budget is kept by sharing ONE browser context across the whole serial
+ * block instead of letting each test sign in for itself:
+ *
+ *   1. first-run setup            — the SPA signs the new admin in  (sign-in 1)
+ *   2. sign-out + cookie replay   — reuses the session from (1)     (none)
+ *   3. sign back in               — the point of the test           (sign-in 2)
+ *   4. support routes absent      — no browser at all               (none)
+ *
+ * If you add a case that needs an authenticated browser, reuse `page` rather
+ * than calling `signInThroughUi` again.
  */
 
+import type { BrowserContext, Page } from "@playwright/test";
 import { test, expect, request as playwrightRequest } from "@playwright/test";
 import { ADMIN } from "./helpers/accounts.js";
 import { API_BASE, getSql } from "./helpers";
 import { signInThroughUi, signOutThroughUi } from "./helpers/sign-in.js";
-
-test.use({ storageState: { cookies: [], origins: [] } });
 
 async function anonymousApi() {
   return await playwrightRequest.newContext({ storageState: { cookies: [], origins: [] } });
@@ -69,9 +96,36 @@ async function emptyTheInstall(): Promise<void> {
 test.describe.serial("production configuration", () => {
   test.slow();
 
-  test.beforeAll(emptyTheInstall);
+  // No retries, unlike the rest of the suite (playwright.config.ts sets 2 in
+  // CI). A retry re-runs the whole serial block, so its two sign-ins land on
+  // top of the previous attempt's — four inside the limiter's 10-second window.
+  // The retry then 429s and reports "cannot sign in", which is indistinguishable
+  // from the production regression this job exists to detect. A false P0 alarm
+  // is worse than no retry: these four tests are deterministic, run against a
+  // freshly emptied database, and finish in under ten seconds.
+  test.describe.configure({ retries: 0 });
 
-  test("an empty production install can be set up and signed into", async ({ page }) => {
+  // One context, one page, for the whole block — see the sign-in budget above.
+  // browser.newContext() does NOT inherit the project's `use` options, so
+  // baseURL has to be passed explicitly or a relative page.goto() never
+  // resolves.
+  let context: BrowserContext;
+  let page: Page;
+
+  test.beforeAll(async ({ browser }) => {
+    await emptyTheInstall();
+    context = await browser.newContext({
+      baseURL: API_BASE,
+      storageState: { cookies: [], origins: [] },
+    });
+    page = await context.newPage();
+  });
+
+  test.afterAll(async () => {
+    await context?.close();
+  });
+
+  test("an empty production install can be set up and signed into", async () => {
     const api = await anonymousApi();
     expect(await (await api.get(`${API_BASE}/api/setup`)).json()).toEqual({ required: true });
     await api.dispose();
@@ -81,46 +135,54 @@ test.describe.serial("production configuration", () => {
     await page.getByTestId("setup-name-input").fill(ADMIN.name);
     await page.getByTestId("setup-email-input").fill(ADMIN.email);
     await page.getByTestId("setup-password-input").fill(ADMIN.password);
+    // Sign-in 1 of 2: the setup form runs POST /api/setup and then signs the
+    // new admin in through /api/auth/sign-in/email (see pages/login.vue).
     await page.getByTestId("setup-submit-btn").click();
 
     await expect(page).not.toHaveURL(/\/login/, { timeout: 15_000 });
     await expect(page.getByRole("link", { name: "Home" })).toBeVisible();
   });
 
-  test("signing out and back in works against the production origin check", async ({ page }) => {
-    // The assertion that fails when production's trusted origin does not
-    // resolve to what the browser sends: sign-out is a cookie-bearing POST, so
-    // Better Auth's origin check runs on it in full. A 403 INVALID_ORIGIN
-    // leaves the browser on /settings and this times out on the URL.
-    await signInThroughUi(page, ADMIN.email, ADMIN.password);
-    await expect(page.getByRole("link", { name: "Home" })).toBeVisible();
+  test("sign-out clears the origin check and revokes the session server-side", async () => {
+    // Two claims in one test, deliberately: they need the same live session,
+    // and signing in twice to separate them is what blew the budget before.
+    //
+    // Claim one is the production origin check. Sign-out is a cookie-bearing
+    // POST, so Better Auth validates Origin against trustedOrigins in full —
+    // which in production is resolved from BETTER_AUTH_URL alone. A 403
+    // INVALID_ORIGIN leaves the browser sitting on /settings and this times out
+    // on the URL.
+    //
+    // Claim two is that revocation is server-side. Capture the cookie while it
+    // still works and replay it from outside the browser afterwards; a
+    // client-only logout leaves a stolen cookie valid indefinitely.
+    const header = (await context.cookies()).map((c) => `${c.name}=${c.value}`).join("; ");
+    expect(header, "the setup flow should have left a session cookie").not.toBe("");
 
-    await signOutThroughUi(page);
-
-    await page.goto("/library");
-    await expect(page).toHaveURL(/\/login/);
-
-    await signInThroughUi(page, ADMIN.email, ADMIN.password);
-    await expect(page.getByRole("link", { name: "Home" })).toBeVisible();
-  });
-
-  test("sign-out revokes the session server-side, not just in the browser", async ({ page }) => {
-    await signInThroughUi(page, ADMIN.email, ADMIN.password);
-    const header = (await page.context().cookies()).map((c) => `${c.name}=${c.value}`).join("; ");
-
+    const api = await anonymousApi();
     // Prove the captured cookie works first, so the 401 below means "revoked"
     // rather than "never authenticated".
-    const api = await anonymousApi();
     expect((await api.get(`${API_BASE}/api/library`, { headers: { cookie: header } })).ok()).toBe(
       true,
     );
 
     await signOutThroughUi(page);
 
+    await page.goto("/library");
+    await expect(page).toHaveURL(/\/login/);
+
     expect(
       (await api.get(`${API_BASE}/api/library`, { headers: { cookie: header } })).status(),
     ).toBe(401);
     await api.dispose();
+  });
+
+  test("the admin can sign back in after signing out", async () => {
+    // Sign-in 2 of 2, and the last one this file may spend. Setup signs you in
+    // as a side effect, so this is the only place the ordinary sign-in form is
+    // exercised against the production config.
+    await signInThroughUi(page, ADMIN.email, ADMIN.password);
+    await expect(page.getByRole("link", { name: "Home" })).toBeVisible();
   });
 
   test("the support routes are not mounted in production", async () => {
