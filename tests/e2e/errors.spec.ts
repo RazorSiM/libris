@@ -18,11 +18,19 @@ import {
   deleteAllBooks,
   waitForBookInInbox,
   goPath,
+  seedMetadataCandidate,
   waitForJob,
   waitForAllQueuesIdle,
 } from "./helpers";
 
 const FIXTURES_DIR = join(import.meta.dirname!, "fixtures");
+
+/**
+ * `awaitWriteFinish.stabilityThreshold` in shared/inbox-watcher.ts — how long a
+ * file must sit unchanged before chokidar reports it. Nothing about a dropped
+ * file is observable before this elapses.
+ */
+const WATCHER_STABILITY_MS = 2_000;
 
 /** Seed a review book with two metadata candidates so the approve button is enabled. */
 async function seedReviewBookWithCandidates(
@@ -45,20 +53,14 @@ async function seedReviewBookWithCandidates(
       VALUES (${bookId}, 'epub', 'test.epub', 1048576, ${null}, ${contentHash})
     `;
 
-    await sql`
-      INSERT INTO book_metadata_candidates (book_id, source, confidence, normalized)
-      VALUES (${bookId}, 'file', 0.5, ${JSON.stringify({ title, author })}::jsonb)
-    `;
-    await sql`
-      INSERT INTO book_metadata_candidates (book_id, source, confidence, normalized)
-      VALUES (${bookId}, 'hardcover', 0.9, ${JSON.stringify({
-        title,
-        author,
-        publisher: "Test Publisher",
-        description: "A test book.",
-        genres: ["Testing"],
-      })}::jsonb)
-    `;
+    await seedMetadataCandidate(bookId, "file", 0.5, { title, author });
+    await seedMetadataCandidate(bookId, "hardcover", 0.9, {
+      title,
+      author,
+      publisher: "Test Publisher",
+      description: "A test book.",
+      genres: ["Testing"],
+    });
 
     return bookId;
   } finally {
@@ -285,9 +287,19 @@ test.describe("Duplicate File Detection", { tag: ["@slow", "@external"] }, () =>
     await cleanInboxDir();
   });
 
-  // Drain all queues after pipeline tests so in-flight workers don't leak data into subsequent test files
+  /**
+   * Leave nothing behind that the watcher can still act on.
+   *
+   * These files were dropped into the inbox by hand, so they have no
+   * `upload_registry` row and the book-detected worker never removes them
+   * itself (see `discardRedundantUpload`) — the previous teardown drained the
+   * queues but left both copies on disk. Delete first, then drain, then undo
+   * anything a job that was already in flight managed to create.
+   */
   test.afterAll(async () => {
+    await cleanInboxDir();
     await waitForAllQueuesIdle();
+    await deleteAllBooks();
   });
 
   test("dropping same file twice results in only one inbox entry", async ({ authedPage: page }) => {
@@ -302,6 +314,19 @@ test.describe("Duplicate File Detection", { tag: ["@slow", "@external"] }, () =>
 
     // Copy same file content with a different name
     await copyToInboxAs(epubPath, "dup-test-second.epub");
+
+    // Let the watcher notice it before asking whether its queue is idle.
+    //
+    // chokidar only emits `add` once a file has been stable for
+    // `awaitWriteFinish.stabilityThreshold` — 2s, see shared/inbox-watcher.ts.
+    // For those 2s book-detected is idle for reasons that have nothing to do
+    // with this file, so `waitForJob` returns at once and the assertion below
+    // checks deduplication BEFORE deduplication has been attempted: it cannot
+    // fail. Worse, the job then ran during the next spec file, after its
+    // `deleteAllBooks()` had removed the book whose checksum it would have
+    // matched — so the "duplicate" was ingested as a new book and broke
+    // inbox.spec.ts's empty-inbox test.
+    await page.waitForTimeout(WATCHER_STABILITY_MS + 3_000);
 
     // Wait for book-detected queue to finish processing the duplicate
     await waitForJob("book-detected", { timeoutMs: 60_000 });

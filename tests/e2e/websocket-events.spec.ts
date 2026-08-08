@@ -19,8 +19,16 @@ import {
   deleteAllBooks,
   invalidateServerCache,
   getRegularUserId,
+  disposeAccounts,
 } from "./helpers";
 import { signInThroughUi, signOutThroughUi } from "./helpers/sign-in.js";
+
+/**
+ * The identity-switch test makes an admin ("ws-alice"). Leaving it behind would
+ * make this file a source of the same second-admin pollution account.spec.ts
+ * was — see auth.spec.ts's "the last admin cannot be demoted out of existence".
+ */
+test.afterAll(disposeAccounts);
 
 /**
  * Fire a server event through the test-only event bus endpoint.

@@ -72,6 +72,22 @@ export function userSessionHeaders(): { cookie: string } {
 export { getAdminUserId, getRegularUserId, getAdminCookie, getUserCookie } from "./accounts.js";
 
 /**
+ * Every disposable account this worker created and has not removed yet.
+ *
+ * "Disposable" was only ever true of the credentials, never of the row: the
+ * account outlived the test that made it and stayed in the install for the rest
+ * of the run. That is invisible for a `user`, and load-bearing for an `admin` —
+ * a leaked one is a second admin, which is exactly the state
+ * "the last admin cannot be demoted out of existence" (auth.spec.ts) exists to
+ * rule out. It failed because account.spec.ts had left `self-setpw` behind.
+ *
+ * Files run one at a time (`workers: 1`, `fullyParallel: false`), so a
+ * `test.afterAll(disposeAccounts)` in the spec that creates them is enough to
+ * keep the leak inside the file that owns it.
+ */
+const disposableAccountIds = new Set<string>();
+
+/**
  * Create a throwaway account and return the credentials to sign in with.
  *
  * Any spec that changes a password needs one of these. Doing it to ADMIN or
@@ -81,6 +97,8 @@ export { getAdminUserId, getRegularUserId, getAdminCookie, getUserCookie } from 
  *
  * The `origin` header is not optional: Better Auth rejects a state-changing
  * request without one, and the failure reads as a permissions problem.
+ *
+ * Call `disposeAccounts()` from a `test.afterAll` in the spec that uses this.
  */
 export async function createDisposableAccount(
   label: string,
@@ -98,7 +116,28 @@ export async function createDisposableAccount(
     throw new Error(`Could not create ${email}: ${res.status} ${await res.text()}`);
   }
   const { user } = (await res.json()) as { user: { id: string } };
+  disposableAccountIds.add(user.id);
   return { ...account, id: user.id };
+}
+
+/**
+ * Remove every account `createDisposableAccount` made in this worker.
+ *
+ * Best-effort per account: a spec may already have deleted one, or removed the
+ * session this call authenticates with, and neither should turn a passing file
+ * into a failing teardown. Goes through the admin plugin so sessions and app
+ * passwords go with the row.
+ */
+export async function disposeAccounts(): Promise<void> {
+  const ids = [...disposableAccountIds];
+  disposableAccountIds.clear();
+  for (const userId of ids) {
+    await fetch(`${API_BASE}/api/auth/admin/remove-user`, {
+      method: "POST",
+      headers: { ...sessionHeaders(), "Content-Type": "application/json", origin: API_BASE },
+      body: JSON.stringify({ userId }),
+    }).catch(() => undefined);
+  }
 }
 
 /**
@@ -257,6 +296,56 @@ export async function cleanInboxDir(): Promise<void> {
  */
 export function getSql() {
   return postgres(requireDatabaseUrl());
+}
+
+/**
+ * Insert one `book_metadata_candidates` row.
+ *
+ * Centralised because the obvious way to write the jsonb column is wrong, and
+ * was wrong here for a long time without anything noticing.
+ * `${JSON.stringify(obj)}::jsonb` binds a JS *string*, and postgres-js
+ * serialises a jsonb parameter with `JSON.stringify` — so the value lands as a
+ * jsonb STRING (`jsonb_typeof` = 'string') holding the encoded object, not as a
+ * jsonb object. `sql.json(obj)` (or a bare object) is the correct form.
+ *
+ * drizzle-orm 1.0.0-beta hid the difference: `PgJsonb.mapFromDriverValue`
+ * JSON.parse'd anything that came back as a string, which un-did the double
+ * encoding on read. 1.0.0-rc moved jsonb onto the codec system with no
+ * read-side normalisation, so the string now reaches the API response as a
+ * string, `MetadataFieldPicker` finds no field on it, and every review page
+ * renders "No metadata found — enter manually" with `Approve (0)`.
+ *
+ * The `jsonb_typeof` assertion is the tripwire: it fails at seed time, in the
+ * spec that seeded it, instead of as an unexplained empty picker later.
+ */
+export async function seedMetadataCandidate(
+  bookId: string,
+  source: string,
+  confidence: number,
+  normalized: Record<string, unknown>,
+): Promise<string> {
+  const sql = getSql();
+  try {
+    // postgres-js types `sql.json` as its own `JSONValue`, which an open
+    // `Record<string, unknown>` does not structurally satisfy. The value is
+    // JSON — it is about to be serialised as such.
+    const asJson = normalized as Parameters<typeof sql.json>[0];
+    const [row] = await sql`
+      INSERT INTO book_metadata_candidates (book_id, source, confidence, normalized)
+      VALUES (${bookId}, ${source}, ${confidence}, ${sql.json(asJson)})
+      RETURNING id, jsonb_typeof(normalized) AS normalized_type
+    `;
+    if (row.normalized_type !== "object") {
+      throw new Error(
+        `Seeded candidate ${source} for ${bookId} stored normalized as jsonb ` +
+          `'${row.normalized_type}', not 'object' — the API will emit a string ` +
+          `and the metadata picker will show no sources.`,
+      );
+    }
+    return row.id as string;
+  } finally {
+    await sql.end();
+  }
 }
 
 /**

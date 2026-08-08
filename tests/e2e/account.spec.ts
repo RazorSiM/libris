@@ -14,10 +14,20 @@ import {
   type Browser,
   type Page,
 } from "@playwright/test";
-import { API_BASE, createDisposableAccount } from "./helpers";
+import { API_BASE, createDisposableAccount, disposeAccounts } from "./helpers";
 import { signInThroughUi } from "./helpers/sign-in.js";
 
 const BASE_URL = `http://localhost:${process.env.CI ? 3000 : 3100}`;
+
+/**
+ * Throwaway credentials, throwaway ROWS.
+ *
+ * Without this the accounts survive the file, and one of them ("self-setpw") is
+ * an admin — which is a second admin for every spec that runs after this one.
+ * auth.spec.ts's "the last admin cannot be demoted out of existence" is exactly
+ * the assertion that state defeats.
+ */
+test.afterAll(disposeAccounts);
 
 async function anonymousApi() {
   return await playwrightRequest.newContext({ storageState: { cookies: [], origins: [] } });

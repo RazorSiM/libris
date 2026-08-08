@@ -18,6 +18,7 @@ import {
   getSql,
   deleteAllBooks,
   seedBookFile,
+  seedMetadataCandidate,
   goPath,
   waitForAllQueuesIdle,
 } from "./helpers";
@@ -80,30 +81,11 @@ async function seedInboxBook(overrides: { title?: string; author?: string } = {}
 /**
  * Seed metadata candidates for a book. Each candidate is a source with normalized metadata.
  * The confidence is used to determine auto-selection priority.
+ *
+ * Delegates to the shared helper — writing the jsonb column by hand is how this
+ * file spent a long time storing a jsonb string instead of a jsonb object.
  */
-async function seedCandidate(
-  bookId: string,
-  source: string,
-  confidence: number,
-  normalized: Record<string, unknown>,
-): Promise<string> {
-  const sql = getSql();
-  try {
-    const [row] = await sql`
-      INSERT INTO book_metadata_candidates (book_id, source, confidence, normalized)
-      VALUES (
-        ${bookId},
-        ${source},
-        ${confidence},
-        ${JSON.stringify(normalized)}::jsonb
-      )
-      RETURNING id
-    `;
-    return row.id;
-  } finally {
-    await sql.end();
-  }
-}
+const seedCandidate = seedMetadataCandidate;
 
 /** Navigate to inbox — uses goPath for a full SSR render (avoids client-side cache issues). */
 async function goInbox(page: Page): Promise<void> {
