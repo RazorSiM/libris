@@ -1,4 +1,4 @@
-import { and, eq, isNotNull } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { hardcoverSyncLog, serviceCredentials, users } from "#db";
 import type { Job } from "bullmq";
 import {
@@ -97,7 +97,7 @@ export async function processHardcoverSync(job: Job): Promise<void> {
             eq(serviceCredentials.service, "hardcover"),
             eq(serviceCredentials.userId, targetApiKeyId),
           )
-        : and(eq(serviceCredentials.service, "hardcover"), isNotNull(serviceCredentials.userId)),
+        : eq(serviceCredentials.service, "hardcover"),
     );
 
   const creds = await credQuery;
@@ -110,8 +110,6 @@ export async function processHardcoverSync(job: Job): Promise<void> {
   // 2. Validate all tokens upfront, collect valid users
   const validUsers: ValidatedUser[] = [];
   for (const cred of creds) {
-    if (!cred.userId) continue;
-
     const token = await unsealToken(cred.passwordHash, env.API_SECRET_KEY);
     if (!token) {
       log.warn(`Failed to decrypt Hardcover token for userId=${cred.userId}, skipping`);
