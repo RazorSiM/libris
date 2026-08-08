@@ -6,12 +6,16 @@ import * as schema from "../db/schema.js";
 import { __setTestDb } from "../services/db.js";
 import { processBookFetchMetadata } from "./book-fetch-metadata.js";
 
-const { searchHardcover } = vi.hoisted(() => ({
+const { searchHardcover, getHardcoverTokenForUser } = vi.hoisted(() => ({
   searchHardcover: vi.fn(),
+  // The worker resolves the book owner's own token before searching; null means
+  // "this owner has not connected Hardcover", the install-wide fallback path.
+  getHardcoverTokenForUser: vi.fn(async () => null),
 }));
 
 vi.mock("../lib/metadata/index.js", () => ({
   searchHardcover,
+  getHardcoverTokenForUser,
 }));
 
 let pglite: PGlite;
