@@ -351,14 +351,34 @@ export const UploadedFileSchema = z
 export const UploadErrorSchema = z
   .object({
     filename: z.string(),
-    error: z.string(),
+    error: z.string().openapi({ description: "Why the file could not be accepted" }),
   })
   .openapi("UploadError");
 
+/**
+ * A file that was deliberately not written because the library already holds
+ * those bytes. Not an error: the caller's intent — have this book in the
+ * library — is already satisfied.
+ */
+export const UploadSkippedSchema = z
+  .object({
+    filename: z.string(),
+    reason: z.string().openapi({ description: "Why the file was skipped rather than written" }),
+  })
+  .openapi("UploadSkipped");
+
 export const UploadResponseSchema = z
   .object({
-    uploaded: z.array(UploadedFileSchema),
-    errors: z.array(UploadErrorSchema),
+    uploaded: z.array(UploadedFileSchema).openapi({
+      description: "Files written to the inbox directory and queued for the watcher",
+    }),
+    skipped: z.array(UploadSkippedSchema).openapi({
+      description:
+        "Files not written because the library already holds those bytes. These are not failures — the content is already present.",
+    }),
+    errors: z.array(UploadErrorSchema).openapi({
+      description: "Files rejected: wrong format, too large, malformed, or an unsafe filename",
+    }),
   })
   .openapi("UploadResponse");
 

@@ -87,18 +87,34 @@ async function upload() {
     });
 
     const count = result.uploaded.length;
+    const skipped = result.skipped;
     // Only claim success when something was actually accepted. A batch where
     // every file was rejected — every file already in the library, say — used
     // to toast "0 files uploaded" as a success next to the warnings saying why.
     if (count > 0) {
       toast.add({
         title: `${count} ${count === 1 ? "file" : "files"} uploaded`,
+        // Mixed batch: say "3 uploaded, 1 already in your library" on one line
+        // rather than pairing a success with something that looks like a fault.
+        description:
+          skipped.length > 0
+            ? `${skipped.length} already in your library: ${skipped.map((s) => s.filename).join(", ")}`
+            : undefined,
         color: "success",
+      });
+    } else if (skipped.length > 0) {
+      // Nothing written, nothing wrong: every file was already here. Neutral
+      // colour, because the user's goal — these books in the library — is met.
+      toast.add({
+        title: `${skipped.length === 1 ? "File is" : `${skipped.length} files are`} already in your library`,
+        description: skipped.map((s) => s.filename).join(", "),
+        color: "info",
       });
     }
 
+    // Genuine rejections only — unsupported format, too large, unreadable.
     for (const err of result.errors) {
-      toast.add({ title: `${err.filename}: ${err.error}`, color: "warning" });
+      toast.add({ title: `${err.filename}: ${err.error}`, color: "error" });
     }
 
     emit("uploaded");

@@ -35,7 +35,7 @@ const SUPPORTED_EXTENSIONS = new Set([".epub"]);
 const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB
 
 /**
- * Per-file rejection reason when the same bytes are already on the server.
+ * Per-file skip reason when the same bytes are already on the server.
  *
  * Names neither the owner nor the status of the existing copy: the caller
  * supplied these bytes, so the only thing disclosed is that they are already
@@ -231,7 +231,7 @@ const uploadRoute = createRoute({
   tags: ["inbox"],
   summary: "Upload ebook files",
   description:
-    "Upload one or more ebook files (EPUB) to the inbox directory. Files are saved to disk; the file watcher picks them up for processing. A file whose contents are already on the server — already ingested, or uploaded by anyone and still awaiting the watcher — is rejected with a per-file `errors[]` entry and is not written, because ingestion deduplicates by checksum and would otherwise drop it silently. When every file is rejected the response is 400.",
+    "Upload one or more ebook files (EPUB) to the inbox directory. Files are saved to disk; the file watcher picks them up for processing.\n\nThe response splits the batch three ways. `uploaded[]` is what was written. `skipped[]` is files whose contents are already on the server — already ingested, or uploaded by anyone and still awaiting the watcher; ingestion deduplicates by checksum, so writing them would drop them silently, and they are not written. A skip is **not** a failure: the library already holds that book, which is what the caller wanted. `errors[]` is genuine rejections — unsupported format, over the size limit, not a readable EPUB, or an unsafe filename.\n\nThe status is 400 only when every file landed in `errors[]`. A batch that was entirely skipped is 200: nothing was wrong with the request, there was simply nothing left to do.",
   request: {
     body: {
       required: true,
@@ -251,12 +251,16 @@ const uploadRoute = createRoute({
   },
   responses: {
     200: {
-      description: "Upload results with per-file success/error details",
+      description:
+        "Per-file outcome for the batch: `uploaded[]`, `skipped[]` (already in the library), `errors[]`. Returned whenever at least one file was written or skipped, even if others errored.",
       content: {
         "application/json": { schema: UploadResponseSchema },
       },
     },
-    400: { description: "No files provided or all files rejected" },
+    400: {
+      description:
+        "No files provided, or every file in the batch failed. A batch where every file was skipped as already-present is 200, not 400.",
+    },
   },
 });
 
@@ -650,6 +654,7 @@ export const inboxRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
 
     const inboxPath = env.LIBRIS_INBOX_PATH;
     const uploaded: { filename: string; size: number }[] = [];
+    const skipped: { filename: string; reason: string }[] = [];
     const errors: { filename: string; error: string }[] = [];
 
     for (const file of fileEntries) {
@@ -705,10 +710,14 @@ export const inboxRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
       ]);
 
       if (ingested.length > 0 || pending.length > 0) {
-        // Says nothing about who holds the existing copy or what state it is
-        // in. The caller supplied these bytes, so all this admits is that the
-        // same bytes are already here.
-        errors.push({ filename: file.name, error: DUPLICATE_UPLOAD_MESSAGE });
+        // Reported as a skip, not an error. Nothing went wrong: the caller
+        // wanted this book in the library and the library already has it. Only
+        // a client that conflates the two would call this a failure.
+        //
+        // The reason says nothing about who holds the existing copy or what
+        // state it is in. The caller supplied these bytes, so all this admits
+        // is that the same bytes are already here.
+        skipped.push({ filename: file.name, reason: DUPLICATE_UPLOAD_MESSAGE });
         continue;
       }
 
@@ -743,11 +752,16 @@ export const inboxRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
       uploaded.push({ filename: file.name, size: file.size });
     }
 
-    if (uploaded.length === 0 && errors.length > 0) {
+    // 400 only when the whole batch genuinely failed. A batch that produced
+    // nothing but skips is a successful no-op — every file the caller asked for
+    // is in the library, which is the outcome they were after — so it gets a
+    // 200 whose body says so. Making it a 400 would be telling the user their
+    // request was malformed when it was merely redundant.
+    if (uploaded.length === 0 && skipped.length === 0 && errors.length > 0) {
       throw new HTTPException(400, {
         message: `All files rejected: ${errors.map((e) => `${e.filename}: ${e.error}`).join("; ")}`,
       });
     }
 
-    return c.json({ uploaded, errors });
+    return c.json({ uploaded, skipped, errors });
   });

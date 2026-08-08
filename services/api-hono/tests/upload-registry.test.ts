@@ -451,7 +451,7 @@ describe("book-detected worker uses registry for ownership", () => {
 
 // ── Duplicate rejection at the upload route ───────────────────────
 
-describe("upload route rejects files already on the server", () => {
+describe("upload route skips files already on the server", () => {
   function uploadEpub(rawKey: string, content: Buffer, filename: string) {
     const formData = new FormData();
     formData.append(
@@ -478,13 +478,17 @@ describe("upload route rejects files already on the server", () => {
     // Alice uploads first and is accepted.
     expect((await uploadEpub(adminKey, epubContent, "shared.epub")).status).toBe(200);
 
-    // Bob uploads the same bytes. Pre-fix: 200 with `uploaded: [shared.epub]`, a
-    // second registry row, a second file on disk, and no book he could ever see
-    // — the watcher would skip his file as a duplicate. The duplicate is the
-    // only file in this batch, so the route rejects the whole request.
+    // Bob uploads the same bytes. Nothing is written and nothing failed: the
+    // library already holds this book, which is what Bob was after. That is a
+    // 200 whose body reports the file under `skipped`, never `errors`.
     const bobResponse = await uploadEpub(bobKey, epubContent, "shared.epub");
-    expect(bobResponse.status).toBe(400);
-    expect(await bobResponse.text()).toContain("already been uploaded");
+    expect(bobResponse.status).toBe(200);
+    const bobBody = await bobResponse.json();
+    expect(bobBody.uploaded).toEqual([]);
+    expect(bobBody.errors).toEqual([]);
+    expect(bobBody.skipped).toEqual([
+      { filename: "shared.epub", reason: "This file has already been uploaded to this library" },
+    ]);
 
     // Only Alice's registry row exists, and Bob's copy was never written.
     const registryRows = await testDb.select().from(uploadRegistry);
@@ -494,7 +498,7 @@ describe("upload route rejects files already on the server", () => {
     await expect(access("/tmp/libris-test-inbox/shared-1.epub")).rejects.toThrow();
   });
 
-  it("rejects only the duplicate when a batch also contains a new file", async () => {
+  it("puts the duplicate in skipped and not errors when a batch also contains a new file", async () => {
     const duplicate = validEpub("batch-duplicate");
     const fresh = validEpub("batch-fresh");
 
@@ -521,11 +525,61 @@ describe("upload route rejects files already on the server", () => {
     expect(response.status).toBe(200);
     const body = await response.json();
     expect(body.uploaded).toEqual([expect.objectContaining({ filename: "batch-fresh.epub" })]);
-    expect(body.errors).toEqual([
+    // The whole point of the split: a caller can now say "1 uploaded, 1 already
+    // in your library" instead of "1 uploaded, 1 failed".
+    expect(body.skipped).toEqual([
       expect.objectContaining({
         filename: "batch-dup.epub",
-        error: expect.stringContaining("already been uploaded"),
+        reason: expect.stringContaining("already been uploaded"),
       }),
     ]);
+    expect(body.errors).toEqual([]);
+
+    // The new file really was written and registered, so the skip did not cost
+    // the rest of the batch anything.
+    await access("/tmp/libris-test-inbox/batch-fresh.epub");
+    const checksums = (await testDb.select().from(uploadRegistry)).map((r) => r.checksum);
+    expect(checksums).toContain(computeChecksumFromBuffer(fresh));
+  });
+
+  it("keeps a genuine rejection in errors while a duplicate goes to skipped", async () => {
+    const duplicate = validEpub("mixed-duplicate");
+    expect((await uploadEpub(adminKey, duplicate, "mixed-dup.epub")).status).toBe(200);
+
+    const formData = new FormData();
+    formData.append(
+      "file",
+      new Blob([new Uint8Array(duplicate)], { type: "application/epub+zip" }),
+      "mixed-dup.epub",
+    );
+    formData.append("file", new Blob([new Uint8Array(Buffer.from("not a zip"))]), "broken.epub");
+
+    const response = await testApp.app.request("http://localhost/api/inbox/upload", {
+      method: "POST",
+      headers: { authorization: `Bearer ${adminKey}` },
+      body: formData,
+    });
+
+    // Nothing was written, but the batch was not entirely a failure — one file
+    // is already in the library. 400 is reserved for batches that only failed.
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.uploaded).toEqual([]);
+    expect(body.skipped).toEqual([expect.objectContaining({ filename: "mixed-dup.epub" })]);
+    expect(body.errors).toEqual([expect.objectContaining({ filename: "broken.epub" })]);
+  });
+
+  it("still answers 400 when every file failed for a real reason", async () => {
+    const formData = new FormData();
+    formData.append("file", new Blob([new Uint8Array(Buffer.from("not a zip"))]), "junk.epub");
+
+    const response = await testApp.app.request("http://localhost/api/inbox/upload", {
+      method: "POST",
+      headers: { authorization: `Bearer ${adminKey}` },
+      body: formData,
+    });
+
+    expect(response.status).toBe(400);
+    expect(await response.text()).toContain("All files rejected");
   });
 });
