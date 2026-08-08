@@ -138,6 +138,17 @@ describe("app password management", () => {
       key: expect.any(String),
       name: "second-key",
     });
+
+    // A response body echoing back a random string would satisfy everything
+    // above (libris-59m.31). What makes it a credential is that it
+    // authenticates, and that it is listed as belonging to this person.
+    const { status: used } = await $fetchRaw("/api/library", {
+      headers: { authorization: `Bearer ${data.key}` },
+    });
+    expect(used).toBe(200);
+
+    const { data: listed } = await $fetchRaw("/api/app-passwords", { headers: session() });
+    expect(listed.keys.map((k: { id: string }) => k.id)).toContain(data.id);
   });
 
   it("GET /api/app-passwords — lists them without exposing the secret", async () => {
@@ -152,7 +163,9 @@ describe("app password management", () => {
     const { data, status } = await $fetchRaw("/api/app-passwords", { headers: session() });
     expect(status).toBe(200);
     expect(data.keys).toBeInstanceOf(Array);
-    expect(data.keys.length).toBeGreaterThanOrEqual(3);
+    // Exactly three: the bootstrap credential plus the two just minted. `>= 3`
+    // could not notice a listing that leaked other people's.
+    expect(data.keys).toHaveLength(3);
     for (const k of data.keys) {
       // `key` holds a plugin-computed hash and must never leave the server;
       // `start` is a few plaintext characters, which is how the UI tells two
@@ -734,6 +747,21 @@ describe("KoSync: PUT /kosync/syncs/progress", () => {
       device_id: "kindle-123",
     });
     expect(data.timestamp).toBeGreaterThan(0);
+
+    // The block above is the handler echoing the request back at us; on its own
+    // it would pass with the INSERT deleted (libris-59m.31). What makes this a
+    // test of "creates" is the row.
+    const stored = await testDb
+      .select()
+      .from(readingProgress)
+      .where(eq(readingProgress.document, "test-book.epub"));
+    expect(stored).toHaveLength(1);
+    expect(stored[0]).toMatchObject({
+      progress: "/body/chapter[1]",
+      device: "kindle",
+      deviceId: "kindle-123",
+    });
+    expect(Number(stored[0]!.percentage)).toBeCloseTo(0.25, 4);
   });
 
   it("upserts existing progress for same document+device", async () => {
@@ -746,6 +774,7 @@ describe("KoSync: PUT /kosync/syncs/progress", () => {
         progress: "/body/chapter[1]",
         device: "kindle",
         percentage: 0.25,
+        device_id: "kindle-123",
       },
     });
 
@@ -758,6 +787,7 @@ describe("KoSync: PUT /kosync/syncs/progress", () => {
         progress: "/body/chapter[5]",
         device: "kindle",
         percentage: 0.75,
+        device_id: "kindle-456",
       },
     });
     expect(status).toBe(200);
@@ -767,6 +797,22 @@ describe("KoSync: PUT /kosync/syncs/progress", () => {
       percentage: 0.75,
       device: "kindle",
     });
+
+    // "Upsert" is a claim about the TABLE, and an echoed response body cannot
+    // support it: exactly one row must survive, and every column the ON
+    // CONFLICT `set:` clause names must have moved. Asserting only the echo
+    // left that whole clause unguarded.
+    const stored = await testDb
+      .select()
+      .from(readingProgress)
+      .where(eq(readingProgress.document, "test-book.epub"));
+    expect(stored).toHaveLength(1);
+    expect(stored[0]).toMatchObject({
+      progress: "/body/chapter[5]",
+      device: "kindle",
+      deviceId: "kindle-456",
+    });
+    expect(Number(stored[0]!.percentage)).toBeCloseTo(0.75, 4);
   });
 
   it("rejects without auth headers", async () => {

@@ -527,6 +527,9 @@ describe("sign-in over HTTP", () => {
       body: JSON.stringify({ email: "reader@example.com", password: "wrong" }),
     });
 
-    expect(res.status).not.toBe(200);
+    // `not.toBe(200)` also passed on a 500 or a 429 (libris-59m.31) — it could
+    // not distinguish a refusal from the handler falling over.
+    expect(res.status).toBe(401);
+    expect(res.headers.getSetCookie()).toEqual([]);
   });
 });
