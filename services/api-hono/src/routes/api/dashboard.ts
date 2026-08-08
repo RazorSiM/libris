@@ -3,7 +3,7 @@ import { createOpenApiRouter } from "../../shared/openapi.js";
 import { and, eq, or, sql, count, countDistinct, desc, sum, inArray } from "drizzle-orm";
 import { books, bookFiles, readingProgress } from "#db";
 import type { AppVariables } from "../../context.js";
-import { getUserId } from "../../shared/auth.js";
+import { getUserId, isAdmin } from "../../shared/auth.js";
 import { FINISHED_THRESHOLD, PAUSED_DAYS } from "../../lib/reading-status.js";
 import {
   collectQueueCounts,
@@ -19,7 +19,7 @@ const dashboardRoute = createRoute({
   tags: ["dashboard"],
   summary: "Get dashboard data",
   description:
-    "Returns currently reading books, recently added, inbox count, library stats, and pipeline status",
+    "Returns currently reading books, recently added, inbox count, library stats, and pipeline status. `currentlyReading` and `inboxCount` are per-user (reading progress is private, and inbox/review books are pre-approval uploads); `recentlyAdded` and `stats` describe the shared organized library. Admins receive the install-wide inbox count.",
   responses: {
     200: {
       description: "Dashboard data",
@@ -78,6 +78,7 @@ export const dashboardRoutes = createOpenApiRouter<{ Variables: AppVariables }>(
   async (c) => {
     const db = c.get("db");
     const userId = getUserId(c);
+    const callerIsAdmin = isAdmin(c);
 
     const [
       currentlyReadingRaw,
@@ -132,11 +133,20 @@ export const dashboardRoutes = createOpenApiRouter<{ Variables: AppVariables }>(
         .orderBy(desc(books.createdAt))
         .limit(5),
 
-      // Inbox count (inbox + review status)
+      // Inbox count (inbox + review status).
+      //
+      // Inbox/review books are pre-approval uploads and are NOT shared, so this
+      // has to use the same predicate as GET /api/inbox/count — otherwise the
+      // home page reports other users' pending uploads while the sidebar badge
+      // and /inbox itself, both owner-scoped, show none of them.
       db
         .select({ count: count() })
         .from(books)
-        .where(inArray(books.status, ["inbox", "review"])),
+        .where(
+          callerIsAdmin
+            ? inArray(books.status, ["inbox", "review"])
+            : and(inArray(books.status, ["inbox", "review"]), eq(books.createdBy, userId)),
+        ),
 
       // Stats: total organized books + unique authors
       db
