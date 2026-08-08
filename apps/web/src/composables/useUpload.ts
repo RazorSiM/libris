@@ -2,9 +2,30 @@ import { shallowRef } from "vue";
 import { useMutation, useQueryCache } from "@pinia/colada";
 import { inboxKeys } from "./queries/inboxKeys";
 
-interface UploadResult {
+export interface UploadResult {
   uploaded: { filename: string; size: number }[];
+  /**
+   * Files the server deliberately did not write because the library already
+   * holds those bytes. Distinct from `errors` on purpose: nothing failed, the
+   * book is simply already there, so the UI must not call it a failure.
+   */
+  skipped: { filename: string; reason: string }[];
   errors: { filename: string; error: string }[];
+}
+
+/**
+ * Fill in the arrays the server may not have sent.
+ *
+ * `skipped` post-dates the first release of this endpoint, and every caller
+ * iterates these arrays unguarded — a missing key would be a TypeError in the
+ * success path rather than a missing line in a toast.
+ */
+function normalizeUploadResult(raw: Partial<UploadResult> | null): UploadResult {
+  return {
+    uploaded: raw?.uploaded ?? [],
+    skipped: raw?.skipped ?? [],
+    errors: raw?.errors ?? [],
+  };
 }
 
 export function useUpload() {
@@ -37,7 +58,7 @@ export function useUpload() {
         xhr.addEventListener("load", () => {
           activeXhr.value = null;
           if (xhr.status >= 200 && xhr.status < 300) {
-            resolve(JSON.parse(xhr.responseText));
+            resolve(normalizeUploadResult(JSON.parse(xhr.responseText)));
           } else {
             try {
               const err = JSON.parse(xhr.responseText);
