@@ -19,12 +19,14 @@ import type { PGlite } from "@electric-sql/pglite";
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterAll, beforeAll, describe, expect, it } from "vite-plus/test";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vite-plus/test";
 import { createApp } from "../app.js";
 import { createTestAuth, createTestDb, seedAppPassword, type TestDb } from "../db/test-utils.js";
 import * as schema from "../db/schema.js";
 import type { Env } from "../env.js";
 import { isCachedRouteHandler } from "../middleware/cache.js";
+import { hashKosyncSecret } from "../shared/kosync-auth.js";
+import { md5 } from "../shared/auth.js";
 import { createRouter } from "../routes/index.js";
 import { CACHED_ROUTE_PREFIXES, isCachedRoutePrefix } from "./cache.js";
 import { createMemoryKVStore, type KVStore } from "./kv-store.js";
@@ -199,6 +201,59 @@ describe("a book mutation clears the OPDS feed it changed", () => {
     expect(after.cache).toBe("MISS");
     expect(after.body.booksFinished.allTime).toBe(before + 1);
   });
+
+  it("PUT /kosync/syncs/progress evicts the cached /api/stats it feeds", async () => {
+    // The one write path with no UI behind it (libris-021). Every number the
+    // stats page renders comes from the rows this handler writes, and it
+    // invalidated nothing — so finishing a book on an e-reader left the counts
+    // as they were until the entry's 60s TTL ran out.
+    //
+    // The invalidation is chained behind the two fire-and-forget writes it
+    // follows, so the assertion has to let those settle first; firing it inline
+    // would clear the entry and let the next request re-cache the pre-write
+    // answer, which is the bug in a different costume.
+    const bookId = await seedOrganizedBook("Synced Book");
+    const document = "d41d8cd98f00b204e9800998ecf8427e";
+    await db
+      .insert(schema.bookFiles)
+      .values({ bookId, format: "epub", originalName: "s.epub", contentHash: document });
+
+    const password = "kosync-test-password";
+    await db.insert(schema.kosyncCredentials).values({
+      userId,
+      username: "reader",
+      secretHash: hashKosyncSecret(md5(password), TEST_ENV.API_SECRET_KEY),
+    });
+
+    const stats = async () => {
+      const res = await app.request("/api/stats", { headers: { Authorization: auth } });
+      expect(res.status).toBe(200);
+      return res.headers.get("x-cache");
+    };
+
+    expect(await stats()).toBe("MISS");
+    expect(await stats()).toBe("HIT");
+
+    const push = await app.request("/kosync/syncs/progress", {
+      method: "PUT",
+      headers: {
+        "x-auth-user": "reader",
+        "x-auth-key": md5(password),
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        document,
+        progress: "/body/DocFragment[3]",
+        device: "kindle",
+        percentage: 0.99,
+      }),
+    });
+    expect(push.status).toBe(200);
+
+    await vi.waitFor(async () => {
+      expect(await stats()).toBe("MISS");
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -243,7 +298,13 @@ describe("CACHED_ROUTE_PREFIXES matches the real mounts", () => {
 });
 
 describe("every invalidateRouteCache call names a cached prefix", () => {
-  const routesDir = fileURLToPath(new URL("../routes/", import.meta.url));
+  // Workers as well as routes since libris-021: a worker's writes land after
+  // the request that triggered them returned, and they invalidate through the
+  // process-wide store rather than through `c`. A dead prefix there is exactly
+  // as invisible as a dead prefix in a handler.
+  const scannedDirs = ["../routes/", "../workers/"].map((dir) =>
+    fileURLToPath(new URL(dir, import.meta.url)),
+  );
 
   async function sourceFiles(dir: string): Promise<string[]> {
     const entries = await readdir(dir, { withFileTypes: true });
@@ -257,7 +318,7 @@ describe("every invalidateRouteCache call names a cached prefix", () => {
   }
 
   it("passes only prefixes that can match a cached key", async () => {
-    const files = await sourceFiles(routesDir);
+    const files = (await Promise.all(scannedDirs.map(sourceFiles))).flat();
     expect(files.length).toBeGreaterThan(0);
 
     const offenders: string[] = [];

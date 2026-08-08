@@ -19,6 +19,8 @@ import type { BookOrganizePayload } from "../types/index.js";
 import type { Job } from "bullmq";
 import { eq } from "drizzle-orm";
 import { getDb } from "../services/db.js";
+import { getCacheStorage } from "../services/cache-storage.js";
+import { invalidateRouteCache } from "../services/cache.js";
 import { getEnv } from "../env.js";
 import { fetchExternalImage } from "../shared/secure-image-fetch.js";
 import { getLogger } from "../lib/logger.js";
@@ -367,6 +369,21 @@ export async function processBookOrganize(job: Job<BookOrganizePayload>): Promis
       updatedAt: new Date(),
     })
     .where(eq(books.id, bookId));
+
+  // 6b. Everything the catalogue renders about this book has just changed
+  // underneath whatever the cache is still serving (libris-021).
+  //
+  // POST /{id}/approve set the status and invalidated on its way out, so the
+  // feed an e-reader refreshed a second later already listed this book — with
+  // `coverPath` still null, because that is written here, minutes later for a
+  // large file. `bookToEntry` decides the entry's cover link on `coverPath`, so
+  // without this the freshly approved book sat in the catalogue with no cover
+  // for the rest of the entry's 60-120s TTL. Re-organizing an existing book has
+  // the same shape: the storage paths behind its acquisition links move here.
+  //
+  // `/api/stats` too: an organized book joins the genre distribution, the top
+  // authors and the library-growth series.
+  await invalidateRouteCache(getCacheStorage(), "/opds", "/api/stats");
 
   // 7. Clean up empty old directories after re-organize
   for (const oldDir of oldDirsToClean) {

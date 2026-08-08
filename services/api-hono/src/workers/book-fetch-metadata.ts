@@ -6,6 +6,8 @@ import type { MetadataCandidate, MetadataSearchQuery } from "../types/index.js";
 import type { Job } from "bullmq";
 import { and, eq, ne, sql } from "drizzle-orm";
 import { getDb } from "../services/db.js";
+import { getCacheStorage } from "../services/cache-storage.js";
+import { invalidateRouteCache } from "../services/cache.js";
 import { getLogger } from "../lib/logger.js";
 
 const logger = getLogger("worker:book-fetch-metadata");
@@ -221,6 +223,18 @@ export async function processBookFetchMetadata(job: Job<BookFetchMetadataPayload
         .where(eq(books.id, bookId));
     }
   });
+
+  // A book that is already in the catalogue got here through the "refresh
+  // metadata" path (skipStatusChange), and the transaction above bumped its
+  // updatedAt — which is the OPDS entry's <updated> element (libris-021).
+  //
+  // Deliberately conditional: every other run of this worker happens to a book
+  // in inbox or review, which no cached surface renders, so invalidating
+  // unconditionally would spend a SCAN per book on a bulk import and clear
+  // entries that could not have changed.
+  if (book.status === "organized") {
+    await invalidateRouteCache(getCacheStorage(), "/opds");
+  }
 
   if (possibleDuplicateOf) {
     logger.info(`Book ${bookId} → review (possible duplicate of ${possibleDuplicateOf})`);
