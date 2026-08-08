@@ -1,19 +1,24 @@
 /**
- * Per-user reading status, over HTTP, on a database the route can run on.
+ * `/api/reading-status/*` against the driver production actually runs on.
  *
- * `/api/reading-status/counts` had NO integration coverage at all, and could not
- * have had any: `getReadingStatusCounts` iterates `db.execute(...)` directly,
- * which is an array under postgres-js and a `{ rows }` object under PGlite, so
- * the endpoint throws "result is not iterable" in the ordinary test harness.
- * (`/api/stats` avoids this with its own `rowsOf()` normaliser; reading-status
- * has no equivalent.)
+ * This file used to carry ALL of the endpoint's coverage, for a bad reason:
+ * `getReadingStatusCounts` iterated `db.execute(...)` directly, which is an
+ * array-like under postgres-js and a `{ rows }` object under PGlite, so the
+ * route 500'd on the ordinary harness and real PostgreSQL was the only place it
+ * could be driven at all (libris-59m.31).
  *
- * That is why the isolation this file checks used to be "verified at the data
- * layer" instead — tests that inserted rows and selected them straight back
- * without the route (libris-59m.31). Those could not fail. Running the real app
- * against real PostgreSQL is what makes the assertion mean something.
+ * libris-6lt removed that constraint — the route normalises both shapes through
+ * `rowsOf()` from `#db/rows` — so the per-user isolation assertions moved to
+ * `reading-status.test.ts`, where they run on every `vp run test` instead of
+ * only when someone has a server up.
+ *
+ * What stays here is the part PGlite cannot stand in for: that the endpoints
+ * answer over the postgres-js driver, whose result shape is the other half of
+ * what `rowsOf()` normalises. Without this, nothing in the suite would notice a
+ * normaliser that handled `{ rows }` and broke the RowList case — which is the
+ * production one.
  */
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vite-plus/test";
+import { afterAll, beforeAll, describe, expect, it } from "vite-plus/test";
 import { createApp } from "../src/app.js";
 import type { Env } from "../src/env.js";
 import type { Db } from "../src/db/client.js";
@@ -34,11 +39,12 @@ const reachable = await isPostgresReachable();
 
 if (!reachable) {
   const why =
-    `PostgreSQL at ${TEST_POSTGRES_URL} is unreachable. /api/reading-status/counts CANNOT run ` +
-    `on PGlite -- getReadingStatusCounts iterates db.execute(), which PGlite resolves to ` +
-    `{ rows }, so the route 500s there. These tests check nothing without a real server. ` +
-    `Start one with \`docker compose -f docker-compose.test.yml up -d --wait postgres\`, or ` +
-    `point LIBRIS_TEST_POSTGRES_URL at your own.`;
+    `PostgreSQL at ${TEST_POSTGRES_URL} is unreachable. /api/reading-status/* is exercised on ` +
+    `PGlite by reading-status.test.ts, but postgres-js returns a different shape from ` +
+    `db.execute() and this is the only place that shape is driven end to end. Skipping means ` +
+    `the deployed driver goes untested. Start a server with ` +
+    `\`docker compose -f docker-compose.test.yml up -d --wait postgres\`, or point ` +
+    `LIBRIS_TEST_POSTGRES_URL at your own.`;
   if (SERVICES_ARE_REQUIRED) {
     throw new Error(`${why} CI is set, so this is a failure rather than a skip.`);
   }
@@ -75,7 +81,7 @@ const ENV: Env = {
   LIBRIS_HTTP_IDLE_TIMEOUT_MS: 30_000,
 };
 
-describe.skipIf(!reachable)("reading status isolation over HTTP", () => {
+describe.skipIf(!reachable)("reading status over the postgres-js driver", () => {
   let scratch: ScratchDatabase;
   let db: Db;
   let app: ReturnType<typeof createApp>["app"];
@@ -118,13 +124,7 @@ describe.skipIf(!reachable)("reading status isolation over HTTP", () => {
       },
       env: ENV,
     }).app;
-  }, 60_000);
 
-  afterAll(async () => {
-    await scratch?.drop();
-  });
-
-  beforeAll(async () => {
     readerId = await createPerson("reader@example.test", "admin");
     await createPerson("other@example.test", "user");
     readerCookie = await signIn("reader@example.test");
@@ -134,12 +134,8 @@ describe.skipIf(!reachable)("reading status isolation over HTTP", () => {
     await putCredential(otherCookie, "other-kosync");
   }, 60_000);
 
-  afterEach(async () => {
-    await db.delete(schema.readingProgressHistory);
-    await db.delete(schema.readingProgress);
-    await db.delete(schema.readingAggregate);
-    await db.delete(schema.bookFiles);
-    await db.delete(schema.books);
+  afterAll(async () => {
+    await scratch?.drop();
   });
 
   async function createPerson(email: string, role: "user" | "admin"): Promise<string> {
@@ -170,7 +166,7 @@ describe.skipIf(!reachable)("reading status isolation over HTTP", () => {
   }
 
   /** An organized book with a file, so a KoSync document resolves to it. */
-  async function seedBook(title: string): Promise<string> {
+  async function seedBook(title: string): Promise<void> {
     const [book] = await db
       .insert(schema.books)
       .values({ title, author: title, status: "organized", createdBy: readerId })
@@ -182,7 +178,6 @@ describe.skipIf(!reachable)("reading status isolation over HTTP", () => {
       storagePath: `/tmp/${title}.epub`,
       contentHash: `hash-${title}`,
     });
-    return book!.id;
   }
 
   async function sync(username: string, title: string, percentage: number) {
@@ -219,32 +214,29 @@ describe.skipIf(!reachable)("reading status isolation over HTTP", () => {
     return (await res.json()) as { data: { title: string }[] };
   }
 
-  it("counts a book as finished for the person who finished it and unread for everyone else", async () => {
-    await seedBook("shared");
-
-    await sync("reader-kosync", "shared", 0.99);
-
-    expect(await counts(readerCookie)).toMatchObject({ finished: 1, unread: 0 });
-    // Same book, same library, different person: they have not read it.
-    expect(await counts(otherCookie)).toMatchObject({ finished: 0, unread: 1 });
-  });
-
-  it("keeps two readers at different statuses on the same book", async () => {
-    await seedBook("shared");
-
-    await sync("reader-kosync", "shared", 0.99);
-    await sync("other-kosync", "shared", 0.4);
-
-    expect(await counts(readerCookie)).toMatchObject({ finished: 1, reading: 0 });
-    expect(await counts(otherCookie)).toMatchObject({ finished: 0, reading: 1 });
-  });
-
-  it("lists a book under a status only for the reader who is at it", async () => {
+  it("counts and lists per reader, on postgres-js result shapes", async () => {
     await seedBook("mine");
     await seedBook("theirs");
 
     await sync("reader-kosync", "mine", 0.99);
     await sync("other-kosync", "theirs", 0.99);
+
+    // Both endpoints read their rows out of a postgres-js RowList rather than a
+    // PGlite `{ rows }`. A normaliser that only handled the latter would answer
+    // all-zero counts and an empty page here while every PGlite test above
+    // stayed green.
+    expect(await counts(readerCookie)).toEqual({
+      finished: 1,
+      unread: 1,
+      reading: 0,
+      paused: 0,
+    });
+    expect(await counts(otherCookie)).toEqual({
+      finished: 1,
+      unread: 1,
+      reading: 0,
+      paused: 0,
+    });
 
     expect((await listByStatus(readerCookie, "finished")).data.map((b) => b.title)).toEqual([
       "mine",
@@ -252,21 +244,5 @@ describe.skipIf(!reachable)("reading status isolation over HTTP", () => {
     expect((await listByStatus(otherCookie, "finished")).data.map((b) => b.title)).toEqual([
       "theirs",
     ]);
-  });
-
-  it("totals every organized book for each reader independently", async () => {
-    await seedBook("a");
-    await seedBook("b");
-    await seedBook("c");
-
-    await sync("reader-kosync", "a", 0.99);
-    await sync("reader-kosync", "b", 0.5);
-
-    const reader = await counts(readerCookie);
-    expect(reader.finished + reader.reading + reader.paused + reader.unread).toBe(3);
-    expect(reader).toMatchObject({ finished: 1, unread: 1 });
-
-    const other = await counts(otherCookie);
-    expect(other).toMatchObject({ finished: 0, reading: 0, paused: 0, unread: 3 });
   });
 });

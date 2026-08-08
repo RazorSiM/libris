@@ -67,26 +67,99 @@ describe("migrations", () => {
     expect(Number(result.rows[0]!.cnt)).toBe(readMigrationDirs().length);
   });
 
-  it("leaves no drift between the migrations and schema.ts", async () => {
-    // Asks drizzle-kit what it would still have to do to make the migrated
-    // database match schema.ts. Nothing, if the two agree.
+  // The drift check is deliberately TWO tests (libris-8bb).
+  //
+  // Asking drizzle-kit the question is slow; comparing its answer against
+  // "nothing" is instant, and is the actual assertion. As one test the two
+  // shared a failure line, so a run that was merely too slow reported as
+  //
+  //   migrations > leaves no drift ... Test timed out in 30000ms
+  //
+  // which sends the reader hunting a schema/migration mismatch that does not
+  // exist. That is a worse cost than the flake itself.
+  //
+  // Split, a slow run can only be reported against the PROBE, under a name that
+  // makes no claim about the schema, with an onTestFailed note saying so out
+  // loud. The drift assertion below goes red if and only if drizzle-kit really
+  // answered with work left to do; if it never answered, that test SKIPS.
+  //
+  // Note on why the timeout is Vitest's and not a Promise.race deadline of our
+  // own: `pushSchema` runs as one uninterrupted synchronous block (PGlite is
+  // WASM on this thread, and the diffing is plain CPU work). A setTimeout armed
+  // before it cannot fire until it returns — measured: a 1ms timer stayed
+  // unfired across the whole call. Only the runner's own timeout, which is
+  // enforced from outside the block, can end it. So the budget below is passed
+  // to `it()` and nothing races it.
+
+  /**
+   * How long drizzle-kit gets to answer.
+   *
+   * The work is I/O- and CPU-bound on a subprocess-sized workload rather than
+   * anything this suite controls, so the right budget is generous rather than
+   * tight: Vitest's 30s default was enough on an idle machine and not enough on
+   * a loaded one, which is the whole of libris-8bb. Overridable so the timeout
+   * path can be exercised on demand (`LIBRIS_DRIFT_PROBE_TIMEOUT_MS=1`).
+   */
+  const DRIFT_PROBE_TIMEOUT_MS = Number(process.env.LIBRIS_DRIFT_PROBE_TIMEOUT_MS ?? 180_000);
+
+  /**
+   * The statements drizzle-kit says are still outstanding, or `null` if it never
+   * got to say. `null` is not "no drift" and must never be asserted against.
+   */
+  let pendingSchemaStatements: string[] | null = null;
+
+  it(
+    "asks drizzle-kit what still separates the migrated database from schema.ts",
+    async (ctx) => {
+      // Fires on any failure of this test, Vitest's own timeout included, which
+      // is the case that used to be unreadable. stderr rather than console.warn
+      // for the same reason announceSkip() uses it: the reporter cannot attach
+      // console output to a test that was killed.
+      ctx.onTestFailed(() => {
+        process.stderr.write(
+          `\n[NOT DRIFT] The drift probe failed before drizzle-kit answered, so NO comparison ` +
+            `between the migrations and schema.ts was performed. This failure is not evidence ` +
+            `that they disagree, and "leaves no drift ..." below is skipped rather than red for ` +
+            `that reason. If the error above is a timeout, the budget is ` +
+            `${DRIFT_PROBE_TIMEOUT_MS}ms (LIBRIS_DRIFT_PROBE_TIMEOUT_MS) and a loaded machine is ` +
+            `the usual cause -- re-run this file on its own before suspecting the schema.\n\n`,
+        );
+      });
+
+      const { pushSchema } = await import("drizzle-kit/api-postgres");
+
+      // pushSchema prompts when it hits an ambiguous rename. Pretending not to
+      // be a terminal turns that into a thrown error rather than a hung run.
+      const wasTTY = process.stdout.isTTY;
+      process.stdout.isTTY = false;
+      try {
+        const { sqlStatements } = await pushSchema(schema, db as never);
+        pendingSchemaStatements = sqlStatements;
+      } finally {
+        process.stdout.isTTY = wasTTY;
+      }
+    },
+    DRIFT_PROBE_TIMEOUT_MS,
+  );
+
+  it("leaves no drift between the migrations and schema.ts", (ctx) => {
+    // Nothing left to do means the migrations and schema.ts agree.
     //
     // This matters most for hand-written migrations — the Better Auth cutover
     // is one, because its DDL has to interleave with a data backfill that
     // drizzle-kit cannot generate. Without this check, a mismatch between the
     // SQL and the schema would only surface as a confusing runtime error.
-    const { pushSchema } = await import("drizzle-kit/api-postgres");
-
-    // pushSchema prompts when it hits an ambiguous rename. Pretending not to be
-    // a terminal turns that into a thrown error rather than a hung test run.
-    const wasTTY = process.stdout.isTTY;
-    process.stdout.isTTY = false;
-    try {
-      const { sqlStatements } = await pushSchema(schema, db as never);
-      expect(sqlStatements).toEqual([]);
-    } finally {
-      process.stdout.isTTY = wasTTY;
+    if (pendingSchemaStatements === null) {
+      // Skipped rather than failed, on purpose: the probe above is already red,
+      // and reporting THIS name red as well is exactly the misdiagnosis
+      // libris-8bb exists to remove. The run is still red overall.
+      ctx.skip(
+        "drizzle-kit never answered -- see the failure on the probe above. A comparison that " +
+          "did not run is not a drift finding.",
+      );
+      return;
     }
+    expect(pendingSchemaStatements).toEqual([]);
   });
 
   it("creates the book_status enum type", async () => {

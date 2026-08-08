@@ -244,15 +244,15 @@ convention.
 ### Tests that need a real PostgreSQL or Redis
 
 Most of the suite runs on PGlite, which is one embedded backend on one
-connection. Anything whose _subject_ is concurrency, and anything whose SQL
-depends on the driver's `db.execute` shape, cannot run there:
+connection. Anything whose _subject_ is concurrency, or whose subject is the
+production driver's own behaviour, cannot run there:
 
-| File                                              | Needs      | Why PGlite will not do                                                                                                                                                                                    |
-| ------------------------------------------------- | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `tests/last-admin-lock.postgres.test.ts`          | PostgreSQL | `SELECT ... FOR UPDATE` can only block a _different_ session, so on one connection the lock never contends.                                                                                               |
-| `tests/admin-subtree-http.postgres.test.ts`       | PostgreSQL | `lastAdminMiddleware` holds its transaction open across `next()`, and Better Auth's write inside `next()` needs a second connection. PGlite has one, behind an exclusive mutex, so the request deadlocks. |
-| `tests/reading-status-isolation.postgres.test.ts` | PostgreSQL | `getReadingStatusCounts` iterates `db.execute()`, which PGlite resolves to `{ rows }` — the route 500s with "result is not iterable".                                                                     |
-| `tests/redis-increment.test.ts`                   | Redis      | `createMemoryKVStore.increment` is a synchronous `Map` write that cannot lose an update, so it passes against a broken production path.                                                                   |
+| File                                              | Needs      | Why PGlite will not do                                                                                                                                                                                          |
+| ------------------------------------------------- | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tests/last-admin-lock.postgres.test.ts`          | PostgreSQL | `SELECT ... FOR UPDATE` can only block a _different_ session, so on one connection the lock never contends.                                                                                                     |
+| `tests/admin-subtree-http.postgres.test.ts`       | PostgreSQL | `lastAdminMiddleware` holds its transaction open across `next()`, and Better Auth's write inside `next()` needs a second connection. PGlite has one, behind an exclusive mutex, so the request deadlocks.       |
+| `tests/reading-status-isolation.postgres.test.ts` | PostgreSQL | `/api/reading-status/*` reads its rows out of a raw `db.execute()`. postgres-js's array-like `RowList` is the shape `rowsOf()` has to get right for production; PGlite only ever exercises the `{ rows }` half. |
+| `tests/redis-increment.test.ts`                   | Redis      | `createMemoryKVStore.increment` is a synchronous `Map` write that cannot lose an update, so it passes against a broken production path.                                                                         |
 
 `tests/backing-services.ts` resolves the connections and creates a uniquely
 named throwaway database per suite (dropped afterwards), so several checkouts
@@ -283,6 +283,7 @@ Paths relative to `services/api-hono/`. Test DB uses in-memory PGlite with mocke
 | File                                                | Coverage                                                                                            |
 | --------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
 | `src/db/db.test.ts`                                 | Database schema, migrations, and query helpers                                                      |
+| `src/db/rows.test.ts`                               | `rowsOf()` / `rowCount()`: the postgres-js vs PGlite `db.execute()` result shapes                   |
 | `src/env.test.ts`                                   | Environment variable parsing (Redis URL, required vars, defaults)                                   |
 | `src/lib/epub/embed-metadata.test.ts`               | EPUB metadata embedding (OPF rewriting)                                                             |
 | `src/lib/hardcover/client.test.ts`                  | Hardcover GraphQL client (request shaping, response mapping)                                        |
@@ -320,7 +321,8 @@ Paths relative to `services/api-hono/`. Test DB uses in-memory PGlite with mocke
 | `src/workers/cleanup-orphaned-files.test.ts`        | Scheduled orphan-file cleanup worker                                                                |
 | `tests/last-admin-lock.postgres.test.ts`            | The last-admin row lock under real contention (needs PostgreSQL)                                    |
 | `tests/admin-subtree-http.postgres.test.ts`         | `/api/auth/admin/*` over HTTP: last-admin 409s and remove-user book reassignment (needs PostgreSQL) |
-| `tests/reading-status-isolation.postgres.test.ts`   | Per-user `/api/reading-status/*` over HTTP (needs PostgreSQL)                                       |
+| `tests/reading-status.test.ts`                      | Per-user `/api/reading-status/counts` and `/{status}` over HTTP                                     |
+| `tests/reading-status-isolation.postgres.test.ts`   | The same two endpoints on the postgres-js driver's result shape (needs PostgreSQL)                  |
 | `tests/redis-increment.test.ts`                     | Atomicity of both rate-limit increments (needs Redis)                                               |
 
 ### Web Unit Test Files
