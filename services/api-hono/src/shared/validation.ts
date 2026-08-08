@@ -86,12 +86,11 @@ export const LibraryListQuerySchema = z.object({
     description: "Filter by language code (exact, case-insensitive)",
   }),
   series: searchString.openapi({ description: "Filter by series name (exact match)" }),
-  uploaderId: z
-    .string()
-    .trim()
-    .optional()
-    .default("")
-    .openapi({ description: "Filter by uploader API key ID (exact match)", default: "" }),
+  uploaderId: z.string().trim().optional().default("").openapi({
+    description:
+      "Filter by uploader. Takes the opaque `uploaders[].id` reference from GET /api/library/facets, not a user id; an unrecognised value returns an empty page.",
+    default: "",
+  }),
   q: searchString.openapi({
     description: "Full-text search across title, author, and description with typo tolerance",
   }),

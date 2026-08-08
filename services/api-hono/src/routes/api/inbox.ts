@@ -8,6 +8,7 @@ import { basename, join, extname, resolve } from "node:path";
 import { users, books, bookColumns, bookFiles, bookMetadataCandidates, uploadRegistry } from "#db";
 import type { AppVariables } from "../../context.js";
 import { getUserId, isAdmin, requireBookOwnership } from "../../shared/auth.js";
+import { uploaderRef } from "../../shared/uploader-ref.js";
 import { extractEpubCoverImage } from "../../lib/metadata/index.js";
 import { fetchExternalImage } from "../../shared/secure-image-fetch.js";
 import { validateEpubUpload } from "../../shared/epub-validation.js";
@@ -80,9 +81,16 @@ function detectMimeType(buf: Buffer): string {
 
 // ── Route definitions ────────────────────────────────────────────────
 
-function formatUploader(row: { uploaderId: string | null; uploaderLabel: string | null }) {
+/**
+ * Uploader attribution for a book row. `id` is the opaque uploader reference,
+ * never `users.id` — see `shared/uploader-ref.ts`.
+ */
+function formatUploader(
+  row: { uploaderId: string | null; uploaderLabel: string | null },
+  secret: string,
+) {
   if (!row.uploaderId || !row.uploaderLabel) return null;
-  return { id: row.uploaderId, label: row.uploaderLabel };
+  return { id: uploaderRef(row.uploaderId, secret), label: row.uploaderLabel };
 }
 
 const listInboxRoute = createRoute({
@@ -252,6 +260,7 @@ export const inboxRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
     const { page, limit, q, sort } = c.req.valid("query");
     const offset = (page - 1) * limit;
     const db = c.get("db");
+    const secret = c.get("env").API_SECRET_KEY;
 
     // Inbox shows books with status 'inbox' or 'review'
     const conditions = [inArray(books.status, ["inbox", "review"])];
@@ -330,7 +339,7 @@ export const inboxRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
     return c.json({
       data: items.map((book) => ({
         ...(({ uploaderId: _uploaderId, uploaderLabel: _uploaderLabel, ...rest }) => rest)(book),
-        uploader: formatUploader(book),
+        uploader: formatUploader(book, secret),
         files: (filesByBook.get(book.id) ?? []).map((f) => ({
           id: f.id,
           format: f.format,
@@ -411,6 +420,7 @@ export const inboxRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
   .openapi(getInboxBookRoute, async (c) => {
     const { id } = c.req.valid("param");
     const db = c.get("db");
+    const secret = c.get("env").API_SECRET_KEY;
 
     const [book] = await db
       .select({
@@ -452,7 +462,7 @@ export const inboxRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
 
     return c.json({
       ...(({ uploaderId: _uploaderId, uploaderLabel: _uploaderLabel, ...rest }) => rest)(book),
-      uploader: formatUploader(book),
+      uploader: formatUploader(book, secret),
       possibleDuplicate,
       files: files.map((f) => ({
         id: f.id,
