@@ -14,7 +14,9 @@ import { APIError } from "better-auth/api";
 import { createApp } from "./app.js";
 import type { AppServices } from "./bootstrap.js";
 import type { Env } from "./env.js";
+import { reassignBooksOnRemoveUser } from "./lib/user-deletion.js";
 import { bodyLimitMiddleware } from "./middleware/body-limit.js";
+import { lastAdminMiddleware } from "./middleware/last-admin.js";
 import { rateLimitMiddleware } from "./middleware/rate-limit.js";
 import { createMemoryKVStore } from "./services/kv-store.js";
 
@@ -58,6 +60,27 @@ describe("middleware order", () => {
     expect(bodyLimitIndex, "bodyLimitMiddleware is registered").toBeGreaterThanOrEqual(0);
     expect(rateLimitIndex, "rateLimitMiddleware is registered").toBeGreaterThanOrEqual(0);
     expect(bodyLimitIndex).toBeLessThan(rateLimitIndex);
+  });
+
+  it("guards the last admin before any book is reassigned on remove-user", () => {
+    // Both middlewares are mounted by app.ts and nothing else asserts that they
+    // are (59m.21's own tests wrap createApp's output, so they stay green even
+    // if the mount is deleted). Order is the load-bearing part: books must not
+    // move while lastAdminMiddleware may still refuse the removal with 409.
+    const routes = buildApp().routes;
+    const handlers = routes.map((route) => route.handler);
+    const lastAdminIndex = handlers.indexOf(lastAdminMiddleware);
+    const reassignIndex = handlers.indexOf(reassignBooksOnRemoveUser);
+
+    expect(lastAdminIndex, "lastAdminMiddleware is registered").toBeGreaterThanOrEqual(0);
+    expect(reassignIndex, "reassignBooksOnRemoveUser is registered").toBeGreaterThanOrEqual(0);
+    expect(lastAdminIndex).toBeLessThan(reassignIndex);
+
+    // And both must precede Better Auth's catch-all, or it answers first and
+    // neither ever runs.
+    const catchAllIndex = routes.findIndex((route) => route.path === "/api/auth/*");
+    expect(catchAllIndex, "the Better Auth catch-all is registered").toBeGreaterThanOrEqual(0);
+    expect(reassignIndex).toBeLessThan(catchAllIndex);
   });
 
   it("rejects an oversized unauthenticated sign-in body with 413", async () => {
