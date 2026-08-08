@@ -4,8 +4,13 @@
  * KOReader sends md5(password) as x-auth-key, so the md5 digest IS the bearer
  * secret — the plaintext never reaches the server. The old implementation
  * stored bcrypt(md5(password)) and accepted EITHER the digest or the plaintext,
- * which is two valid secrets where there should be one. The suite now asserts
- * the plaintext is rejected, which is the point of the change.
+ * which is two valid secrets where there should be one. The suite asserts the
+ * plaintext is rejected, which is the point of that change.
+ *
+ * What the digest is hashed WITH is a separate question, settled in
+ * libris-59m.24: the wire value is md5 of a human-chosen password, so the
+ * stored form is a salted HMAC under a pepper derived from API_SECRET_KEY
+ * rather than the bare sha256 it used to be.
  */
 
 import { afterAll, beforeAll, describe, expect, it } from "vite-plus/test";
@@ -16,7 +21,7 @@ import { createTestAuth, createTestDb, seedUser, type TestDb } from "../db/test-
 import * as schema from "../db/schema.js";
 import { createMemoryKVStore } from "../services/kv-store.js";
 import { md5 } from "./auth.js";
-import { hashKosyncSecret } from "./kosync-auth.js";
+import { hashKosyncSecret, legacyKosyncSecretHash, verifyKosyncSecret } from "./kosync-auth.js";
 import type { Env } from "../env.js";
 
 // ---------------------------------------------------------------------------
@@ -54,6 +59,9 @@ const TEST_ENV: Env = {
   LIBRIS_HTTP_IDLE_TIMEOUT_MS: 30_000,
 };
 
+/** The stored form of a wire secret, under this suite's server secret. */
+const stored = (wireValue: string) => hashKosyncSecret(wireValue, TEST_ENV.API_SECRET_KEY);
+
 let pglite: PGlite;
 let db: TestDb;
 let app: ReturnType<typeof createApp>["app"];
@@ -83,11 +91,12 @@ beforeAll(async () => {
 
   const owner = await seedUser(db, { name: "KoSync Reader" });
 
-  // The stored value is sha256 of exactly what KOReader puts on the wire.
+  // The stored value is a salted, peppered MAC of exactly what KOReader puts
+  // on the wire.
   await db.insert(schema.kosyncCredentials).values({
     userId: owner,
     username: KOSYNC_USER,
-    secretHash: hashKosyncSecret(md5(KOSYNC_PASS)),
+    secretHash: stored(md5(KOSYNC_PASS)),
   });
 });
 
@@ -150,7 +159,7 @@ describe("KoSync Auth (integration)", () => {
     await db.insert(schema.kosyncCredentials).values({
       userId: other,
       username: "other-kosync-user",
-      secretHash: hashKosyncSecret(md5("other-pass")),
+      secretHash: stored(md5("other-pass")),
     });
 
     const res = await app.request("/kosync/users/auth", {
@@ -240,7 +249,7 @@ describe("KoSync Auth (integration)", () => {
       await db.insert(schema.kosyncCredentials).values({
         userId,
         username,
-        secretHash: hashKosyncSecret(md5(password)),
+        secretHash: stored(md5(password)),
       });
     }
 
@@ -293,5 +302,136 @@ describe("KoSync Auth (integration)", () => {
     const res = await app.request("/kosync/users/create", { method: "POST" });
 
     expect(res.status).toBe(409);
+  });
+});
+
+/**
+ * libris-59m.24. The stored secret used to be a bare, unsalted sha256 of the
+ * wire value. The wire value is md5 of a password a human chose and typed into
+ * KOReader, and md5 adds no entropy, so a leaked `kosync_credentials` was one
+ * GPU wordlist pass away from every plaintext in the table at once — the same
+ * plaintext people reuse for the account whose hash in `accounts.password` is
+ * properly protected.
+ *
+ * The answer is not a work factor: this is verified on an unauthenticated
+ * endpoint KOReader hits on every progress read and write. It is to take the
+ * secret out of the database — a pepper the database does not contain — plus a
+ * per-row salt so nothing amortises across rows.
+ */
+describe("KoSync secret storage", () => {
+  const SERVER_SECRET = TEST_ENV.API_SECRET_KEY;
+  const OTHER_SECRET = "a-completely-different-server-secret-value!!";
+  const WIRE = md5("a-perfectly-ordinary-password");
+
+  it("stores neither the wire value nor any unkeyed digest of it", async () => {
+    const record = stored(WIRE);
+
+    // The old scheme was reproducible by anyone holding the row: this is the
+    // exact assertion that fails against it.
+    expect(record).not.toBe(legacyKosyncSecretHash(WIRE));
+    expect(record).not.toContain(WIRE);
+    expect(record).toMatch(/^v1\$[0-9a-f]{32}\$[0-9a-f]{64}$/);
+  });
+
+  it("salts per row, so two users who chose the same password differ", () => {
+    expect(stored(WIRE)).not.toBe(stored(WIRE));
+    // ...and both still verify.
+    expect(verifyKosyncSecret(WIRE, stored(WIRE), SERVER_SECRET).ok).toBe(true);
+  });
+
+  it("is worthless without the server secret", () => {
+    const record = hashKosyncSecret(WIRE, SERVER_SECRET);
+
+    expect(verifyKosyncSecret(WIRE, record, SERVER_SECRET).ok).toBe(true);
+    // A database-only disclosure: the attacker has the row and the candidate
+    // password, and still cannot confirm it.
+    expect(verifyKosyncSecret(WIRE, record, OTHER_SECRET).ok).toBe(false);
+  });
+
+  it("rejects the wrong wire value, and a malformed record", () => {
+    expect(verifyKosyncSecret(md5("nope"), stored(WIRE), SERVER_SECRET).ok).toBe(false);
+    expect(verifyKosyncSecret(WIRE, "v1$deadbeef", SERVER_SECRET).ok).toBe(false);
+    expect(verifyKosyncSecret(WIRE, "v1$$", SERVER_SECRET).ok).toBe(false);
+    expect(verifyKosyncSecret(WIRE, "", SERVER_SECRET).ok).toBe(false);
+    // An empty stored value must not match an empty candidate digest either.
+    expect(verifyKosyncSecret("", "", SERVER_SECRET).ok).toBe(false);
+  });
+
+  it("verifies a pre-v1 row and flags it for rewriting", () => {
+    const legacy = legacyKosyncSecretHash(WIRE);
+
+    expect(verifyKosyncSecret(WIRE, legacy, SERVER_SECRET)).toEqual({
+      ok: true,
+      needsRehash: true,
+    });
+    expect(verifyKosyncSecret(md5("nope"), legacy, SERVER_SECRET)).toEqual({
+      ok: false,
+      needsRehash: false,
+    });
+    // A v1 row is never re-minted, so the upgrade is a one-off per row.
+    expect(verifyKosyncSecret(WIRE, stored(WIRE), SERVER_SECRET).needsRehash).toBe(false);
+  });
+});
+
+/**
+ * The upgrade path an install that is already syncing takes. Nobody re-enters
+ * a credential: the first request their KOReader makes after the deploy
+ * verifies against the old format and rewrites the row in the new one.
+ */
+describe("KoSync legacy credential upgrade", () => {
+  it("authenticates a pre-v1 row, rewrites it, and keeps working after", async () => {
+    const userId = await seedUser(db, { name: "Legacy Reader" });
+    await db.insert(schema.kosyncCredentials).values({
+      userId,
+      username: "legacy-reader",
+      // Exactly what a row written before libris-59m.24 looks like.
+      secretHash: legacyKosyncSecretHash(md5("legacy-password")),
+    });
+
+    const authed = await app.request("/kosync/users/auth", {
+      headers: { "x-auth-user": "legacy-reader", "x-auth-key": md5("legacy-password") },
+    });
+    expect(authed.status).toBe(200);
+
+    const [row] = await db
+      .select({ secretHash: schema.kosyncCredentials.secretHash })
+      .from(schema.kosyncCredentials)
+      .where(eq(schema.kosyncCredentials.userId, userId));
+
+    // The bare digest is gone from the table, which is the whole point: the
+    // rewrite happens without the user doing anything.
+    expect(row!.secretHash).not.toBe(legacyKosyncSecretHash(md5("legacy-password")));
+    expect(row!.secretHash).toMatch(/^v1\$/);
+
+    // And the same device credential still authenticates against the new row.
+    const again = await app.request("/kosync/users/auth", {
+      headers: { "x-auth-user": "legacy-reader", "x-auth-key": md5("legacy-password") },
+    });
+    expect(again.status).toBe(200);
+  });
+
+  it("does not upgrade — or authenticate — a banned user's legacy row", async () => {
+    const userId = await seedUser(db, { name: "Banned Legacy Reader" });
+    await db.update(schema.users).set({ banned: true }).where(eq(schema.users.id, userId));
+    const legacy = legacyKosyncSecretHash(md5("banned-legacy-password"));
+    await db.insert(schema.kosyncCredentials).values({
+      userId,
+      username: "banned-legacy-reader",
+      secretHash: legacy,
+    });
+
+    const res = await app.request("/kosync/users/auth", {
+      headers: {
+        "x-auth-user": "banned-legacy-reader",
+        "x-auth-key": md5("banned-legacy-password"),
+      },
+    });
+    expect(res.status).toBe(401);
+
+    const [row] = await db
+      .select({ secretHash: schema.kosyncCredentials.secretHash })
+      .from(schema.kosyncCredentials)
+      .where(eq(schema.kosyncCredentials.userId, userId));
+    expect(row!.secretHash).toBe(legacy);
   });
 });

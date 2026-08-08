@@ -36,6 +36,12 @@ KoSync syncs your reading position from KOReader devices back into Libris. The s
 
 Set a username and password in the **Set KoSync Credentials** form. This is the only place KoSync credentials can be set — there is no `KOSYNC_*` environment variable, and there never was. Once saved, the tab shows the configured username.
 
+Treat the password as a pairing secret for the device, not as an account password. Use the **Generate** button: it fills the field with a random value and copies it to the clipboard, so you can type it straight into KOReader. KOReader hashes it with md5 before sending it, which means whatever you choose here is what an attacker would have to guess if the credential table ever leaked — so do not reuse your Libris password or anything else.
+
+Libris stores the credential as a salted HMAC keyed by a secret derived from `API_SECRET_KEY`, which lives in the server environment and never in the database. A database backup on its own is therefore useless to an attacker. The consequence is that **rotating `API_SECRET_KEY` invalidates every stored KoSync credential** — everyone has to set theirs again and re-pair their devices.
+
+Upgrading from a Libris build older than this one needs no action: credentials stored in the previous format keep working, and each one is rewritten in the new format the first time that device syncs.
+
 To connect a device, in KOReader go to **Settings -> Cloud sync -> Progress sync -> Custom server** and enter the URL shown on this tab.
 
 Use **Login**, not **Register**. Libris accounts are created by an admin, so

@@ -244,6 +244,7 @@ export const authMiddleware = createMiddleware<{ Variables: AppVariables }>(asyn
           password: c.req.header("x-auth-key"),
         },
         db,
+        env.API_SECRET_KEY,
       );
       c.set("userId", kosyncUserId);
       break;

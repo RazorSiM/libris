@@ -201,9 +201,11 @@ export const credentialsRoutes = createOpenApiRouter<{ Variables: AppVariables }
         throw kosyncUsernameTaken(username);
       }
 
-      // sha256 of the value KOReader will put on the wire, which is
-      // md5(password) — not the plaintext. See shared/kosync-auth.ts.
-      const secretHash = hashKosyncSecret(md5(password));
+      // A salted, peppered MAC of the value KOReader will put on the wire,
+      // which is md5(password) — not the plaintext. The pepper comes from
+      // API_SECRET_KEY, so a database-only leak yields nothing to guess
+      // against. See shared/kosync-auth.ts for the full rationale.
+      const secretHash = hashKosyncSecret(md5(password), env.API_SECRET_KEY);
 
       // The SELECT above is a check, not a lock. Between it and this INSERT
       // another request can claim the same username, and Postgres — not the
