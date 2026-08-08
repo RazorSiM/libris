@@ -819,7 +819,12 @@ export const libraryRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
         .update(books)
         .set({ ...updates, updatedAt: new Date() })
         .where(eq(books.id, id))
-        .returning();
+        // `bookColumns`, not a bare `.returning()`: the bare form returns every
+        // column, `search_vector` included, which BookUpdatedSchema does not
+        // declare and no client can use (libris-dnx). Both sides of the
+        // contract now derive from the same list — see the drift test in
+        // shared/schemas.test.ts.
+        .returning(bookColumns);
     } catch (err) {
       if (isUniqueViolation(err)) {
         throw new HTTPException(409, { message: uniqueViolationMessage(err) });
@@ -1060,7 +1065,9 @@ export const libraryRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
           .update(books)
           .set(bookUpdates)
           .where(eq(books.id, id))
-          .returning();
+          // Same contract as PATCH /{id} above — BookUpdatedSchema, so
+          // bookColumns (libris-dnx).
+          .returning(bookColumns);
 
         for (const [candidateId, fields] of candidateSelections) {
           await tx
