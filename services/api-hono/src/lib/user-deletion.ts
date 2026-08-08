@@ -2,6 +2,7 @@ import { count, eq, inArray } from "drizzle-orm";
 import type { MiddlewareHandler } from "hono";
 import { books } from "#db";
 import type { AppVariables } from "../context.js";
+import { sessionHeaders } from "../shared/request-ip.js";
 import { getLogger } from "./logger.js";
 
 const logger = getLogger("user-deletion");
@@ -70,7 +71,13 @@ export const reassignBooksOnRemoveUser: MiddlewareHandler<{ Variables: AppVariab
 
   // Let Better Auth produce its own unauthorized/forbidden response rather than
   // moving books on behalf of a caller it is about to refuse.
-  const session = await c.get("auth").api.getSession({ headers: c.req.raw.headers });
+  //
+  // sessionHeaders, not c.req.raw.headers: this was a fourth copy of the
+  // libris-59m.42 defect, still live. This middleware runs BEFORE the
+  // /api/auth/* catch-all — the only place app.ts overwrote the private
+  // client-IP header — so an attacker's own `x-libris-client-ip` reached Better
+  // Auth here and became the address its records and its limiter saw.
+  const session = await c.get("auth").api.getSession({ headers: sessionHeaders(c) });
   const actingUserId = session?.user.id;
   if (!actingUserId || !hasAdminRole(session?.user.role)) {
     await next();

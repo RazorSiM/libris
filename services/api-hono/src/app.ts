@@ -15,7 +15,7 @@ import { createRouter } from "./routes/index.js";
 import { root } from "./lib/logger.js";
 import { clientIpMiddleware } from "./middleware/client-ip.js";
 import { accessLogMiddleware } from "./middleware/access-log.js";
-import { withTrustedClientIp } from "./shared/request-ip.js";
+import { sessionHeaders } from "./shared/request-ip.js";
 import { createOpenApiRouter, toErrorResponse } from "./shared/openapi.js";
 
 export interface CreateAppOptions {
@@ -96,9 +96,7 @@ export function createApp({ services, env }: CreateAppOptions) {
   // lastAdminMiddleware, so a refused last-admin removal never moves any books.
   app.use("/api/auth/admin/remove-user", reassignBooksOnRemoveUser);
   app.on(["GET", "POST"], "/api/auth/*", (c) => {
-    const request = new Request(c.req.raw, {
-      headers: withTrustedClientIp(c.req.raw.headers, c.get("clientIp")),
-    });
+    const request = new Request(c.req.raw, { headers: sessionHeaders(c) });
     return services.auth.handler(request);
   });
 

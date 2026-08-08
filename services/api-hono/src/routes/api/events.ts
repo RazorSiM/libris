@@ -15,7 +15,7 @@ import {
 } from "../../lib/event-socket-registry.js";
 import { getUserId, isAdmin } from "../../shared/auth.js";
 import { isUserBanned } from "../../shared/user-ban.js";
-import { withTrustedClientIp } from "../../shared/request-ip.js";
+import { sessionHeaders } from "../../shared/request-ip.js";
 
 const logger = getLogger("ws");
 
@@ -79,13 +79,13 @@ export function createEventsRoutes(upgradeWebSocket: UpgradeWebSocket) {
        * The credential, detached from the request.
        *
        * `c.req.raw` does not outlive the upgrade, but a Headers copy does, and
-       * it is the only thing a re-validation needs. `withTrustedClientIp` is
-       * applied here for the same reason middleware/auth.ts applies it: Better
-       * Auth reads the client address from that private header, and handing it
-       * the raw client-supplied one would let a socket re-validate itself under
-       * a forged address.
+       * it is the only thing a re-validation needs. `sessionHeaders` is used
+       * here for the same reason every other Better Auth call site uses it:
+       * Better Auth reads the client address from a private header, and handing
+       * it the raw client-supplied one would let a socket re-validate itself
+       * under a forged address.
        */
-      const credentialHeaders = withTrustedClientIp(c.req.raw.headers, c.get("clientIp"));
+      const credentialHeaders = sessionHeaders(c);
 
       /**
        * What this socket's credential resolves to RIGHT NOW.
