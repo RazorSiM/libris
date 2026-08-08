@@ -7,7 +7,7 @@
  * an INCR + a conditional EXPIRE for a single EVAL, precisely so two requests
  * arriving together cannot both read the same count.
  *
- * Before libris-59m.31 neither had a behavioural test. The only concurrency
+ * Neither had a behavioural test before this file. The only concurrency
  * test in the tree fired 1000 calls at `createMemoryKVStore`, whose increment is
  * a synchronous Map read-modify-write in one JS turn — atomic by construction,
  * incapable of losing an update whatever the production path does. The other

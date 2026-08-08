@@ -2,7 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 import { resolveTransportMode } from "./logger.js";
 
 /**
- * libris-59m.33. The regression these pin: `E2E_TEST=1` selected the disabled
+ * The regression these pin: `E2E_TEST=1` selected the disabled
  * StructuredTransport, so the API emitted nothing under either E2E harness.
  * `.github/workflows/ci.yml` and `docker-compose.test.yml` both set
  * `NODE_ENV=development` + `E2E_TEST=1`, which is the row below that used to

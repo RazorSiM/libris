@@ -64,7 +64,7 @@ describe("getHttpServerOptions", () => {
 
 describe("a handler slower than the idle deadline", () => {
   it("still answers, instead of resetting the connection", async () => {
-    // libris-59m.28. The old `server.setTimeout(idleMs, socket =>
+    // The old `server.setTimeout(idleMs, socket =>
     // socket.destroy())` armed a socket INACTIVITY timer across the whole life
     // of the connection, handler execution included, and destroyed the socket
     // unconditionally when it fired. A legitimately slow request — an uncached

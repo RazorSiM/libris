@@ -19,7 +19,7 @@ import { createEventsRoutes } from "./events.js";
  * The ordering matters: hono/ws runs `createEvents(c)` FIRST and only then
  * hands the result to the transport handler, which is exactly why a request
  * that will never become a socket still ran the whole reservation path. Keeping
- * that ordering here is what lets this suite see libris-59m.17 at all.
+ * that ordering here is what lets this suite see the slot leak at all.
  *
  * The handlers `createEvents` returns are stashed on the response so a test can
  * drive onOpen/onClose the way the transport would — without that, nothing past
@@ -137,7 +137,7 @@ describe("/api/events", () => {
   });
 
   it("does not spend a connection slot on a plain GET", async () => {
-    // The libris-59m.17 regression test.
+    // The connection-slot leak regression test.
     //
     // `createEvents` reserves a slot, and only onOpen/onClose/onError give it
     // back — none of which fires for a request that never becomes a socket. The
@@ -165,9 +165,10 @@ describe("/api/events", () => {
   });
 
   it("does not consult the auth store on a plain GET", async () => {
-    // The re-validation added for libris-e0p must not turn a request that never
-    // becomes a socket into an extra session lookup — that would hand back the
-    // amplification libris-59m.17 removed, in a different currency.
+    // The re-validation that stops a socket outliving its credential must not
+    // turn a request that never becomes a socket into an extra session lookup —
+    // that would hand back the amplification the slot-leak fix removed, in a
+    // different currency.
     const { app, calls } = appForUser("no-lookup-user");
 
     await app.request("/api/events");
@@ -204,7 +205,7 @@ describe("/api/events", () => {
 });
 
 /**
- * libris-e0p. An open socket that outlives its own session.
+ * An open socket that outlives its own session.
  *
  * The route binds the subscription's user id and admin flag at upgrade and used
  * to never look again, so signing out elsewhere, an admin ban or plain expiry
@@ -286,8 +287,8 @@ describe("/api/events revocation", () => {
     });
 
     it("closes a socket whose account was banned", async () => {
-      // libris-59m.6 enforces bans on every credential path; this is the same
-      // rule reaching a socket that was already open. It also covers the
+      // Bans are enforced on every credential path; this is the same rule
+      // reaching a socket that was already open. It also covers the
       // app-password case in the general way: that credential resolves into a
       // fresh session on every check, so the ban shows up here.
       let banned = false;
@@ -398,9 +399,9 @@ describe("/api/events revocation", () => {
     });
 
     it("keeps the socket open when the auth store is unreachable", async () => {
-      // libris-59m.15: an infrastructure fault is not a verdict on the
-      // credential. Severing every socket in the install because Redis blinked
-      // would turn a degraded store into an outage.
+      // An infrastructure fault is not a verdict on the credential. Severing
+      // every socket in the install because Redis blinked would turn a degraded
+      // store into an outage.
       const { app } = appForUser("store-down-user", null);
       const socket = await openSocket(app);
 

@@ -1,12 +1,13 @@
 /**
  * `/api/reading-status/*` over HTTP, on the ordinary PGlite harness.
  *
- * This suite could not exist before libris-6lt: `getReadingStatusCounts`
- * iterated the result of `db.execute()` directly, which postgres-js returns as
- * an array-like and PGlite resolves to a `{ rows }` object — so the endpoint
- * threw "result is not iterable" here and nowhere else. That single line is
- * the whole reason the endpoint had no integration coverage, and why its
- * per-user isolation had to be verified against a real server
+ * This suite could not exist before the driver-shape fix:
+ * `getReadingStatusCounts` iterated the result of `db.execute()` directly,
+ * which postgres-js returns as an array-like and PGlite resolves to a
+ * `{ rows }` object — so the endpoint threw "result is not iterable" here and
+ * nowhere else. That single line is the whole reason the endpoint had no
+ * integration coverage, and why its per-user isolation had to be verified
+ * against a real server
  * (`reading-status-isolation.postgres.test.ts`) or not at all.
  *
  * With `rowsOf()` from `#db/rows` in place, the route answers on both drivers,
@@ -109,7 +110,7 @@ afterEach(async () => {
 
 describe("GET /api/reading-status/counts", () => {
   it("answers with real numbers rather than a driver-shape error", async () => {
-    // The assertion that fails against the pre-6lt route: it 500s with
+    // The assertion that fails against the pre-fix route: it 500s with
     // "result is not iterable" on PGlite, so `status` is 500 and `data` has no
     // counts at all. Nothing about the SQL or the scoping is under test here —
     // only that the endpoint can run on the harness everything else runs on.

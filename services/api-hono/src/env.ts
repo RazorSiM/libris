@@ -51,9 +51,9 @@ const KNOWN_SECRET_PLACEHOLDERS = new Set([
  * A required, high-entropy secret.
  *
  * Length alone is not a check: the placeholder that used to ship for
- * BETTER_AUTH_SECRET was 46 characters and passed `min(32)` happily
- * (libris-59m.2). Both secrets now fail for the same reasons with the same
- * message shape, so neither can quietly drift weaker than the other.
+ * BETTER_AUTH_SECRET was 46 characters and passed `min(32)` happily. Both
+ * secrets now fail for the same reasons with the same message shape, so neither
+ * can quietly drift weaker than the other.
  */
 function secretSchema(name: string, generateCommand: string) {
   return z
@@ -156,7 +156,7 @@ const RawEnvSchema = z.object({
   // With no baseURL it falls through to `getOrigin(request.url)`, which
   // @hono/node-server builds from the socket, so the container's plain-http
   // origin becomes the ONLY trusted origin and every browser request carrying
-  // `Origin: https://...` is answered 403 INVALID_ORIGIN (libris-59m.1).
+  // `Origin: https://...` is answered 403 INVALID_ORIGIN.
   // Deriving it from x-forwarded-* would need advanced.trustedProxyHeaders,
   // which makes a client-settable header authoritative for the auth origin.
   // Naming the origin explicitly is the safer answer.

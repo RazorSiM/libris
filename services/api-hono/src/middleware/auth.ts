@@ -59,7 +59,7 @@ export function isTrustedOrigin(
 }
 
 /**
- * CSRF defence-in-depth for cookie-authenticated unsafe requests (libris-7h7.33).
+ * CSRF defence-in-depth for cookie-authenticated unsafe requests.
  *
  * Existing controls (SameSite=Lax cookies, JSON-only bodies on most routes, no
  * permissive CORS, no state-changing GETs) already make the residual risk low;
@@ -146,7 +146,7 @@ export const authMiddleware = createMiddleware<{ Variables: AppVariables }>(asyn
     // letting the throw escape would turn a bad key into a 500.
     //
     // Anything that is NOT an APIError is an infrastructure fault (Redis,
-    // Postgres) rather than a verdict on the credential (libris-59m.15).
+    // Postgres) rather than a verdict on the credential.
     // Collapsing both into the same bare "Auth failure from <ip>" line made a
     // store outage indistinguishable from a wrong password in the logs, which
     // is the difference between diagnosing an incident and guessing at it.
@@ -171,8 +171,7 @@ export const authMiddleware = createMiddleware<{ Variables: AppVariables }>(asyn
     }
 
     /**
-     * A ban has to bind to the person, not to one kind of credential
-     * (libris-59m.6).
+     * A ban has to bind to the person, not to one kind of credential.
      *
      * Better Auth only checks `banned` when it CREATES a session
      * (`plugins/admin/admin.mjs`, the session.create before-hook), and banning
@@ -268,8 +267,8 @@ export const authMiddleware = createMiddleware<{ Variables: AppVariables }>(asyn
     }
 
     // OPDS clients send their app password over Basic auth, which a
-    // customAPIKeyGetter turns into the same session everything else gets
-    //. No branch of its own any more.
+    // customAPIKeyGetter turns into the same session everything else gets.
+    // No branch of its own any more.
     case "opds":
     case "api-key":
       await resolveSession(true);
@@ -283,7 +282,7 @@ export const authMiddleware = createMiddleware<{ Variables: AppVariables }>(asyn
       break;
   }
 
-  // CSRF defence-in-depth (libris-7h7.33): reject foreign-origin or
+  // CSRF defence-in-depth: reject foreign-origin or
   // cross-site cookie-authenticated mutations. Headerless API-key/OPDS
   // requests carry no cookie and are untouched.
   if (isForeignCookieMutation(c, env)) {

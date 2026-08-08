@@ -1,6 +1,6 @@
 /**
  * Why `reassignBooksOnRemoveUser` commits outside `lastAdminMiddleware`'s
- * transaction, and why that is the only arrangement that works (libris-cyg).
+ * transaction, and why that is the only arrangement that works.
  *
  * The shape looks wrong at a glance. Both middlewares are mounted in sequence
  * on POST /api/auth/admin/remove-user (pinned by app.wiring.test.ts);
@@ -26,7 +26,7 @@
  * halves of that reasoning so a future refactor towards "one transaction" runs
  * into them rather than into production.
  *
- * Real PostgreSQL, for the reason libris-8mx established: PGlite is a single
+ * Real PostgreSQL, for the established reason: PGlite is a single
  * embedded backend behind an exclusive mutex, so a second connection is exactly
  * what it cannot provide, and the failure it produces is a deadlock rather than
  * the FK rejection the shipped topology actually sees.

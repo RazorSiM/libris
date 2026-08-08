@@ -101,11 +101,11 @@ const deleteCredentialRoute = createRoute({
  *
  * The handlers below check for the collisions they know about up front, but a
  * uniqueness rule they do NOT know about still reaches Postgres and comes back
- * as an unhandled 500 with no hint of what went wrong. That is exactly how
- * libris-59m.9 presented: a stale global `(service, username)` unique index
- * meant the second user in an install to connect Hardcover got "Internal server
- * error". The index is gone, but this makes the failure mode legible if any
- * future constraint change reintroduces one.
+ * as an unhandled 500 with no hint of what went wrong. That is exactly how the
+ * Hardcover collision presented: a stale global `(service, username)` unique
+ * index meant the second user in an install to connect Hardcover got "Internal
+ * server error". The index is gone, but this makes the failure mode legible if
+ * any future constraint change reintroduces one.
  */
 /**
  * The one refusal a taken KoSync username gets, wherever it is detected.
@@ -113,7 +113,7 @@ const deleteCredentialRoute = createRoute({
  * Two code paths reach it — the up-front SELECT and the unique violation the
  * INSERT raises when someone else claimed the name in between — and they have
  * to be indistinguishable to the caller, or the answer depends on how busy the
- * server was (libris-59m.44).
+ * server was.
  */
 function kosyncUsernameTaken(username: string): HTTPException {
   return new HTTPException(409, {
@@ -215,7 +215,7 @@ export const credentialsRoutes = createOpenApiRouter<{ Variables: AppVariables }
       // absorbed into the UPDATE branch rather than raised, leaving
       // kosync_credentials_username_uniq as the only index left to violate —
       // from either branch, since the UPDATE rewrites `username` too.
-      // Without this the loser of the race got a 500 (libris-59m.44).
+      // Without this the loser of the race got a 500.
       try {
         await db
           .insert(kosyncCredentials)

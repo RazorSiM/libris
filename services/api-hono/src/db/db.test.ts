@@ -58,7 +58,7 @@ afterEach(async () => {
 
 describe("migrations", () => {
   it("runs all migrations on a fresh database", async () => {
-    // `>= 1` was vacuous (libris-59m.31): beforeAll had already run them, so the
+    // `>= 1` was vacuous: beforeAll had already run them, so the
     // journal could not have been empty. The journal must hold exactly one row
     // per migration directory on disk, which is what "all of them ran" means.
     const result = await pglite.query<{ cnt: string }>(
@@ -67,7 +67,7 @@ describe("migrations", () => {
     expect(Number(result.rows[0]!.cnt)).toBe(readMigrationDirs().length);
   });
 
-  // The drift check is deliberately TWO tests (libris-8bb).
+  // The drift check is deliberately TWO tests.
   //
   // Asking drizzle-kit the question is slow; comparing its answer against
   // "nothing" is instant, and is the actual assertion. As one test the two
@@ -97,8 +97,9 @@ describe("migrations", () => {
    * The work is I/O- and CPU-bound on a subprocess-sized workload rather than
    * anything this suite controls, so the right budget is generous rather than
    * tight: Vitest's 30s default was enough on an idle machine and not enough on
-   * a loaded one, which is the whole of libris-8bb. Overridable so the timeout
-   * path can be exercised on demand (`LIBRIS_DRIFT_PROBE_TIMEOUT_MS=1`).
+   * a loaded one, which is the whole reason this budget is configurable.
+   * Overridable so the timeout path can be exercised on demand
+   * (`LIBRIS_DRIFT_PROBE_TIMEOUT_MS=1`).
    */
   const DRIFT_PROBE_TIMEOUT_MS = Number(process.env.LIBRIS_DRIFT_PROBE_TIMEOUT_MS ?? 180_000);
 
@@ -151,8 +152,8 @@ describe("migrations", () => {
     // SQL and the schema would only surface as a confusing runtime error.
     if (pendingSchemaStatements === null) {
       // Skipped rather than failed, on purpose: the probe above is already red,
-      // and reporting THIS name red as well is exactly the misdiagnosis
-      // libris-8bb exists to remove. The run is still red overall.
+      // and reporting THIS name red as well is exactly the misdiagnosis the
+      // two-test split exists to remove. The run is still red overall.
       ctx.skip(
         "drizzle-kit never answered -- see the failure on the probe above. A comparison that " +
           "did not run is not a drift finding.",
@@ -219,8 +220,9 @@ describe("migrations", () => {
     // A snapshot nobody names as a parent is a "leaf". More than one leaf means
     // the history has branched, and plain `drizzle-kit generate` refuses to run
     // ("Non-commutative migrations detected") until the branch is resolved --
-    // which is how libris-59m.45 was found. Passing --ignore-conflicts hides the
-    // branch rather than fixing it, so this test is the thing that has to notice.
+    // which is how a branched history was found here. Passing
+    // --ignore-conflicts hides the branch rather than fixing it, so this test is
+    // the thing that has to notice.
     const { readFileSync, readdirSync } = await import("node:fs");
     const nodePath = await import("node:path");
     const nodeUrl = await import("node:url");
@@ -268,7 +270,7 @@ describe("migrations", () => {
     const dir = nodePath.dirname(nodeUrl.fileURLToPath(import.meta.url));
     await migrate(fresh.db, { migrationsFolder: nodePath.resolve(dir, "../../migrations") });
 
-    // `>= 1` made this a test that migrate() did not throw (libris-59m.31).
+    // `>= 1` made this a test that migrate() did not throw.
     // Idempotent means the journal did not GROW: a second run that re-applied
     // everything would double the row count, which is exactly the failure the
     // branched-snapshot bug produced on deploy.
@@ -285,7 +287,7 @@ describe("migrations", () => {
 // ---------------------------------------------------------------------------
 
 /**
- * SCHEMA-level tests (libris-59m.31).
+ * SCHEMA-level tests.
  *
  * The five blocks below drive Drizzle and PostgreSQL directly — no `src/` route,
  * service or worker runs in any of them, so no application change can turn one

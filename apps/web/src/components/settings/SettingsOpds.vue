@@ -48,7 +48,7 @@ function copyToClipboard(text: string) {
       The separate OPDS username/password is gone. A reader signs in with your
       own account name and an app password, so there is no second credential to
       set up here and no way to end up with OPDS access you forgot you granted.
-      The proper devices UI is libris-5ng.21.
+      A richer devices UI is tracked separately.
     -->
     <div class="text-xs text-muted space-y-1">
       <p>

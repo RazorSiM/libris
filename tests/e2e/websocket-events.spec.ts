@@ -323,11 +323,11 @@ test.describe("WebSocket Real-time Events", () => {
     "banning a user severs the event socket they already had open",
     { tag: "@smoke" },
     async ({ browser }) => {
-      // libris-e0p had eleven integration tests and no browser-level one, so
-      // nothing checked the property end to end: that the socket a REAL client
-      // opened — upgraded with a real cookie, through the app's own connection
-      // code — is closed when the account behind it is banned, and delivers
-      // nothing afterwards.
+      // The socket-revocation work had eleven integration tests and no
+      // browser-level one, so nothing checked the property end to end: that the
+      // socket a REAL client opened — upgraded with a real cookie, through the
+      // app's own connection code — is closed when the account behind it is
+      // banned, and delivers nothing afterwards.
       //
       // A WebSocket authenticates once, at upgrade, and then lives as long as
       // the tab. Before the fix, banning an account left its already-open

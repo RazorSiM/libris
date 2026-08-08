@@ -44,7 +44,7 @@ export interface CreateAuthDeps {
    * `getOrigin(request.url)` — the container's plain-http socket origin — and
    * that single derived origin becomes the whole trusted-origin list, so every
    * browser request carrying `Origin: https://...` is refused with 403
-   * INVALID_ORIGIN (libris-59m.1). env.ts enforces this at boot; only dev and
+   * INVALID_ORIGIN. env.ts enforces this at boot; only dev and
    * test may leave it undefined.
    */
   baseURL?: string | undefined;
@@ -182,8 +182,7 @@ export function createAuth({ db, secondaryStorage, env, secret, baseURL }: Creat
     },
 
     /**
-     * Close live /api/events WebSockets when the credential behind them dies
-     * (libris-e0p).
+     * Close live /api/events WebSockets when the credential behind them dies.
      *
      * A socket authenticates once, at upgrade, and then lives for as long as
      * the tab is open. Every HTTP path re-checks on each request; the socket
@@ -204,8 +203,8 @@ export function createAuth({ db, secondaryStorage, env, secret, baseURL }: Creat
      * through `deleteWithHooks` / `updateWithHooks` (db/with-hooks.mjs), which
      * is where these fire. One choke point instead of a list to keep current.
      *
-     * It also sidesteps the libris-59m.5 trap below: a database hook fires on
-     * an actual write, so it cannot run for a call that was refused.
+     * It also sidesteps the after-hook trap below: a database hook fires on an
+     * actual write, so it cannot run for a call that was refused.
      *
      * NOT SUFFICIENT ON ITS OWN, by construction — hooks are in-process, a
      * session that merely expires is never deleted, and an app-password socket
@@ -227,8 +226,8 @@ export function createAuth({ db, secondaryStorage, env, secret, baseURL }: Creat
             // The ban paths delete the session rows too, so the hook above
             // already reaches a browser socket. An app-password socket carries
             // no session row at all (the apiKey plugin synthesises one per
-            // request), and libris-59m.6 made a ban bind to the person on every
-            // other credential path — this is what makes it bind here as well.
+            // request), and a ban binds to the person on every other
+            // credential path — this is what makes it bind here as well.
             //
             // The cast is the price of a hook typed against the BASE user
             // model: `banned`/`banExpires` are fields the admin plugin adds to
@@ -241,8 +240,7 @@ export function createAuth({ db, secondaryStorage, env, secret, baseURL }: Creat
         delete: {
           after: async (user) => {
             /**
-             * Finish the job `internalAdapter.deleteUser` leaves half-done
-             * (libris-jyp).
+             * Finish the job `internalAdapter.deleteUser` leaves half-done.
              *
              * It deletes session ROWS and never the matching secondary-storage
              * entries, and `findSession` reads secondary storage before
@@ -280,7 +278,7 @@ export function createAuth({ db, secondaryStorage, env, secret, baseURL }: Creat
          * try block — an unauthorized caller's 401 arrives here as a value, not
          * as a thrown error, and every line below would otherwise run for them.
          *
-         * libris-59m.5: without this guard, an anonymous
+         * Without this guard, an anonymous
          * `POST /api/auth/admin/set-user-password` got its 401 and still
          * signed the named user out of every device. Looped over admin ids it
          * was a credential-free denial of service.
@@ -305,7 +303,7 @@ export function createAuth({ db, secondaryStorage, env, secret, baseURL }: Creat
 
         if (ctx.path === "/admin/ban-user") {
           /**
-           * Unpair the banned user's devices (libris-59m.6).
+           * Unpair the banned user's devices.
            *
            * The plugin's own ban only deletes sessions, and an app password is
            * not a session — it resolves into one on each request, so a banned
@@ -359,9 +357,9 @@ export function createAuth({ db, secondaryStorage, env, secret, baseURL }: Creat
       // options.advanced?.disableOriginCheck ?? isTest()` in
       // context/create-context.ts — and `isTest()` reads a NODE_ENV captured at
       // module load. The whole origin defence therefore switched itself off
-      // under `NODE_ENV=test` and no unit test could ever exercise it, which is
-      // how libris-59m.1 shipped. Pinning it to false means the suite runs the
-      // same check production runs.
+      // under `NODE_ENV=test` and no unit test could ever exercise it, which
+      // is how the broken production origin check shipped. Pinning it to false
+      // means the suite runs the same check production runs.
       disableOriginCheck: false,
       // app.ts overwrites this private header with the address resolved from
       // the TCP peer and trusted-proxy CIDRs. Better Auth never reads raw
@@ -369,7 +367,7 @@ export function createAuth({ db, secondaryStorage, env, secret, baseURL }: Creat
       ipAddress: { ipAddressHeaders: [betterAuthClientIpHeader], ipv6Subnet: 64 },
       // No crossSubDomainCookies: the session cookie is host-only, which is what
       // keeps a sibling subdomain from shadowing or fixing it. COOKIE_DOMAIN was
-      // dropped in the security audit (libris-7h7.56) for the same reason —
+      // dropped in the security audit for the same reason —
       // __Host- would be the stronger guarantee but Better Auth only emits
       // __Secure-, and a host-only __Secure- cookie already denies subdomains.
     },

@@ -148,7 +148,7 @@ describe("auth cutover — resulting schema", () => {
     // covered by lib/user-deletion.test.ts. A path that forgets fails loudly
     // rather than orphaning rows, but loudly is not safely: Better Auth's
     // deletion is un-transacted, so the rejection lands after the account row
-    // is already gone (libris-59m.21).
+    // is already gone.
     const info = await column(pglite, "books", "created_by");
     expect(info?.data_type).toBe("text");
     expect(info?.is_nullable).toBe("NO");
@@ -161,8 +161,8 @@ describe("auth cutover — resulting schema", () => {
   });
 
   it("api_keys is reshaped into the Better Auth apikey model", async () => {
-    // Field list taken from getAuthTables() via tmp/spike-5ng/dump-tables.ts,
-    // not from the docs. Ownership is the polymorphic reference_id, NOT user_id.
+    // Field list taken from getAuthTables(), not from the docs. Ownership is
+    // the polymorphic reference_id, NOT user_id.
     const expected: Record<string, { type: string; nullable: boolean }> = {
       id: { type: "text", nullable: false },
       config_id: { type: "text", nullable: false },
@@ -313,7 +313,7 @@ describe("auth cutover — data backfill", () => {
     // attaches the first password to an existing row instead of creating a
     // duplicate person (routes/api/setup.test.ts, "POST /api/setup on a
     // migrated install"). Gating it on "any user exists" is what turned this
-    // migration into a permanent lockout — libris-59m.4.
+    // migration into a permanent lockout.
     await applyMigration(pglite, cutover);
     expect(await count(pglite, `SELECT count(*) n FROM accounts`)).toBe(0);
     expect(await count(pglite, `SELECT count(*) n FROM users`)).toBeGreaterThan(0);

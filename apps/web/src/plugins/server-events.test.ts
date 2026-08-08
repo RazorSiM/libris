@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 /**
- * The realtime socket's identity (libris-59m.27).
+ * The realtime socket's identity.
  *
  * The server binds a subscription's user id and admin flag at UPGRADE time and
  * never re-checks them, so the socket IS an identity. Sign-out and sign-in are
@@ -214,7 +214,7 @@ describe("the socket's identity", () => {
 });
 
 /**
- * A revoked socket is terminal; a broken or re-scoped one is not (libris-abt).
+ * A revoked socket is terminal; a broken or re-scoped one is not.
  *
  * The server closes an event socket with 4401 when the credential behind it
  * stops being valid — banned, revoked from another device, expired. The client
@@ -457,10 +457,11 @@ describe("a socket the server refuses", () => {
 });
 
 /**
- * A re-scope has to catch the STORE up too, and dial exactly once (libris-cxy).
+ * A re-scope has to catch the STORE up too, and dial exactly once.
  *
- * libris-abt stopped a 4409 from signing the user out, and the socket that came
- * back was correctly scoped — the server reads the current session at upgrade.
+ * Treating a 4409 as a re-scope stopped it from signing the user out, and the
+ * socket that came back was correctly scoped — the server reads the current
+ * session at upgrade.
  * Nothing refreshed the SPA, though, and check() short-circuits on `checked`
  * for the rest of the page's life, so a promoted user got an admin-scoped feed
  * behind a sidebar with no admin navigation, and an identity change left the

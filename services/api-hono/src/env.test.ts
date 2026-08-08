@@ -22,7 +22,7 @@ const VALID_ENV = {
   LIBRIS_LIBRARY_PATH: "/tmp/library",
   API_SECRET_KEY: "0123456789abcdef".repeat(2),
   BETTER_AUTH_SECRET: GOOD_BETTER_AUTH_SECRET,
-  // Required in production (libris-59m.1) — see the BETTER_AUTH_URL block below.
+  // Required in production — see the BETTER_AUTH_URL block below.
   BETTER_AUTH_URL: "https://libris.example.com",
 };
 
@@ -118,9 +118,9 @@ describe("parseEnv", () => {
     });
 
     it("rejects the placeholder that used to ship in .env.example", () => {
-      // libris-59m.2: 46 characters, so `min(32)` passed it and every install
-      // that copied .env.example without editing this line signed its sessions
-      // with a secret published in a public repository.
+      // The published placeholder was 46 characters, so `min(32)` passed it
+      // and every install that copied .env.example without editing this line
+      // signed its sessions with a secret published in a public repository.
       expect(() =>
         parseEnv({
           ...VALID_ENV,
@@ -159,7 +159,7 @@ describe("parseEnv", () => {
 
   describe("BETTER_AUTH_URL", () => {
     it("is required in production", () => {
-      // libris-59m.1. Better Auth does NOT read x-forwarded-proto unless
+      // Better Auth does NOT read x-forwarded-proto unless
       // advanced.trustedProxyHeaders is set, so with no baseURL it derives the
       // container's plain-http socket origin, makes that the only trusted
       // origin, and answers every browser request carrying `Origin: https://…`

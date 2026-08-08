@@ -184,7 +184,7 @@ describe("fetchExternalImage", () => {
 });
 
 /**
- * libris-59m.41: `timeoutMs` bounds the WHOLE operation, not each hop.
+ * `timeoutMs` bounds the WHOLE operation, not each hop.
  *
  * It used to be handed to `dependencies.request` inside the redirect loop, and
  * `defaultRequest` built a fresh `AbortSignal.timeout` from it on every call, so

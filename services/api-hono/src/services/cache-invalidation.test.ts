@@ -1,5 +1,5 @@
 /**
- * The two halves of the route cache have to name the same paths (libris-kej).
+ * The two halves of the route cache have to name the same paths.
  *
  * `cachedRoute` was mounted only on `/opds/*` and `/api/stats`, while every
  * `invalidateRouteCache` call named `/api/library`, `/api/inbox`,
@@ -203,7 +203,7 @@ describe("a book mutation clears the OPDS feed it changed", () => {
   });
 
   it("PUT /kosync/syncs/progress evicts the cached /api/stats it feeds", async () => {
-    // The one write path with no UI behind it (libris-021). Every number the
+    // The one write path with no UI behind it. Every number the
     // stats page renders comes from the rows this handler writes, and it
     // invalidated nothing — so finishing a book on an e-reader left the counts
     // as they were until the entry's 60s TTL ran out.
@@ -273,7 +273,7 @@ function mountedCachedPaths(): string[] {
 describe("CACHED_ROUTE_PREFIXES matches the real mounts", () => {
   it("finds the mounts at all (guards the marker itself)", () => {
     // If this ever drops to zero the two tests below pass vacuously, which is
-    // exactly the shape of failure libris-kej was.
+    // exactly the shape of failure this pairing exists to catch.
     expect(mountedCachedPaths().length).toBeGreaterThan(5);
   });
 
@@ -298,10 +298,10 @@ describe("CACHED_ROUTE_PREFIXES matches the real mounts", () => {
 });
 
 describe("every invalidateRouteCache call names a cached prefix", () => {
-  // Workers as well as routes since libris-021: a worker's writes land after
-  // the request that triggered them returned, and they invalidate through the
-  // process-wide store rather than through `c`. A dead prefix there is exactly
-  // as invisible as a dead prefix in a handler.
+  // Workers as well as routes: a worker's writes land after the request that
+  // triggered them returned, and they invalidate through the process-wide store
+  // rather than through `c`. A dead prefix there is exactly as invisible as a
+  // dead prefix in a handler.
   const scannedDirs = ["../routes/", "../workers/"].map((dir) =>
     fileURLToPath(new URL(dir, import.meta.url)),
   );

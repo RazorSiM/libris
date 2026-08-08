@@ -5,9 +5,9 @@
  * `getReadingStatusCounts` iterated `db.execute(...)` directly, which is an
  * array-like under postgres-js and a `{ rows }` object under PGlite, so the
  * route 500'd on the ordinary harness and real PostgreSQL was the only place it
- * could be driven at all (libris-59m.31).
+ * could be driven at all.
  *
- * libris-6lt removed that constraint — the route normalises both shapes through
+ * That constraint is gone — the route normalises both shapes through
  * `rowsOf()` from `#db/rows` — so the per-user isolation assertions moved to
  * `reading-status.test.ts`, where they run on every `vp run test` instead of
  * only when someone has a server up.

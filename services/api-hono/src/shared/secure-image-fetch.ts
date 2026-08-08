@@ -24,7 +24,7 @@ export interface SecureImageFetchDependencies {
   /**
    * The signal is the WHOLE operation's deadline, not this hop's — it is
    * created once before the redirect loop and handed to every hop and every DNS
-   * lookup (libris-59m.41).
+   * lookup.
    */
   request(
     url: URL,
@@ -270,8 +270,7 @@ export async function fetchExternalImage(
   let url = parseHttpUrl(initialUrl);
 
   /**
-   * ONE deadline for the whole operation, redirects and DNS included
-   * (libris-59m.41).
+   * ONE deadline for the whole operation, redirects and DNS included.
    *
    * `timeoutMs` used to be handed to `dependencies.request` inside the loop and
    * `defaultRequest` built a fresh `AbortSignal.timeout` from it every call, so

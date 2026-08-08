@@ -200,7 +200,7 @@ describe("the auth middleware stands aside for /api/auth/", () => {
 });
 
 /**
- * The last-admin invariant (59m.12, 59m.42) is NOT tested here any more.
+ * The last-admin invariant is NOT tested here any more.
  *
  * lastAdminMiddleware holds a `SELECT ... FOR UPDATE` transaction open across
  * `next()`, and Better Auth's write inside `next()` goes through its own
@@ -208,8 +208,7 @@ describe("the auth middleware stands aside for /api/auth/", () => {
  * one embedded backend behind an exclusive mutex — cannot give: the request
  * deadlocks. middleware/last-admin.ts used to carry a `NODE_ENV === "test"`
  * branch that closed the transaction before `next()` so this file could run,
- * which meant these tests exercised a guard that was not the shipped one
- * (libris-8mx).
+ * which meant these tests exercised a guard that was not the shipped one.
  *
  * That branch is gone. The whole block moved to
  * tests/admin-subtree-http.postgres.test.ts, which drives the same requests
@@ -259,7 +258,7 @@ describe("sign-in over HTTP", () => {
       body: JSON.stringify({ email: "reader@example.com", password: "wrong" }),
     });
 
-    // `not.toBe(200)` also passed on a 500 or a 429 (libris-59m.31) — it could
+    // `not.toBe(200)` also passed on a 500 or a 429 — it could
     // not distinguish a refusal from the handler falling over.
     expect(res.status).toBe(401);
     expect(res.headers.getSetCookie()).toEqual([]);

@@ -139,8 +139,7 @@ describe("createMemorySecondaryStorage", () => {
 });
 
 /**
- * The cleanup Better Auth's `internalAdapter.deleteUser` does not do
- * (libris-jyp).
+ * The cleanup Better Auth's `internalAdapter.deleteUser` does not do.
  *
  * The behaviour that matters is pinned end-to-end in lib/auth.integration.test.ts,
  * where a real `deleteUser` fires the real `user.delete` database hook. These
@@ -277,10 +276,10 @@ describe("createRedisSecondaryStorage", () => {
   });
 
   // A test named "only applies the ttl when the counter is created" used to sit
-  // here, and its assertion was `script.toContain("if value == 1 then")`
-  // (libris-59m.31). String-matching the Lua SOURCE proves the script's text
-  // and nothing about its behaviour: any rewrite that kept the substring — or
-  // moved it into a comment — passed. Both properties it was reaching for (a
+  // here, and its assertion was `script.toContain("if value == 1 then")`.
+  // String-matching the Lua SOURCE proves the script's text and nothing about
+  // its behaviour: any rewrite that kept the substring — or moved it into a
+  // comment — passed. Both properties it was reaching for (a
   // concurrent burst returning 1..N exactly once, and later increments not
   // re-arming the TTL) are asserted against a real Redis in
   // tests/redis-increment.test.ts instead.
@@ -295,7 +294,7 @@ describe("createRedisSecondaryStorage", () => {
   });
 
   /**
-   * libris-59m.15. The request-path client carries `commandTimeout: 250` and
+   * The request-path client carries `commandTimeout: 250` and
    * `enableOfflineQueue: false`, so any Redis pause above 250 ms — BGSAVE, an
    * AOF rewrite, a failover, a restart — turns every command into a rejection.
    *
@@ -373,7 +372,7 @@ describe("createRedisSecondaryStorage", () => {
 });
 
 /**
- * The end-to-end shape of libris-59m.15: a session that exists in Postgres must
+ * The end-to-end shape of the same rule: a session that exists in Postgres must
  * keep authenticating while Redis is unavailable.
  *
  * This drives a real Better Auth instance over PGlite rather than asserting on

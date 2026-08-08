@@ -146,7 +146,7 @@ describe("deniesAppPasswords", () => {
   });
 
   it("refuses the settings surface, whose admin check lives in the handler", () => {
-    // 59m.13. PATCH /api/settings calls requireAdmin() and
+    // PATCH /api/settings calls requireAdmin() and
     // GET /api/settings/status returns filesystem paths and every failed job's
     // payload to admins. Neither is expressible in the path-only policy table,
     // because GET /api/settings is user-visible on the same prefix.
@@ -155,7 +155,7 @@ describe("deniesAppPasswords", () => {
   });
 });
 
-// ── The class of bug, not the instance (59m.13) ──────────────────────
+// ── The class of bug, not the instance ───────────────────────────────
 
 /**
  * Two ways a route can demand admin authority, and only one of them is visible

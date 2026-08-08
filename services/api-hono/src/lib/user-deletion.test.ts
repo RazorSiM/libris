@@ -5,7 +5,7 @@
  * `internalAdapter.deleteUser` issues three UN-TRANSACTED statements: delete
  * sessions, delete accounts, delete user. Without a precondition the third hits
  * the constraint after the first two have committed — a 500, a surviving user
- * row with no credential, and no way for the admin to tell. libris-59m.21.
+ * row with no credential, and no way for the admin to tell.
  */
 import type { PGlite } from "@electric-sql/pglite";
 import { eq } from "drizzle-orm";
@@ -185,7 +185,7 @@ describe("POST /api/auth/admin/remove-user — target owns books", () => {
   /**
    * The two cases that drove the real `createApp` — "succeeds and reassigns the
    * books" and "does not touch books the acting admin already owned" — moved to
-   * tests/admin-subtree-http.postgres.test.ts (libris-8mx).
+   * tests/admin-subtree-http.postgres.test.ts.
    *
    * createApp mounts lastAdminMiddleware ahead of reassignBooksOnRemoveUser, and
    * that middleware now holds a `SELECT ... FOR UPDATE` transaction open for the
@@ -217,7 +217,8 @@ describe("POST /api/auth/admin/remove-user — target owns books", () => {
   });
 
   /**
-   * libris-cyg, first half: the guard's own refusal never moves a book.
+   * First half of the atomicity story: the guard's own refusal never moves a
+   * book.
    *
    * `reassignBooksOnRemoveUser` writes through `c.get("db")`, so it commits on
    * its own connection while `lastAdminMiddleware`'s `FOR UPDATE` transaction
@@ -229,7 +230,7 @@ describe("POST /api/auth/admin/remove-user — target owns books", () => {
    *
    * PGlite-safe precisely because it is the refusal path: the transaction is
    * closed by the throw rather than held across a `next()` that would need a
-   * second connection (libris-8mx).
+   * second connection.
    */
   it("never reaches the reassignment when the guard refuses the removal", async () => {
     const { auth } = createTestApp();

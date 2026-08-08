@@ -173,7 +173,7 @@ describe("account creation", () => {
       .then(() => ({ status: 200 }))
       .catch((err: { statusCode?: number }) => ({ status: err.statusCode ?? 500 }));
 
-    // `not.toBe(200)` was satisfied by a 500 too (libris-59m.31), so it could
+    // `not.toBe(200)` was satisfied by a 500 too, so it could
     // not tell "refused" from "crashed".
     expect(second.status).toBe(400);
     expect(await db.select().from(schema.users)).toHaveLength(1);
@@ -231,8 +231,8 @@ describe("sessions", () => {
   });
 
   /**
-   * libris-59m.5. The after-hook in createAuth() must not fire for a call that
-   * failed authorization.
+   * The after-hook in createAuth() must not fire for a call that failed
+   * authorization.
    *
    * Better Auth's dispatcher catches the endpoint's APIError, stores it as the
    * return value and runs after-hooks anyway, so the hook used to read `userId`
@@ -362,7 +362,7 @@ describe("sessions", () => {
   });
 
   /**
-   * libris-jyp. Deleting a user must not leave their sessions live in Redis.
+   * Deleting a user must not leave their sessions live in Redis.
    *
    * `internalAdapter.deleteUser` (better-auth 1.6.25,
    * dist/db/internal-adapter.mjs) deletes session ROWS, account rows and the
@@ -429,8 +429,8 @@ describe("sessions", () => {
 });
 
 /**
- * libris-59m.6, part three: a ban must unpair the devices, not just close the
- * browser sessions.
+ * Binding a ban to the person, part three: a ban must unpair the devices, not
+ * just close the browser sessions.
  *
  * middleware/auth.ts refuses a banned user's app-password session on every
  * request, but the rows themselves have to go inactive too — otherwise an unban
@@ -485,8 +485,8 @@ describe("banning a user", () => {
   });
 
   it("leaves app passwords alone when the ban itself is refused", async () => {
-    // The 59m.5 trap again: after-hooks run for a rejected call too, so an
-    // unauthenticated ban attempt must not disable anybody's devices.
+    // The after-hook trap again: after-hooks run for a rejected call too, so
+    // an unauthenticated ban attempt must not disable anybody's devices.
     const target = await auth.api.createUser({
       body: { email: "not-banned@example.com", password: PASSWORD, name: "Safe" },
     });
@@ -503,13 +503,13 @@ describe("banning a user", () => {
 });
 
 /**
- * libris-e0p: a live /api/events WebSocket must not outlive the credential it
- * was upgraded with.
+ * A live /api/events WebSocket must not outlive the credential it was upgraded
+ * with.
  *
  * A socket authenticates once, at upgrade, and then never asks again. Every
- * HTTP path re-checks per request — libris-59m.6 made a ban bind to cookies,
- * app passwords and KoSync alike — so a banned user's downloads stopped dead
- * while their event stream carried on.
+ * HTTP path re-checks per request — a ban binds to cookies, app passwords and
+ * KoSync alike — so a banned user's downloads stopped dead while their event
+ * stream carried on.
  *
  * These drive the REAL revocation endpoints against a real database and assert
  * on what the registry did, which is the only way to know the wiring holds. The
@@ -611,11 +611,12 @@ describe("closing event sockets when the credential behind them dies", () => {
   });
 
   it("closes a banned user's sockets, app-password ones included", async () => {
-    // libris-59m.6 is why this one is called out separately. A ban deletes the
-    // session ROWS, which reaches a browser socket through the session hook —
-    // but an app-password socket has no session row at all (the apiKey plugin
-    // synthesises one per request), so nothing session-shaped can ever reach
-    // it. The user-level hook on the ban write is what does.
+    // Binding the ban to the person is why this one is called out separately.
+    // A ban deletes the session ROWS, which reaches a browser socket through
+    // the session hook — but an app-password socket has no session row at all
+    // (the apiKey plugin synthesises one per request), so nothing
+    // session-shaped can ever reach it. The user-level hook on the ban write is
+    // what does.
     const headers = await signedInAdmin("ban-socket-admin@example.com");
     const target = await auth.api.createUser({
       body: { email: "ban-socket@example.com", password: PASSWORD, name: "Bannable" },
@@ -641,9 +642,10 @@ describe("closing event sockets when the credential behind them dies", () => {
   });
 
   it("closes a banned user's sockets when the ban arrives through admin/update-user", async () => {
-    // The libris-59m.12 lesson: /admin/update-user sets `banned` too, and an
-    // enumeration of endpoints that only knew about /admin/ban-user would miss
-    // it. Hooking the database write covers both without listing either.
+    // The lesson from the last-admin guard: /admin/update-user sets `banned`
+    // too, and an enumeration of endpoints that only knew about
+    // /admin/ban-user would miss it. Hooking the database write covers both
+    // without listing either.
     const headers = await signedInAdmin("update-ban-admin@example.com");
     const target = await auth.api.createUser({
       body: { email: "update-ban@example.com", password: PASSWORD, name: "Bannable" },
@@ -730,7 +732,7 @@ describe("closing event sockets when the credential behind them dies", () => {
   });
 
   it("leaves the sockets alone when the revocation itself is refused", async () => {
-    // The libris-59m.5 trap, restated for this hook: after-hooks run for a
+    // The after-hook trap, restated for this hook: after-hooks run for a
     // REJECTED call too. Database hooks fire on the write rather than on the
     // request, so an unauthenticated ban attempt must not close anybody's
     // stream — which would otherwise be a credential-free denial of service
@@ -825,7 +827,7 @@ describe("listing your own devices", () => {
 });
 
 /**
- * The production configuration branch (libris-59m.1).
+ * The production configuration branch.
  *
  * Everything above runs with NODE_ENV=test, which takes the dev
  * `trustedOrigins` list. Production takes `trustedOrigins: []` and relies

@@ -42,7 +42,7 @@ describe("validateEpubUpload", () => {
     expect(validateEpubUpload(input)).toMatch(error);
   });
 
-  // libris-59m.29: an entry flood used to sail through here and only blow up in
+  // An entry flood used to sail through here and only blow up in
   // the ingestion worker, where it is an in-process outage instead of a 400.
   describe("central-directory entry flood", () => {
     /**

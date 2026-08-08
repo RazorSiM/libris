@@ -8,8 +8,7 @@ import type { AppVariables } from "../context.js";
  * genuinely cached paths discoverable from the assembled router rather than
  * something a reader has to reconstruct by grepping. `cache-invalidation.test.ts`
  * walks that list and checks it against `CACHED_ROUTE_PREFIXES`, which is what
- * stops "what is cached" and "what is invalidated" drifting apart again
- * (libris-kej).
+ * stops "what is cached" and "what is invalidated" drifting apart again.
  */
 export const CACHED_ROUTE_MARKER: unique symbol = Symbol.for("libris.cachedRoute");
 

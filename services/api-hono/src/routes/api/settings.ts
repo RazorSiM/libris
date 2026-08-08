@@ -28,8 +28,7 @@ const logger = getLogger("settings");
 // --- GET / ---
 
 /**
- * The half of `GET /api/settings` that only administrators receive
- * (libris-n2j).
+ * The half of `GET /api/settings` that only administrators receive.
  *
  * These are host filesystem paths. `GET /api/settings` is the one endpoint on
  * this prefix a non-admin may call, so the role branch that withholds them
@@ -189,7 +188,7 @@ const settingsStatusRoute = createRoute({
         "application/json": {
           schema: z.object({
             // Four admin-only sections, each null rather than absent for a
-            // non-admin caller. Unlike GET / (libris-n2j) the variance IS in the
+            // non-admin caller. Unlike GET / the variance IS in the
             // declared shape here — but nullable alone does not say WHY, so each
             // one names the authority that decides it.
             health: z
@@ -244,7 +243,7 @@ const settingsStatusRoute = createRoute({
             // in the very same payload, and the two disagreed: this one read
             // `service_credentials`, which the kosync_credentials migration
             // emptied and no writer has touched since, so it was pinned to
-            // false forever (libris-59m.18). One field, one query, one answer.
+            // false forever. One field, one query, one answer.
             settings: z
               .object({
                 libraryPath: z.string(),
@@ -463,9 +462,9 @@ export const settingsRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
 
     // kosync_credentials, never service_credentials: the migration that split
     // KoSync out deleted every kosync row from the latter and nothing writes
-    // one back, so a lookup there answers "not configured" forever
-    // (libris-59m.18). GET /status deliberately reports this through
-    // `credentials.kosync` instead of carrying a second copy of the flag.
+    // one back, so a lookup there answers "not configured" forever. GET
+    // /status deliberately reports this through `credentials.kosync` instead
+    // of carrying a second copy of the flag.
     const [kosyncCred] = await db
       .select({ userId: kosyncCredentials.userId })
       .from(kosyncCredentials)
@@ -482,8 +481,7 @@ export const settingsRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
     return c.json({
       // Everything below this line goes to every authenticated caller. The
       // role-varying half is `adminOnlySettings` and only `adminOnlySettings` —
-      // see AdminOnlySettingsSchema above for why it is spelled that way
-      // (libris-n2j).
+      // see AdminOnlySettingsSchema above for why it is spelled that way.
       ...adminOnlySettings(c, env),
       kosyncConfigured,
       hardcoverMetadataEnabled,

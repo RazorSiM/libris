@@ -455,9 +455,9 @@ describe("KoSync progress isolation", () => {
 // ── Reading Stats Isolation ───────────────────────────────────────
 //
 // This block used to insert both users' reading_progress rows itself and then
-// SELECT them straight back with the same userId filter it had just written
-// (libris-59m.31). No src/ code ran, so "reading progress rows are scoped per
-// user" was really an assertion that PostgreSQL honours a WHERE clause. It read
+// SELECT them straight back with the same userId filter it had just written.
+// No src/ code ran, so "reading progress rows are scoped per user" was really
+// an assertion that PostgreSQL honours a WHERE clause. It read
 // as coverage of /api/stats, and would have stayed green with that endpoint's
 // user scoping deleted.
 //
@@ -535,7 +535,7 @@ describe("reading stats isolation", () => {
 // ── Hardcover Sync Log Isolation ──────────────────────────────────
 //
 // Same rewrite as above: this inserted both users' hardcover_sync_log rows and
-// selected them back by userId without involving the route (libris-59m.31).
+// selected them back by userId without involving the route.
 
 describe("hardcover sync log isolation", () => {
   it("GET /api/hardcover/sync/log shows you only your own entries", async () => {

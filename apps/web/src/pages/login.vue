@@ -211,8 +211,8 @@ watchEffect(() => {
           :loading="loading"
           data-testid="login-submit-btn"
         />
-        <!-- No forgot-password link: there is no mail transport yet
-             (libris-2ld), so a link would lead nowhere. -->
+        <!-- No forgot-password link: there is no mail transport yet, so a link
+             would lead nowhere. -->
         <p class="text-xs text-muted text-center" data-testid="password-reset-note">
           Forgotten your password? An admin can reset it for you.
         </p>

@@ -8,7 +8,7 @@ import { getRequestRedis } from "./redis.js";
  * The one thing every process that touches the route cache has to agree on. A
  * worker that invalidates `cache:routes:/opds…` while the HTTP server serves
  * `routes:/opds…` would be a no-op that reads as coverage, which is the exact
- * shape of libris-kej.
+ * shape of the route/cache mismatch this prefix exists to prevent.
  */
 export const CACHE_KEY_PREFIX = "cache";
 
@@ -28,7 +28,7 @@ export function createCacheStorage(): KVStore {
 let _cacheStorage: KVStore | undefined;
 
 /**
- * The route cache, reachable without a request (libris-021).
+ * The route cache, reachable without a request.
  *
  * BullMQ workers write things the cached surfaces render — `book-organize`
  * writes `coverPath` and `storagePath` AFTER approve has returned, and
@@ -40,7 +40,7 @@ let _cacheStorage: KVStore | undefined;
  * **Why the store directly rather than an invalidation event on the bus.** The
  * event bus is Redis pub/sub, which is at-most-once and unacknowledged: an
  * invalidation published while the API process is restarting is simply lost,
- * and nothing in `invalidateRouteCache`'s deferred-retry machinery (libris-hs5)
+ * and nothing in `invalidateRouteCache`'s deferred-retry machinery
  * spans the hop — the publisher believes it succeeded, and the subscriber that
  * would have retried never saw it. It would also have to travel on a channel
  * the SPA cannot see: `onServerEvent` fans every message out to WebSocket
@@ -49,8 +49,8 @@ let _cacheStorage: KVStore | undefined;
  *
  * The store is the more direct answer *and* the more portable one. The cache is
  * a shared Redis keyspace in production, not a process-local structure, so when
- * libris-7h7.7 moves the workers into their own process this same call resolves
- * to the same keys through that process's own connection — nothing to redo. The
+ * the workers move into their own process this same call resolves to the same
+ * keys through that process's own connection — nothing to redo. The
  * only thing that would not survive the split is dev/test, where the store is
  * an in-memory Map per process; there the TTL backstop is the whole guarantee,
  * as it already is for anything a restart drops.

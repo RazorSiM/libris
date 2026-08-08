@@ -4,7 +4,7 @@
  * ⚠︎ These definitions must agree with what Better Auth resolves from the
  * options in lib/auth.ts. They were written against `getAuthTables()` — Better
  * Auth's own resolved definition — rather than the docs, and must be re-checked
- * on every upgrade. Re-run tmp/spike-5ng/dump-tables.ts and diff.
+ * on every upgrade. Dump `getAuthTables()` again after an upgrade and diff.
  *
  * Two things about how the Drizzle adapter binds to this file:
  *

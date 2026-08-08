@@ -84,7 +84,7 @@ let seq = 0;
  * more: PATCH /api/settings is admin-gated in its handler and
  * GET /api/settings/status hands admins the queue counts, every failed job's
  * payload and the server's filesystem paths, so the whole prefix now refuses
- * app-password credentials (59m.13, shared/route-policy.ts).
+ * app-password credentials (see shared/route-policy.ts).
  */
 async function seedSession(options: { label: string; isAdmin: boolean }) {
   seq += 1;
@@ -330,7 +330,7 @@ describe("GET /api/settings/status", () => {
   });
 
   /**
-   * libris-59m.18. The admin payload used to answer the KoSync question twice:
+   * The admin payload used to answer the KoSync question twice:
    * `credentials.kosync.configured`, read from kosync_credentials and correct,
    * and `settings.kosyncConfigured`, read from service_credentials — a table
    * the kosync migration emptied and no writer has touched since, so it was
@@ -405,7 +405,7 @@ describe("GET /api/settings", () => {
 
     // Driven off the exported field list rather than two literals, so a third
     // admin-only field cannot be added to the projection without this test
-    // covering it (libris-n2j).
+    // covering it.
     for (const field of ADMIN_ONLY_SETTINGS_FIELDS) {
       expect(Object.keys(adminBody), field).toContain(field);
       // Absent, not null and not empty: an undefined-valued key would still
@@ -420,7 +420,7 @@ describe("GET /api/settings", () => {
   });
 });
 
-// ── The contract has to admit that it varies by role (libris-n2j) ────
+// ── The contract has to admit that it varies by role ─────────────────
 
 /**
  * The response shape of `GET /api/settings` depends on who is asking, and the
@@ -508,7 +508,7 @@ describe("the OpenAPI document declares the settings role variance", () => {
   });
 });
 
-// ── App passwords are not admin credentials (59m.13) ────────────────
+// ── App passwords are not admin credentials ─────────────────────────
 
 /**
  * The settings prefix carries admin authority that ROUTE_TABLE could not see.

@@ -168,10 +168,11 @@ async function writeEpub(name: string, data: Buffer): Promise<string> {
   return filePath;
 }
 
-// libris-59m.10 (re-fix of libris-7h7.6): the OPF scanners were quadratic.
-// Every input below is small enough to sail through validateEpubUpload and the
-// OPF byte budget; before the fix each one cost seconds to minutes of blocked
-// event loop. Measured before -> after on this machine:
+// The OPF scanners were quadratic — twice over, since the first fix swapped one
+// backtracking pattern for another. Every input below is small enough to sail
+// through validateEpubUpload and the OPF byte budget; before the fix each one
+// cost seconds to minutes of blocked event loop. Measured before -> after on
+// this machine:
 //
 //   2 MB "<dc:title " OPF        207222 ms -> 37.0 ms
 //   200 KB "<dc:title " OPF        3081 ms ->  4.2 ms
@@ -511,7 +512,7 @@ describe("extractEpubMetadata", () => {
     });
 
     it("returns empty metadata for random binary data", async () => {
-      // Deterministic rather than Math.random() (libris-59m.31): a test whose
+      // Deterministic rather than Math.random(): a test whose
       // input changes every run cannot be re-examined when it does fail.
       const garbage = Buffer.alloc(4096);
       for (let i = 0; i < garbage.length; i++) {
@@ -520,7 +521,7 @@ describe("extractEpubMetadata", () => {
       const path = await writeEpub("garbage.epub", garbage);
       const meta = await extractEpubMetadata(path);
 
-      // `toBeDefined()` was the whole assertion (libris-59m.31), and this
+      // `toBeDefined()` was the whole assertion, and this
       // function returns an object on every path -- it could not fail.
       expect(meta).toEqual({});
     });
@@ -537,9 +538,9 @@ describe("extractEpubMetadata", () => {
       const path = await writeEpub("bad-eocd.epub", corrupted);
       const meta = await extractEpubMetadata(path);
 
-      // Was `toBeDefined()`, which an always-object return can never fail
-      // (libris-59m.31). The local-header fallback recovers the OPF even with
-      // the EOCD destroyed, so that recovery is what gets pinned.
+      // Was `toBeDefined()`, which an always-object return can never fail.
+      // The local-header fallback recovers the OPF even with the EOCD
+      // destroyed, so that recovery is what gets pinned.
       expect(meta.title).toBe("Good Book");
     });
 
@@ -605,7 +606,7 @@ describe("extractEpubMetadata", () => {
       const path = await writeEpub("bad-cd.epub", corrupted);
       const meta = await extractEpubMetadata(path);
 
-      // Was `toBeDefined()` (libris-59m.31). The fallback still finds the OPF.
+      // Was `toBeDefined()`. The fallback still finds the OPF.
       expect(meta.title).toBe("Bad CD");
     });
 
@@ -642,7 +643,7 @@ describe("extractEpubMetadata", () => {
       const path = await writeEpub("bad-deflate.epub", corrupted);
       const meta = await extractEpubMetadata(path);
 
-      // Was `toBeDefined()` (libris-59m.31). The OPF is readable through the
+      // Was `toBeDefined()`. The OPF is readable through the
       // fallback path even though its DEFLATE stream is not.
       expect(meta.title).toBe("Bad Deflate");
     });
@@ -1345,8 +1346,8 @@ describe("extractEpubMetadata", () => {
       const meta = await extractEpubMetadata(path);
 
       // Was `toBeDefined()` under a comment saying "if the OPF was stored
-      // uncompressed, it should find metadata" -- which asserted none of that
-      // (libris-59m.31). This is the assertion the comment described.
+      // uncompressed, it should find metadata" -- which asserted none of
+      // that. This is the assertion the comment described.
       expect(meta.title).toBe("Fallback Book");
     });
   });

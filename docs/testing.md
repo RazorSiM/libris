@@ -215,10 +215,10 @@ Test config lives in each workspace's `vite.config.ts` `test` block, per Vite+ g
 
 ### A test that cannot fail is worse than no test
 
-It gets counted as coverage. An adversarial review of the `libris-5ng` and
-`libris-7h7` work found several issues closed on the strength of tests that were
-structurally incapable of failing; `libris-59m.31` replaced them and left these
-rules behind.
+It gets counted as coverage. An adversarial review of the multi-user auth and
+security-hardening work found several issues closed on the strength of tests
+that were structurally incapable of failing; a follow-up pass replaced them and
+left these rules behind.
 
 **The bar for a new test is that you watched it go red.** Break the code it
 claims to cover — delete the lock, drop the `WHERE`, remove the guard — and

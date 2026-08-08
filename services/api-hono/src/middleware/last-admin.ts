@@ -47,8 +47,9 @@ export type AdminEndpointEffect = "always" | "body" | "never";
  * Keyed by the plugin-relative path (`endpoint.path`), so
  * last-admin.test.ts can enumerate `admin().endpoints` from the installed
  * package and assert this table is exhaustive. That test is the mechanism that
- * stops the next Better Auth upgrade from quietly reintroducing 59m.12: a new
- * endpoint fails the suite until someone classifies it here.
+ * stops the next Better Auth upgrade from quietly reintroducing an
+ * unclassified privilege endpoint: a new endpoint fails the suite until someone
+ * classifies it here.
  *
  * Verified against better-auth 1.6.25, dist/plugins/admin/routes.mjs.
  */
@@ -210,7 +211,7 @@ export function reducesAdminAuthority(pluginPath: string, body: AdminActionBody)
  * captured pooled handle, not the transaction below — would have waited on a
  * transaction only that write could end. So the HTTP-level tests exercised a
  * guard that did not hold its lock across the write, which is not the thing
- * that ships (libris-8mx). The coverage those tests provided now runs against
+ * that ships. The coverage those tests provided now runs against
  * a real server in tests/admin-subtree-http.postgres.test.ts.
  */
 export const lastAdminMiddleware: MiddlewareHandler<{ Variables: AppVariables }> = async (
@@ -243,7 +244,7 @@ export const lastAdminMiddleware: MiddlewareHandler<{ Variables: AppVariables }>
   // Let Better Auth produce its normal unauthorized/forbidden response. The
   // invariant check must not reveal user or role information to other callers.
   //
-  // sessionHeaders, not the raw headers (libris-59m.42). lib/auth.ts configures
+  // sessionHeaders, not the raw headers. lib/auth.ts configures
   // Better Auth to read the client address from one private header on the
   // assumption that the app always overwrites it with the address resolved from
   // the TCP peer — but app.ts only does that inside the /api/auth/* catch-all

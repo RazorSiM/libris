@@ -18,15 +18,14 @@
  * That is why middleware/last-admin.ts used to carry a `NODE_ENV === "test"`
  * branch which ran the guard in a transaction it closed BEFORE calling
  * `next()` — so under the ordinary PGlite harness the shipped code was not the
- * code under test (libris-8mx). The branch is gone; this file is where the
+ * code under test. The branch is gone; this file is where the
  * coverage it enabled now lives, against a real PostgreSQL server through
  * `createDb`, the same pooled postgres-js factory production uses.
  *
  * Moved here wholesale:
  * - the "last-admin invariant" block from src/routes/api/auth-handler.test.ts
- *   (libris-59m.12 and libris-59m.42)
  * - the three remove-user cases from src/lib/user-deletion.test.ts that drive
- *   `createApp` (libris-59m.21); the two that build a bare Hono app without
+ *   `createApp`; the two that build a bare Hono app without
  *   lastAdminMiddleware stayed behind, because nothing holds a transaction
  *   open there.
  */
@@ -158,7 +157,7 @@ describe.skipIf(!reachable)("the admin subtree over HTTP, against real PostgreSQ
     /**
      * Called with the headers of every `auth.api.getSession` the request stack
      * makes. Used to assert what the middleware layer actually hands Better
-     * Auth, which is not observable from the response (libris-59m.42).
+     * Auth, which is not observable from the response.
      */
     onGetSession?: (headers: Headers) => void;
   }
@@ -245,8 +244,8 @@ describe.skipIf(!reachable)("the admin subtree over HTTP, against real PostgreSQ
 
   /**
    * /admin/update-user nests the privilege fields under `data`, which is the
-   * whole of 59m.12: the guard read `body.role`, found undefined, and stood
-   * aside while Better Auth wrote `data.role` to the database.
+   * whole defect: the guard read `body.role`, found undefined, and stood aside
+   * while Better Auth wrote `data.role` to the database.
    */
   const updateUser = (app: TestApp, cookie: string, userId: string, data: object) =>
     postAdmin(app, cookie, "update-user", { userId, data });
@@ -297,8 +296,8 @@ describe.skipIf(!reachable)("the admin subtree over HTTP, against real PostgreSQ
     );
 
     /**
-     * libris-59m.42. lib/auth.ts tells Better Auth to read the client address
-     * from one private header, on the stated invariant that the app always
+     * lib/auth.ts tells Better Auth to read the client address from one
+     * private header, on the stated invariant that the app always
      * overwrites it with the address resolved from the TCP peer and the
      * trusted-proxy CIDRs. app.ts only does that inside the /api/auth/*
      * catch-all HANDLER, which runs AFTER this middleware — so passing
@@ -334,7 +333,7 @@ describe.skipIf(!reachable)("the admin subtree over HTTP, against real PostgreSQ
       expect(new Set(seen)).toEqual(new Set(["127.0.0.1"]));
     });
 
-    // ── /admin/update-user (59m.12) ────────────────────────────────────
+    // ── /admin/update-user ─────────────────────────────────────────────
     //
     // The guard used to be three paths listed in app.ts, and update-user was
     // not one of them. It performs the same writes: `data.role` and the ban
@@ -429,7 +428,7 @@ describe.skipIf(!reachable)("the admin subtree over HTTP, against real PostgreSQ
       },
     );
 
-    // The CONCURRENCY case deliberately does not live here (libris-59m.31). It
+    // The CONCURRENCY case deliberately does not live here. It
     // exercises `withLastAdminLock` directly, two calls at once, in
     // tests/last-admin-lock.postgres.test.ts — where it can assert that the
     // second transaction BLOCKS until the first commits. Driving that through
@@ -441,7 +440,7 @@ describe.skipIf(!reachable)("the admin subtree over HTTP, against real PostgreSQ
      * `books.created_by` is NOT NULL ON DELETE RESTRICT, and Better Auth's
      * `internalAdapter.deleteUser` issues three UN-TRANSACTED statements. Without
      * reassignBooksOnRemoveUser the third hits the constraint after the first two
-     * have committed (libris-59m.21).
+     * have committed.
      *
      * These three cases moved out of src/lib/user-deletion.test.ts because they
      * drive `createApp`, which mounts lastAdminMiddleware ahead of the
@@ -500,7 +499,8 @@ describe.skipIf(!reachable)("the admin subtree over HTTP, against real PostgreSQ
     });
 
     /**
-     * libris-bmg. The same defect as 59m.42, in the copy nobody had looked at.
+     * The same spoofable-client-address defect, in the copy nobody had looked
+     * at.
      *
      * `reassignBooksOnRemoveUser` also resolves the acting session before
      * Better Auth's catch-all runs, and it was still passing

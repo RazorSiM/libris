@@ -13,7 +13,7 @@ describe("request-path Redis", () => {
   });
 
   it("opens the connection at creation instead of on the first command", () => {
-    // libris-59m.14. `lazyConnect` leaves the client in status "wait" until
+    // `lazyConnect` leaves the client in status "wait" until
     // something asks it for a command, and ioredis' sendCommand forces
     // `writable = false` while `this.stream` is still undefined. Combined with
     // `enableOfflineQueue: false` that made the FIRST command after every boot

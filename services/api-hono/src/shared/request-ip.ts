@@ -178,9 +178,9 @@ export function getCredentialRateLimitKey(identifier: string): string {
  * private header, on the invariant that no Request reaching Better Auth ever
  * carries a client-supplied value for it. That invariant used to be held by
  * three independent open-coded copies of "copy the headers, overwrite the
- * private one", one per call site — and libris-59m.42 was exactly one of those
- * copies being missing, so `lastAdminMiddleware` handed Better Auth whatever
- * address the client claimed.
+ * private one", one per call site — and one of those copies was simply
+ * missing, so `lastAdminMiddleware` handed Better Auth whatever address the
+ * client claimed.
  *
  * A helper that takes the Context is what makes the safe form the SHORTEST form
  * to write: there is nothing to remember to pass, and the raw-headers spelling

@@ -155,7 +155,7 @@ beforeEach(async () => {
 
 describe("PUT /api/credentials/hardcover", () => {
   it("lets two different users each connect Hardcover", async () => {
-    // libris-59m.9: service_credentials carried a GLOBAL unique index on
+    // service_credentials carried a GLOBAL unique index on
     // (service, username), and the frontend sends username "hardcover" for
     // everyone. Before the index was dropped, alice succeeded and bob's insert
     // raised 23505 with nothing catching it — a 500.
@@ -251,8 +251,8 @@ describe("PUT /api/credentials/hardcover", () => {
 });
 
 /**
- * libris-59m.44. Claiming a KoSync username is check-then-act: a SELECT for the
- * name, then an INSERT whose ON CONFLICT target is the per-USER unique index.
+ * Claiming a KoSync username is check-then-act: a SELECT for the name, then an
+ * INSERT whose ON CONFLICT target is the per-USER unique index.
  * The username collision is a different constraint, so a claim that slips past
  * the SELECT lands on Postgres instead — and the loser of that race has to be
  * told the same thing the sequential loser is told.

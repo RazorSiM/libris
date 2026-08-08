@@ -1,7 +1,7 @@
 /**
- * Workers have to invalidate the route cache too (libris-021).
+ * Workers have to invalidate the route cache too.
  *
- * libris-kej paired the mutating HTTP routes with the surfaces that are
+ * The first pass paired the mutating HTTP routes with the surfaces that are
  * actually cached, and left the background half uncovered — which is where the
  * gap is most visible. `POST /api/books/{id}/approve` sets the status,
  * invalidates and returns; `book-organize` then runs for as long as the file
@@ -261,9 +261,10 @@ describe("book-organize invalidates the feeds it changes", () => {
   });
 
   it("does not fail the job when the cache store is unreachable", async () => {
-    // libris-hs5's contract, restated at the new call site: the durable writes
-    // have already committed by the time the invalidation runs, so a Redis
-    // blip must not fail — and retry — a job that moved files on disk.
+    // `invalidateRouteCache`'s never-rejects contract, restated at the new
+    // call site: the durable writes have already committed by the time the
+    // invalidation runs, so a Redis blip must not fail — and retry — a job that
+    // moved files on disk.
     const bookId = await seedApprovedBook("Store Down");
     const broken: KVStore = {
       ...cacheStorage,
@@ -315,8 +316,8 @@ describe("book-fetch-metadata invalidates only when it can be seen", () => {
   it("leaves the cache alone for a book no cached surface renders", async () => {
     // The ordinary path: a book in "inbox" heading for "review". Neither status
     // appears in any feed, so invalidating would be a SCAN per book on a bulk
-    // import that could not clear anything real — the shape of over-coverage
-    // libris-kej was about, from the other direction.
+    // import that could not clear anything real — the same route/cache
+    // mismatch, from the other direction.
     const [book] = await db
       .insert(schema.books)
       .values({ status: "inbox", title: "Not Yet", author: "A. Author", createdBy: userId })

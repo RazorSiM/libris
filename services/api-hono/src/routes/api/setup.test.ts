@@ -176,7 +176,6 @@ describe("POST /api/setup", () => {
  *
  * Gating the bootstrap on "does any user exist" made this state permanent: no
  * credential to sign in with, no admin session, and /api/setup answering 409.
- * libris-59m.4.
  */
 describe("POST /api/setup on a migrated install (users exist, no credential)", () => {
   const MIGRATED_ADMIN = "0f39f2ce-1111-4111-8111-000000000001";

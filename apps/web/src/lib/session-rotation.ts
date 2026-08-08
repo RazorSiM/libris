@@ -7,7 +7,7 @@
  * this one handles the case neither of those can read correctly on its own:
  * the tab deliberately swapping its own session token for a new one.
  *
- * WHY IT HAS TO EXIST (libris-59m, pwchange):
+ * WHY IT HAS TO EXIST (password change):
  *
  * `POST /api/auth/change-password` with `revokeOtherSessions` is implemented in
  * Better Auth (1.6.25, `dist/api/routes/update-user.mjs`) as revoke-ALL then

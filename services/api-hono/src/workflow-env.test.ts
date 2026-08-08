@@ -1,7 +1,7 @@
 /**
  * The CI workflow's env blocks, run through the real env validator.
  *
- * libris-59m.3: the e2e job set `E2E_TEST=1` but neither `NODE_ENV` nor
+ * The e2e job once set `E2E_TEST=1` but neither `NODE_ENV` nor
  * `TEST_ROUTE_TOKEN`. `NODE_ENV` has no default in env.ts, so `getEnv()` threw
  * a ZodError before the server bound a port, Playwright's webServer timed out
  * after 60s, and all three shards failed without executing a test. Nothing in

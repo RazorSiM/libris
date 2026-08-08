@@ -2,9 +2,9 @@
  * Tests for the app-level wiring in app.ts: middleware order, the global error
  * mapper, and the validation hook every mounted router has to carry.
  *
- * These are deliberately structural. The defects they pin (59m.8, 59m.22,
- * 59m.43) were all "the pieces are individually correct but assembled wrong",
- * and every behavioural probe for them came out identical either way.
+ * These are deliberately structural. The defects they pin were all "the pieces
+ * are individually correct but assembled wrong", and every behavioural probe
+ * for them came out identical either way.
  */
 import { readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -64,9 +64,10 @@ describe("middleware order", () => {
 
   it("guards the last admin before any book is reassigned on remove-user", () => {
     // Both middlewares are mounted by app.ts and nothing else asserts that they
-    // are (59m.21's own tests wrap createApp's output, so they stay green even
-    // if the mount is deleted). Order is the load-bearing part: books must not
-    // move while lastAdminMiddleware may still refuse the removal with 409.
+    // are (the book-reassignment tests wrap createApp's output, so they stay
+    // green even if the mount is deleted). Order is the load-bearing part:
+    // books must not move while lastAdminMiddleware may still refuse the
+    // removal with 409.
     const routes = buildApp().routes;
     const handlers = routes.map((route) => route.handler);
     const lastAdminIndex = handlers.indexOf(lastAdminMiddleware);

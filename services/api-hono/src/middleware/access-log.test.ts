@@ -70,7 +70,7 @@ describe("accessLogMiddleware", () => {
     expect(JSON.stringify(metadata)).not.toContain("203.0.113.99");
   });
 
-  // ── Probe paths are logged, not skipped (libris-tnu) ────────────────
+  // ── Probe paths are logged, not skipped ─────────────────────────────
 
   /**
    * The middleware used to `return next()` for /api/health before touching the
@@ -100,8 +100,8 @@ describe("accessLogMiddleware", () => {
   });
 
   it("raises a rejected health probe to info so a 429 is visible", async () => {
-    // What libris-59m.38 created and the skip hid: /api/health is in the
-    // general rate-limit tier now, and a flood that exhausts it answers 429.
+    // What the rate-limit tiering created and the skip hid: /api/health is in
+    // the general rate-limit tier now, and a flood that exhausts it answers 429.
     // Under the old middleware that rejection was logged nowhere.
     const limited = vi.fn(async (c: { json: (b: unknown, s: 429) => Response }) =>
       c.json({ error: "Rate limit exceeded" }, 429),

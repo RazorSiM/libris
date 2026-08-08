@@ -26,8 +26,8 @@ vi.mock("../../services/redis.js", () => ({
  * Queue doubles whose per-queue counts and in-flight book ids the tests drive.
  *
  * The install-wide counts and the job payloads have to come from the same
- * fixture, because the whole point of libris-44c is that the first is not a
- * safe substitute for the second when the caller is not an admin.
+ * fixture, because the whole point is that the first is not a safe substitute
+ * for the second when the caller is not an admin.
  */
 const queueFixture = vi.hoisted(() => {
   const zero = { waiting: 0, active: 0, completed: 0, failed: 0, delayed: 0, paused: 0 };

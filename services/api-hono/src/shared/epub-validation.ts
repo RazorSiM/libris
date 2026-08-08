@@ -54,7 +54,7 @@ export function validateEpubUpload(data: Uint8Array): string | null {
   ) {
     return "EPUB ZIP central directory is invalid";
   }
-  // libris-59m.29: reject entry floods at upload rather than during ingestion,
+  // Reject entry floods at upload rather than during ingestion,
   // where parsing the directory is an in-process worker outage. `entryCount` is
   // only 16 bits and wraps past 65535, so the directory size is the load-bearing
   // bound: ~2.2M zero-payload records need ~92 MB of central directory.

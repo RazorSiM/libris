@@ -7,10 +7,10 @@
  * which is two valid secrets where there should be one. The suite asserts the
  * plaintext is rejected, which is the point of that change.
  *
- * What the digest is hashed WITH is a separate question, settled in
- * libris-59m.24: the wire value is md5 of a human-chosen password, so the
- * stored form is a salted HMAC under a pepper derived from API_SECRET_KEY
- * rather than the bare sha256 it used to be.
+ * What the digest is hashed WITH is a separate question, settled separately:
+ * the wire value is md5 of a human-chosen password, so the stored form is a
+ * salted HMAC under a pepper derived from API_SECRET_KEY rather than the bare
+ * sha256 it used to be.
  */
 
 import { afterAll, beforeAll, describe, expect, it } from "vite-plus/test";
@@ -233,8 +233,8 @@ describe("KoSync Auth (integration)", () => {
   });
 
   /**
-   * libris-59m.6. KoSync is the one credential path that never touches Better
-   * Auth, so nothing on it ever consulted the account's state: a banned user's
+   * KoSync is the one credential path that never touches Better Auth, so
+   * nothing on it ever consulted the account's state: a banned user's
    * KOReader kept reading and writing progress, and /users/auth kept handing
    * out a userkey they could pair a NEW device with.
    */
@@ -306,8 +306,8 @@ describe("KoSync Auth (integration)", () => {
 });
 
 /**
- * libris-59m.24. The stored secret used to be a bare, unsalted sha256 of the
- * wire value. The wire value is md5 of a password a human chose and typed into
+ * The stored secret used to be a bare, unsalted sha256 of the wire value. The
+ * wire value is md5 of a password a human chose and typed into
  * KOReader, and md5 adds no entropy, so a leaked `kosync_credentials` was one
  * GPU wordlist pass away from every plaintext in the table at once — the same
  * plaintext people reuse for the account whose hash in `accounts.password` is
@@ -384,7 +384,7 @@ describe("KoSync legacy credential upgrade", () => {
     await db.insert(schema.kosyncCredentials).values({
       userId,
       username: "legacy-reader",
-      // Exactly what a row written before libris-59m.24 looks like.
+      // Exactly what a row written before the peppered-HMAC change looks like.
       secretHash: legacyKosyncSecretHash(md5("legacy-password")),
     });
 

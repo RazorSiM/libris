@@ -194,7 +194,7 @@ describe("Better Auth client header", () => {
 
 /**
  * The invariant `sessionHeaders` exists to hold, checked against the source
- * rather than against one request path (libris-bmg).
+ * rather than against one request path.
  *
  * lib/auth.ts points `advanced.ipAddress.ipAddressHeaders` at a single private
  * header, and everything downstream of that — session records, Better Auth's
@@ -202,8 +202,8 @@ describe("Better Auth client header", () => {
  * Request carrying a CLIENT-supplied value for it ever reaches Better Auth.
  *
  * That promise used to be kept by four independent open-coded copies of "clone
- * the headers, overwrite the private one". libris-59m.42 was one of those
- * copies missing from `lastAdminMiddleware`; a second one was still missing
+ * the headers, overwrite the private one". One of those copies was missing
+ * from `lastAdminMiddleware`; a second one was still missing
  * from `reassignBooksOnRemoveUser` when this test was written. A behavioural
  * test can only ever cover the call sites someone thought to drive, which is
  * the same enumeration problem that produced the defect — so this scans every

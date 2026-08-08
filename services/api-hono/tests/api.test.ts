@@ -28,9 +28,8 @@ function auth() {
 }
 
 /**
- * A browser session, for the routes app passwords are scoped out of
- *: admin routes, /api/auth/*, /api/app-passwords and
- * /api/credentials.
+ * A browser session, for the routes app passwords are scoped out of: admin
+ * routes, /api/auth/*, /api/app-passwords and /api/credentials.
  */
 function session() {
   return { cookie };
@@ -140,7 +139,7 @@ describe("app password management", () => {
     });
 
     // A response body echoing back a random string would satisfy everything
-    // above (libris-59m.31). What makes it a credential is that it
+    // above. What makes it a credential is that it
     // authenticates, and that it is listed as belonging to this person.
     const { status: used } = await $fetchRaw("/api/library", {
       headers: { authorization: `Bearer ${data.key}` },
@@ -244,7 +243,7 @@ describe("GET /api/health", () => {
 // ── Settings ───────────────────────────────────────────────────────
 
 /**
- * Sessions, not app passwords (59m.13).
+ * Sessions, not app passwords.
  *
  * The whole /api/settings prefix is scoped out of app-password reach: PATCH is
  * admin-gated in the handler, and both GETs widen for admins — filesystem
@@ -749,7 +748,7 @@ describe("KoSync: PUT /kosync/syncs/progress", () => {
     expect(data.timestamp).toBeGreaterThan(0);
 
     // The block above is the handler echoing the request back at us; on its own
-    // it would pass with the INSERT deleted (libris-59m.31). What makes this a
+    // it would pass with the INSERT deleted. What makes this a
     // test of "creates" is the row.
     const stored = await testDb
       .select()
@@ -1340,7 +1339,7 @@ describe("GET /api/stats", () => {
     const { data, status } = await $fetchRaw("/api/stats", { headers: auth() });
     expect(status).toBe(200);
     expect(data.libraryGrowth.length).toBeGreaterThanOrEqual(1);
-    // Seeded at 0 rather than -1 (libris-59m.31): a cumulative series can never
+    // Seeded at 0 rather than -1: a cumulative series can never
     // be negative, so the first comparison was always vacuous, and a first row
     // of 0 on a library that already holds books would have slipped through.
     let prev = 0;

@@ -248,7 +248,7 @@ Only EPUB is a recognized download format (`FORMAT_MIMES` maps `epub` only). The
 
 Two surfaces are cached, and only two: `/opds/*` and `/api/stats`, via the `cachedRoute({ maxAge })` middleware (60s on the acquisition feeds and stats, 120s on the browse feeds). Keys are `routes:<pathname>[:<query>]:user:<id>` — per user, so nothing leaks across accounts — and an unauthenticated request is never cached at all.
 
-`CACHED_ROUTE_PREFIXES` in `services/cache.ts` is the list of roots those keys can live under, and `invalidateRouteCache`'s parameter type is derived from it, so naming a path nothing caches is a compile error rather than a call that quietly does nothing (libris-kej). `cache-invalidation.test.ts` derives the real mount list from the assembled router and fails if the two lists disagree in either direction, and scans `routes/` **and** `workers/` for a call naming a dead prefix.
+`CACHED_ROUTE_PREFIXES` in `services/cache.ts` is the list of roots those keys can live under, and `invalidateRouteCache`'s parameter type is derived from it, so naming a path nothing caches is a compile error rather than a call that quietly does nothing. `cache-invalidation.test.ts` derives the real mount list from the assembled router and fails if the two lists disagree in either direction, and scans `routes/` **and** `workers/` for a call naming a dead prefix.
 
 Three kinds of writer invalidate:
 
@@ -258,11 +258,11 @@ Three kinds of writer invalidate:
 | `PUT /kosync/syncs/progress`                                                  | `c.get("cacheStorage")`   | `/api/stats`          |
 | Workers — `book-organize`, `book-fetch-metadata` on an already-organized book | `getCacheStorage()`       | `/opds`, `/api/stats` |
 
-Workers matter because their writes land **after** the request that triggered them returned (libris-021). `POST /api/books/{id}/approve` sets the status, invalidates and answers; `book-organize` then writes `coverPath` and `storagePath` minutes later for a large file — and `coverPath` is what decides whether an OPDS entry carries a cover link, so a freshly approved book sat in the feed with no cover for the rest of the entry's TTL. The kosync progress path is the same shape with no UI behind it at all: every number on the stats page comes from rows it writes.
+Workers matter because their writes land **after** the request that triggered them returned. `POST /api/books/{id}/approve` sets the status, invalidates and answers; `book-organize` then writes `coverPath` and `storagePath` minutes later for a large file — and `coverPath` is what decides whether an OPDS entry carries a cover link, so a freshly approved book sat in the feed with no cover for the rest of the entry's TTL. The kosync progress path is the same shape with no UI behind it at all: every number on the stats page comes from rows it writes.
 
-A worker has no request to take the store from, so it resolves it from `services/cache-storage.ts`, which `bootstrap()` also uses so the HTTP server and the in-process workers share one instance. **The store directly rather than an invalidation event on the existing bus**: the bus is Redis pub/sub, at-most-once and unacknowledged, so an invalidation published while the API process is restarting is simply lost — and `invalidateRouteCache`'s deferred-retry machinery cannot span the hop, since the publisher believes it succeeded. It would also need a channel the SPA cannot see, because `onServerEvent` fans every message out to WebSocket subscribers. The cache is a shared Redis keyspace rather than a process-local structure, so when libris-7h7.7 moves the workers out of this process the same call resolves to the same keys through that process's own connection; only dev and test, where the store is a per-process Map, would fall back to the TTL.
+A worker has no request to take the store from, so it resolves it from `services/cache-storage.ts`, which `bootstrap()` also uses so the HTTP server and the in-process workers share one instance. **The store directly rather than an invalidation event on the existing bus**: the bus is Redis pub/sub, at-most-once and unacknowledged, so an invalidation published while the API process is restarting is simply lost — and `invalidateRouteCache`'s deferred-retry machinery cannot span the hop, since the publisher believes it succeeded. It would also need a channel the SPA cannot see, because `onServerEvent` fans every message out to WebSocket subscribers. The cache is a shared Redis keyspace rather than a process-local structure, so when the workers move out of this process the same call resolves to the same keys through that process's own connection; only dev and test, where the store is a per-process Map, would fall back to the TTL.
 
-`invalidateRouteCache` **never rejects** (libris-hs5). By the time it runs the durable Postgres write has committed, so propagating a Redis error would turn a 200 into a 500 — or fail a job that has already moved files — while leaving the mutation applied. A failed prefix goes to a capped per-store backlog, retried by the next call on that store and by an unref'd 5s timer, with the entry's TTL as the backstop for anything a restart drops.
+`invalidateRouteCache` **never rejects**. By the time it runs the durable Postgres write has committed, so propagating a Redis error would turn a 200 into a 500 — or fail a job that has already moved files — while leaving the mutation applied. A failed prefix goes to a capped per-store backlog, retried by the next call on that store and by an unref'd 5s timer, with the entry's TTL as the backstop for anything a restart drops.
 
 ## Multi-User Auth
 
@@ -378,9 +378,9 @@ Two limiters, split by prefix.
 The HTTP-path Redis connection is separate from BullMQ's unlimited-retry
 connection. Commands reject within 250 ms so the fallback policy can run, and
 counter increments are atomic under concurrency. `/api/health` is limited like
-every other path (libris-59m.38) and uses the bounded connection for its Redis
+every other path and uses the bounded connection for its Redis
 diagnostic; `/api/health/live` is the I/O-free liveness probe an orchestrator
-should poll instead (libris-tnu) — see
+should poll instead — see
 [Deployment / Health Endpoints](./deployment.md#health-endpoints).
 
 | Tier          | Default limit | Applied to                                                                                                             |

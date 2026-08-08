@@ -6,10 +6,10 @@ import type { AppVariables } from "../context.js";
  *
  * These used to be skipped by the middleware outright, which was defensible
  * when nothing could reject them. It stopped being defensible once
- * libris-59m.38 put `/api/health` in the general rate-limit tier: a 429 on the
- * endpoint an operator uses to decide whether the service is alive left no
- * trace at all, so a health check that had started failing looked identical in
- * the logs to one that was never called (libris-tnu).
+ * `/api/health` joined the general rate-limit tier: a 429 on the endpoint an
+ * operator uses to decide whether the service is alive left no trace at all, so
+ * a health check that had started failing looked identical in the logs to one
+ * that was never called.
  *
  * So they are logged like everything else, just quietly: a successful probe
  * lands at `debug` (off under the default `LOG_LEVEL=info`, so the steady-state

@@ -4,7 +4,7 @@
  * PGlite is one embedded backend on one connection. Transactions against it are
  * queued, so a row lock can never contend and a "concurrent" test always runs
  * its two halves in sequence — which is how the last-admin `FOR UPDATE` shipped
- * with a test that stayed green when the lock was deleted (libris-59m.31).
+ * with a test that stayed green when the lock was deleted.
  *
  * Anything whose subject IS the concurrency has to run against a real server on
  * real, separate connections. This module creates a uniquely named database,
@@ -56,7 +56,8 @@ export const SERVICES_ARE_REQUIRED = Boolean(process.env.CI);
  * only surfaces console output it can attach to a running test, so a file that
  * skips every test prints nothing but "8 skipped" among hundreds of passes.
  * That is indistinguishable from coverage, which is the whole failure mode
- * libris-59m.31 exists to remove. `process.stderr.write` bypasses the capture.
+ * this announcement exists to remove. `process.stderr.write` bypasses the
+ * capture.
  */
 export function announceSkip(file: string, why: string): void {
   process.stderr.write(`\n[SKIPPED - NOT COVERED] ${file}\n${why}\n\n`);

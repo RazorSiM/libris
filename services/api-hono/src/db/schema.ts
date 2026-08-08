@@ -74,7 +74,7 @@ export const books = pgTable(
     // deletion runs, so this constraint has nothing left to reject. A path that
     // forgets fails loudly here — and loudly is not the same as safely: Better
     // Auth's deletion is three un-transacted statements, so the rejection lands
-    // after the sessions and accounts rows are already gone (libris-59m.21).
+    // after the sessions and accounts rows are already gone.
     createdBy: text("created_by")
       .notNull()
       .references(() => users.id, { onDelete: "restrict" }),
@@ -278,8 +278,8 @@ export const readingAggregate = pgTable(
  * SettingsHardcover.vue), and the token in `password_hash` is what actually
  * talks to the API. It is therefore deliberately NOT unique across users; the
  * global `(service, username)` unique index that used to be here let exactly
- * one person in the whole install connect Hardcover and 500'd the second
- * (libris-59m.9). `(service, user_id)` is the constraint that still matters.
+ * one person in the whole install connect Hardcover and 500'd the second.
+ * `(service, user_id)` is the constraint that still matters.
  */
 export const serviceCredentials = pgTable(
   "service_credentials",
@@ -322,7 +322,7 @@ export const serviceCredentials = pgTable(
  * still verify and are rewritten on the owner's next successful sync.
  *
  * The wire value is md5 of a HUMAN-CHOSEN password, not a random token, so a
- * bare digest here was offline-crackable for every row at once (libris-59m.24).
+ * bare digest here was offline-crackable for every row at once.
  * A password hash is not the answer either: this is verified on an
  * unauthenticated endpoint that KOReader hits on every progress read and write,
  * where a work factor is a CPU-exhaustion lever. shared/kosync-auth.ts has the

@@ -29,8 +29,8 @@ const logger = getLogger("epub-extractor");
 // comparisons. Regexes such as /<dc:title(?:\s[^>]*)?>/gi or /<item[^>]+>/gi
 // look bounded but backtrack quadratically: on `"<dc:title ".repeat(n)` the
 // cost is exactly 4x per doubling of n, so a 2 MB OPF (which deflates to a few
-// hundred bytes inside a ~1 KB EPUB) pins the event loop for minutes. See
-// libris-59m.10, which re-opens libris-7h7.6 — the previous "fix" swapped one
+// hundred bytes inside a ~1 KB EPUB) pins the event loop for minutes. This is
+// the second attempt at the problem — the previous "fix" swapped one
 // backtracking pattern for another and measured no faster.
 //
 // Scanning at fixed offsets also removes a correctness bug: the old code

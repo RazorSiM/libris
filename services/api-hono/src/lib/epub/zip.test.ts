@@ -76,7 +76,7 @@ describe("ZIP decompression budgets", () => {
   });
 });
 
-// libris-59m.29: every byte budget in this module is derived from
+// Every byte budget in this module is derived from
 // `uncompressedSize`, so entries declaring size 0 are free. A 46-byte central
 // directory record buys one ZipEntry object plus one open/read/close round
 // trip, and nothing capped how many of them an archive could declare.

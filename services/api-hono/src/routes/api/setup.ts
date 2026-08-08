@@ -42,7 +42,7 @@ const CREDENTIAL_PROVIDER = "credential";
  * `accounts` row (a bcrypt key hash is not a password hash), so users existed,
  * nobody could sign in, and this endpoint answered 409 — with the admin
  * endpoints that could have fixed it all requiring an admin session nobody
- * could obtain. See libris-59m.4.
+ * could obtain.
  */
 async function hasCredential(db: Pick<Db, "select">): Promise<boolean> {
   const [row] = await db

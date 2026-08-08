@@ -28,7 +28,7 @@ function hasAdminRole(role: unknown): boolean {
  * was a 500, a surviving user row with no credential, and an admin with no way
  * to tell from the response that anything half-happened. Every retry 500'd the
  * same way, and recovery meant an admin running set-user-password to rebuild
- * the credential. libris-59m.21.
+ * the credential.
  *
  * The fix is a PRECONDITION, not error mapping: once no book points at the
  * target, the RESTRICT constraint cannot fire, so the un-transacted deletion
@@ -42,7 +42,7 @@ function hasAdminRole(role: unknown): boolean {
  * (`YOU_CANNOT_REMOVE_YOURSELF`), so they are always someone other than the
  * target.
  *
- * ── Why this commits OUTSIDE lastAdminMiddleware's transaction (libris-cyg) ──
+ * ── Why this commits OUTSIDE lastAdminMiddleware's transaction ───────────────
  *
  * Both middlewares wrap this path, `lastAdminMiddleware` first (pinned by
  * app.wiring.test.ts). It opens a transaction, takes `SELECT ... FOR UPDATE` on
@@ -110,8 +110,8 @@ export const reassignBooksOnRemoveUser: MiddlewareHandler<{ Variables: AppVariab
   // moving books on behalf of a caller it is about to refuse.
   //
   // sessionHeaders, not c.req.raw.headers: this was a fourth copy of the
-  // libris-59m.42 defect, still live. This middleware runs BEFORE the
-  // /api/auth/* catch-all — the only place app.ts overwrote the private
+  // spoofable-client-address defect, still live. This middleware runs BEFORE
+  // the /api/auth/* catch-all — the only place app.ts overwrote the private
   // client-IP header — so an attacker's own `x-libris-client-ip` reached Better
   // Auth here and became the address its records and its limiter saw.
   const session = await c.get("auth").api.getSession({ headers: sessionHeaders(c) });

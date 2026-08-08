@@ -112,9 +112,9 @@ beforeAll(async () => {
   app.get("/api/app-passwords", probe);
   app.get("/api/credentials/kosync", probe);
   // A real POST route for the CSRF block below. Without one, "the request got
-  // past the check" was being read off a 404 that only meant "no such route"
-  // (libris-59m.31) -- the tests held, but not for the reason they claimed, and
-  // a check that rejected everything with 404 would have looked identical.
+  // past the check" was being read off a 404 that only meant "no such route" --
+  // the tests held, but not for the reason they claimed, and a check that
+  // rejected everything with 404 would have looked identical.
   app.post("/api/books/:id/reorganize", probe);
   app.on(["GET", "POST"], "/api/auth/*", (c) => auth.handler(c.req.raw));
 });
@@ -435,7 +435,7 @@ describe("authMiddleware revocation", () => {
   });
 
   /**
-   * libris-59m.6. The cookie test above passes for the wrong reason: banUser
+   * The cookie test above passes for the wrong reason: banUser
    * deletes the user's session rows, so the cookie stops resolving. Better
    * Auth only consults `banned` when it CREATES a session, and an app password
    * never creates one — the apiKey plugin looks the user up by referenceId and
@@ -489,7 +489,7 @@ describe("authMiddleware revocation", () => {
   });
 
   it("treats a malformed session cookie as unauthenticated, not a stuck session", async () => {
-    // The audit's cookie-shadowing finding (libris-7h7.56): a garbage value on
+    // The audit's cookie-shadowing finding: a garbage value on
     // the session cookie must yield a clean unauthenticated response, never a
     // 500 or a half-resolved session. Better Auth ignores an invalid token.
     const garbage = "better-auth.session_token=not-a-valid-token";
@@ -638,7 +638,7 @@ describe("app password rate limiting", () => {
   });
 });
 
-// ── CSRF defence-in-depth (libris-7h7.33) ──────────────────────────
+// ── CSRF defence-in-depth ──────────────────────────────────────────
 
 describe("cross-site cookie mutation rejection", () => {
   const MUTATION = "/api/books/00000000-0000-0000-0000-000000000000/reorganize";

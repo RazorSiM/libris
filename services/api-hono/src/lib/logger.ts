@@ -15,7 +15,7 @@ import pino from "pino";
  * Exported for the unit test: the real selection happens at module load from
  * `process.env`, which a test cannot re-run without re-importing the module.
  *
- * libris-59m.33: `E2E_TEST=1` used to select `silent`, so the entire API
+ * `E2E_TEST=1` used to select `silent`, so the entire API
  * process emitted nothing in the two modes CI and Docker use — no access log,
  * no "Auth failure from <ip>", no worker or job:failed detail. Every
  * auth-failure diagnostic this branch added was invisible in the only

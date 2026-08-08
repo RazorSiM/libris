@@ -69,8 +69,7 @@ const approveRoute = createRoute({
           // This used to declare a seven-field summary while the handler's bare
           // `.returning()` answered with the entire row — so the response
           // carried `search_vector`, and the fields callers actually read off
-          // it (isbn13, publisher, language, approvedAt) were undocumented
-          // (libris-dnx).
+          // it (isbn13, publisher, language, approvedAt) were undocumented.
           schema: BookUpdatedSchema,
         },
       },
@@ -242,8 +241,7 @@ export const booksRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
           .set(bookUpdates)
           .where(and(eq(books.id, id), eq(books.status, "review")))
           // `bookColumns` — the list BookUpdatedSchema above is derived from,
-          // so the query and the declared response are two views of one thing
-          // (libris-dnx).
+          // so the query and the declared response are two views of one thing.
           .returning(bookColumns);
 
         if (!result) {

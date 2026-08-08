@@ -7,7 +7,7 @@ import {
 } from "./last-admin.js";
 
 /**
- * The classification half of the last-admin guard (59m.12).
+ * The classification half of the last-admin guard.
  *
  * The invariant itself — the row lock, the 409, the "another admin remains"
  * case — is exercised over real HTTP in routes/api/auth-handler.test.ts. What
@@ -39,7 +39,7 @@ describe("reducesAdminAuthority", () => {
   });
 
   describe("/admin/update-user", () => {
-    // These four are the regression. Against the pre-59m.12 middleware the path
+    // These four are the regression. Against the earlier middleware the path
     // was not registered at all, and even if it had been, `body.role` was
     // undefined so `removesAdminRole(undefined)` passed the request straight
     // through to Better Auth's writer.
@@ -123,11 +123,11 @@ describe("the effects table covers the installed admin plugin", () => {
   });
 
   it("classifies every endpoint the plugin exposes", () => {
-    // THE durability assertion for 59m.12. Upgrading better-auth to a version
-    // that adds an admin endpoint fails right here until someone decides
-    // whether it can remove an admin. The previous design — three paths listed
-    // in app.ts — had no equivalent, which is how /admin/update-user was missed
-    // for an entire release.
+    // THE durability assertion for this guard. Upgrading better-auth to a
+    // version that adds an admin endpoint fails right here until someone
+    // decides whether it can remove an admin. The previous design — three
+    // paths listed in app.ts — had no equivalent, which is how
+    // /admin/update-user was missed for an entire release.
     const unclassified = endpoints
       .map(({ path }) => path)
       .filter((path) => !(path in ADMIN_ENDPOINT_EFFECTS));
