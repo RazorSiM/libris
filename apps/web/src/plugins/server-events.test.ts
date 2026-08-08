@@ -19,7 +19,12 @@ import type { ServerEventsApi } from "~/types/server-events";
 
 interface SocketOptions {
   immediate?: boolean;
+  autoReconnect?: {
+    retries?: number | ((retried: number) => boolean);
+    delay?: number | ((retries: number) => number);
+  };
   onMessage: (ws: unknown, event: { data: string }) => void;
+  onDisconnected?: (ws: unknown, event: { code: number; reason: string }) => void;
 }
 
 const open = vi.fn();
@@ -31,8 +36,10 @@ vi.mock("@vueuse/core", () => ({
   useWebSocket: (url: string, options: SocketOptions) => useWebSocket(url, options),
 }));
 
-const { setupServerEvents, serverEventsKey } = await import("./server-events");
+const { setupServerEvents, serverEventsKey, SESSION_REVOKED_CLOSE_CODE } =
+  await import("./server-events");
 const { useAuthStore } = await import("~/stores/auth");
+const { setSessionRecovery } = await import("~/lib/session-invalidation");
 
 /** Run setupServerEvents and hand back whatever it provided. */
 function mount(): ServerEventsApi {
@@ -57,11 +64,39 @@ function setDisabled(value: boolean) {
   ).__LIBRIS_DISABLE_SERVER_EVENTS__ = value;
 }
 
+/**
+ * Deliver a close event the way @vueuse/core does — synchronously, from
+ * `ws.onclose`, before it decides whether to re-dial.
+ */
+function disconnect(code: number, reason = "") {
+  const handler = socketOptions().onDisconnected;
+  if (!handler) {
+    throw new Error("the plugin registered no onDisconnected handler; it cannot see close codes");
+  }
+  handler(null, { code, reason });
+}
+
+/**
+ * Whether @vueuse/core would schedule another dial after that close, resolved
+ * exactly as useWebSocket resolves it internally.
+ */
+function willReconnect(retried = 1): boolean {
+  const retries = socketOptions().autoReconnect?.retries;
+  if (typeof retries === "function") return retries(retried);
+  // The plain-number form. -1 means "forever, whatever happened" — which is the
+  // bug: it cannot tell a revoked credential from a dropped Wi-Fi.
+  return typeof retries === "number" && (retries < 0 || retried < retries);
+}
+
+/** reportSessionInvalidated() is fire-and-forget; let its promise chain run. */
+const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
 beforeEach(() => {
   setActivePinia(createPinia());
   vi.clearAllMocks();
   status.value = "CLOSED";
   setDisabled(false);
+  setSessionRecovery(null);
 });
 
 describe("the socket's identity", () => {
@@ -167,6 +202,106 @@ describe("the socket's identity", () => {
     socketOptions().onMessage(null, { data: JSON.stringify({ type: "book:detected" }) });
 
     expect(received).toEqual([{ type: "book:detected" }]);
+  });
+});
+
+/**
+ * A revoked socket is terminal; a broken one is not (libris-abt).
+ *
+ * The server closes an event socket with 4401 when the credential behind it
+ * stops being valid — banned, revoked from another device, expired. The client
+ * treated that as any other drop and re-dialled forever behind a 30s backoff,
+ * so a banned user watched a page that quietly stopped updating and was told
+ * nothing, while the server took an attempt every 30s per abandoned tab.
+ *
+ * The other direction is worse, though: latching on a transport-level close
+ * would sign people out over a flaky connection. Both halves are pinned here.
+ */
+describe("a socket the server refuses", () => {
+  /** Mount with a signed-in identity and a recovery installed. */
+  async function signedIn() {
+    const recovery = vi.fn(async () => {});
+    setSessionRecovery(recovery);
+    mount();
+    const store = useAuthStore();
+    store.userId = "alice";
+    await nextTick();
+    return { recovery, store };
+  }
+
+  it("stops re-dialling once the server says the credential is gone", async () => {
+    // THE FAILURE: `retries: -1` has no way to say "not this one", so the tab
+    // of a user who was just banned kept dialling for as long as it stayed open.
+    await signedIn();
+
+    disconnect(SESSION_REVOKED_CLOSE_CODE, "account banned");
+
+    expect(willReconnect()).toBe(false);
+  });
+
+  it("routes a revoked socket into the app's one sign-out path", async () => {
+    // Not its own logout: reportSessionInvalidated() is where both HTTP
+    // transports report a 401, and installSessionRecovery() already knows to
+    // logout() and redirect once per burst.
+    const { recovery } = await signedIn();
+
+    disconnect(SESSION_REVOKED_CLOSE_CODE, "session revoked");
+    await settle();
+
+    expect(recovery).toHaveBeenCalledTimes(1);
+  });
+
+  // Everything a network does on a bad day. None of it is a verdict on the
+  // session, and reacting to any of it would sign users out over a dropped
+  // connection — including 4000, which is in the same application range as 4401
+  // and still not it.
+  it.each([
+    [1000, "a clean close, which is what a missed heartbeat looks like"],
+    [1001, "the server going away for a restart"],
+    [1006, "the connection dropping with no close frame at all"],
+    [1011, "an unexpected server-side condition"],
+    [1012, "a proxy or server restarting"],
+    [4000, "some other application code that is not 4401"],
+  ])("keeps re-dialling after close code %i (%s)", async (code) => {
+    const { recovery } = await signedIn();
+
+    disconnect(code);
+    await settle();
+
+    expect(willReconnect(1)).toBe(true);
+    // Still trying an hour later: retries is unbounded for a transport fault.
+    expect(willReconnect(500)).toBe(true);
+    expect(recovery).not.toHaveBeenCalled();
+  });
+
+  it("re-dials normally for the next identity on the tab", async () => {
+    // The revocation belonged to Alice's credential. Bob signs in on the same
+    // tab afterwards and gets a socket that reconnects like any other.
+    const { store } = await signedIn();
+    disconnect(SESSION_REVOKED_CLOSE_CODE, "account banned");
+
+    store.userId = null;
+    await nextTick();
+    store.userId = "bob";
+    await nextTick();
+
+    expect(open).toHaveBeenCalledTimes(2);
+    expect(willReconnect()).toBe(true);
+  });
+
+  it("does not report a plain sign-out as a dead session", async () => {
+    // Signing out closes the socket through the identity watcher, and the
+    // transport reports that as an ordinary 1000. Reporting it would mean
+    // every sign-out ran the recovery on the way out.
+    const { recovery, store } = await signedIn();
+
+    store.userId = null;
+    await nextTick();
+    disconnect(1000);
+    await settle();
+
+    expect(close).toHaveBeenCalled();
+    expect(recovery).not.toHaveBeenCalled();
   });
 });
 
