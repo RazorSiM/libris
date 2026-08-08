@@ -9,16 +9,18 @@
  * unlike the standard `authedPage` fixture.
  */
 
-import type { Page } from "@playwright/test";
+import type { Browser, Page } from "@playwright/test";
 import { test, expect } from "./fixtures";
 import {
   API_BASE,
   testRouteHeaders,
   seedBook,
+  createDisposableAccount,
   deleteAllBooks,
   invalidateServerCache,
   getRegularUserId,
 } from "./helpers";
+import { signInThroughUi, signOutThroughUi } from "./helpers/sign-in.js";
 
 /**
  * Fire a server event through the test-only event bus endpoint.
@@ -119,6 +121,36 @@ async function navigateToPage(page: Page, linkName: string, urlPattern: string):
   await page.waitForURL(urlPattern);
 }
 
+/**
+ * A signed-out browser with the realtime bus left switched on.
+ *
+ * The standard fixtures set __LIBRIS_DISABLE_SERVER_EVENTS__ so networkidle
+ * waits can settle; a spec about the socket obviously cannot.
+ */
+async function freshLiveContext(browser: Browser) {
+  return await browser.newContext({
+    baseURL: `http://localhost:${process.env.CI ? 3000 : 3100}`,
+    storageState: { cookies: [], origins: [] },
+  });
+}
+
+/**
+ * Watch the app's OWN socket rather than opening one.
+ *
+ * openManualWebSocket() creates a second connection with its own upgrade, which
+ * would pass whatever the app's socket was doing — and the app's socket is the
+ * thing under test.
+ */
+function recordSocketFrames(page: Page) {
+  const record = { sockets: 0, payloads: [] as string[] };
+  page.on("websocket", (ws) => {
+    if (!ws.url().endsWith("/api/events")) return;
+    record.sockets += 1;
+    ws.on("framereceived", (frame) => record.payloads.push(String(frame.payload)));
+  });
+  return record;
+}
+
 test.describe("WebSocket Real-time Events", () => {
   test.beforeEach(async () => {
     await deleteAllBooks();
@@ -202,6 +234,56 @@ test.describe("WebSocket Real-time Events", () => {
 
     expect(websocketUrls.filter((url) => url.endsWith("/api/events"))).toHaveLength(1);
   });
+
+  test(
+    "the socket follows the signed-in user across a sign-out and sign-in",
+    { tag: "@smoke" },
+    async ({ browser }) => {
+      // The server binds the subscription's user id and admin flag AT UPGRADE
+      // TIME and never re-checks them. Sign-out and sign-in are both SPA
+      // navigations, so nothing used to reset the socket: an admin signing out
+      // of a shared browser left the next person holding HER admin-scoped
+      // subscription. They saw every book event on the install — other users'
+      // ids, types and payloads — and none of their own, so their inbox badge
+      // and job status silently stopped updating.
+      const alice = await createDisposableAccount("ws-alice", "admin");
+      const bob = await createDisposableAccount("ws-bob");
+      const aliceBook = await seedBookForUser(alice.id, "Alice-owned WebSocket Book");
+      const bobBook = await seedBookForUser(bob.id, "Bob-owned WebSocket Book");
+
+      const context = await freshLiveContext(browser);
+      const page = await context.newPage();
+      const frames = recordSocketFrames(page);
+
+      await page.goto("/login");
+      // Nothing to subscribe to while signed out, and dialling here is a
+      // reconnect loop against a 401.
+      await page.waitForTimeout(1_000);
+      expect(frames.sockets).toBe(0);
+
+      await signInThroughUi(page, alice.email, alice.password);
+      await expect.poll(() => frames.sockets, { timeout: 15_000 }).toBe(1);
+
+      await signOutThroughUi(page);
+      await signInThroughUi(page, bob.email, bob.password);
+      // A NEW socket, carrying Bob's cookie.
+      await expect.poll(() => frames.sockets, { timeout: 15_000 }).toBeGreaterThan(1);
+      await expect.poll(() => frames.payloads.some((f) => f.includes('"connected"'))).toBe(true);
+
+      frames.payloads.length = 0;
+
+      await emitEvent({ type: "book:detected", bookId: bobBook });
+      await expect
+        .poll(() => frames.payloads.some((f) => f.includes(bobBook)), { timeout: 15_000 })
+        .toBe(true);
+
+      await emitEvent({ type: "book:detected", bookId: aliceBook });
+      await page.waitForTimeout(2_000);
+      expect(frames.payloads.some((f) => f.includes(aliceBook))).toBe(false);
+
+      await context.close();
+    },
+  );
 
   test("Settings page refetches its status on a job:failed event", async ({ livePage: page }) => {
     // This used to assert `getByText("Settings")` is visible — the exact

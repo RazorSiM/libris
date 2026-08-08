@@ -12,6 +12,14 @@
  * - the single-flight promise, so a page mounting five components does one
  *   session request rather than five;
  * - refresh(), which is the only way to see your own edits to the session.
+ *
+ * Every race here is exercised across TWO useAuth() instances. useAuth() is a
+ * plain function with no memoisation and a dozen call sites — guards.ts,
+ * settings.vue, SettingsAccountSessions.vue, useAccountMutations.ts — so the
+ * only configuration that occurs in production is the one where the check()
+ * and the logout() belong to different closures. A single-instance test passes
+ * against a counter that is private to each closure and therefore guards
+ * nothing, which is exactly how this shipped.
  */
 import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
@@ -115,6 +123,20 @@ describe("check()", () => {
     expect(getSession).toHaveBeenCalledTimes(1);
   });
 
+  it("shares one request between DIFFERENT useAuth() instances", async () => {
+    // The real topology: the router guard, the settings page and three
+    // components each call useAuth() separately. With the in-flight promise
+    // private to a closure this is three requests, and the last one to land
+    // wins — which is the same defect as the logout race, seen from the
+    // performance side.
+    const guard = useAuth();
+    const settings = useAuth();
+    const sidebar = useAuth();
+    await Promise.all([guard.check(), settings.check(), sidebar.check()]);
+
+    expect(getSession).toHaveBeenCalledTimes(1);
+  });
+
   it("does nothing once the session has already been resolved", async () => {
     const auth = useAuth();
     await auth.check();
@@ -171,6 +193,66 @@ describe("logout()", () => {
     expect(auth.userId.value).toBeNull();
   });
 
+  it("cancels a check() started by a DIFFERENT useAuth() instance", async () => {
+    // The production shape of the race above, and the one the single-instance
+    // test could never catch. useUpdateProfile.onSuccess calls refresh() on
+    // useAccountMutations' own useAuth(); the user then clicks Logout in the
+    // settings navbar, which is settings.vue's useAuth(). Two closures, one
+    // store. Move the generation counter back inside useAuth() and the late
+    // response writes u1 back over the sign-out.
+    let resolveSession!: (value: unknown) => void;
+    getSession.mockReturnValue(
+      new Promise((resolve) => {
+        resolveSession = resolve;
+      }),
+    );
+
+    const mutationInstance = useAuth();
+    const navbarInstance = useAuth();
+
+    const inFlight = mutationInstance.check();
+    await navbarInstance.logout();
+
+    resolveSession(session("u1", "admin"));
+    await inFlight;
+
+    // Asserted through the OTHER instance too: the state is shared, so a
+    // resurrection is visible from everywhere.
+    expect(navbarInstance.isAuthenticated.value).toBe(false);
+    expect(mutationInstance.isAuthenticated.value).toBe(false);
+    expect(mutationInstance.userId.value).toBeNull();
+    expect(mutationInstance.isAdmin.value).toBe(false);
+  });
+
+  it("leaves no stale promise for a later check() to await", async () => {
+    // The other half of the fix: dropping the in-flight promise. If logout()
+    // bumped the generation but left the promise in place, the next check()
+    // would hand back the pre-logout request and resolve to nothing — the app
+    // would sit on `checked === false` believing a session lookup is running.
+    let resolveSession!: (value: unknown) => void;
+    getSession.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveSession = resolve;
+      }),
+    );
+
+    const first = useAuth();
+    const stale = first.check();
+    await useAuth().logout();
+
+    getSession.mockResolvedValue(session("u2"));
+    const second = useAuth();
+    second.checked.value = false;
+    await second.check();
+
+    expect(second.userId.value).toBe("u2");
+
+    resolveSession(session("u1"));
+    await stale;
+    // And the corpse still does not get a vote.
+    expect(second.userId.value).toBe("u2");
+  });
+
   it("clears the query cache so the next user sees no stale data", async () => {
     const auth = useAuth();
     await auth.logout();
@@ -208,6 +290,34 @@ describe("login()", () => {
 
     await expect(auth.login("reader@example.test", "wrong")).rejects.toThrow(/invalid/i);
     expect(auth.isAuthenticated.value).toBe(false);
+  });
+
+  it("does not adopt a session request issued for the previous user", async () => {
+    // Sign out, sign in as someone else, same tab. If login() reused the
+    // in-flight promise left behind by the previous identity's check(), the
+    // second user would be shown the first user's name, role and id — with the
+    // second user's cookie.
+    let resolveOld!: (value: unknown) => void;
+    getSession.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveOld = resolve;
+      }),
+    );
+
+    const guard = useAuth();
+    const stale = guard.check();
+
+    getSession.mockResolvedValue(session("bob"));
+    await useAuth().login("bob@example.test", "pw");
+
+    expect(guard.userId.value).toBe("bob");
+    expect(guard.isAdmin.value).toBe(false);
+
+    resolveOld(session("alice", "admin"));
+    await stale;
+
+    expect(guard.userId.value).toBe("bob");
+    expect(guard.isAdmin.value).toBe(false);
   });
 
   it("distinguishes a network failure from a rejected password", async () => {

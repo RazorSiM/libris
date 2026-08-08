@@ -32,6 +32,8 @@ The SPA authenticates directly with the Hono API via Better Auth's httpOnly sess
 5. All subsequent API requests carry the cookie automatically. `useApiClient()` sends `credentials: "include"`, and the SPA never sees a token.
 6. Sign-in failures collapse to a single generic "Invalid email or password", identical whether the address is unknown or the password is wrong, so the form cannot be used to test whether somebody has an account here. Two cases are deliberately distinguishable: a network failure, and a 429 from Better Auth's own limiter (a throttled attempt is not a wrong password, and saying so sends people to reset a password that was fine). There is no forgot-password link — there is no mail transport, so the page says an admin can reset it instead.
 
+7. A session that dies server-side (a ban, a revoke from another device, expiry) is caught by the recovery handler — see [Recovering from a dead session](#recovering-from-a-dead-session) below.
+
 App passwords are a separate credential minted under **Settings → Connections → App Passwords** for e-readers and scripts. They are never used by the SPA.
 
 ## Layout
@@ -111,15 +113,41 @@ Detail pages additionally use route-level data loaders defined inline via `defin
 
 ## Auth
 
-**`useAuth()` composable** (backed by a Pinia `auth` store in `src/stores/auth.ts`): exposes the computed refs `isAuthenticated`, `isAdmin`, `userId`, `userName`, `userEmail`, `userLabel`, plus `checked`. Methods: `check()`, `login(email, password)`, `logout()`.
+**`useAuth()` composable** (backed by a Pinia `auth` store in `src/stores/auth.ts`): exposes the computed refs `isAuthenticated`, `isAdmin`, `userId`, `userName`, `userEmail`, `userLabel`, plus `checked`. Methods: `check()`, `login(email, password)`, `logout()`, `refresh()`, `setAuthenticated(value)`.
 
 It is the only file in the app that touches `authClient` (`src/lib/auth-client.ts`, the Better Auth Vue client) — every other call site goes through this composable, so the transport lives in one place. `check()` calls `authClient.getSession()`; `login()` calls `authClient.signIn.email()` and then forces a `check()`, because the sign-in response does not carry the role.
 
-`check()` is guarded by a generation counter and a single in-flight promise. `logout()` bumps the generation so a `check()` already in flight cannot re-authenticate the user after state was cleared, and a failed sign-out request still clears local state rather than stranding the user in a signed-in UI.
+`check()` is guarded by a generation counter and a single in-flight promise, both held in the store rather than in the composable's closure — see [One source of truth for who is signed in](#one-source-of-truth-for-who-is-signed-in) below. A failed sign-out request still clears local state rather than stranding the user in a signed-in UI.
 
 On both successful login and logout, `clearFrontendQueryCache()` cancels and removes all Pinia Colada cached queries (via `useQueryCache()` from `@pinia/colada`) to prevent stale data from one user being visible to another after switching accounts.
 
-Realtime transport is owned by `src/plugins/server-events.ts`, which runs once at app bootstrap in `main.ts` and opens a single `/api/events` WebSocket per browser tab (the WebSocket base URL comes from the runtime `wsBaseUrl` config, see `useLibrisConfig()`). The bus is exposed via `app.provide(serverEventsKey, api)`; `useServerEvents()` injects it and is just a subscriber wrapper that unregisters listeners when the calling component scope is disposed.
+### One source of truth for who is signed in
+
+`useAuth()` is a plain function with no memoisation, and it is called separately from the router guard, `pages/settings.vue`, several settings components and the mutation composables. Everything that has to agree **across** those call sites therefore lives in the store, not in the closure:
+
+| Store field  | What it is for                                                                                                                                                                                                                                                |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `generation` | Bumped by anything that changes _who_ is signed in. A session request already on the wire compares the generation it was issued under and discards itself if it no longer matches, so a sign-out cannot be overwritten by a `check()` that started before it. |
+| `inFlight`   | The single session request in flight, shared so that N components mounting at once produce one `getSession()`.                                                                                                                                                |
+
+`login()`, `logout()` and `refresh()` all go through `beginNewSession()`, which bumps `generation` and drops `inFlight`.
+
+### Recovering from a dead session
+
+A session can die while a tab sits open — an admin bans you, another device revokes your session, an admin sets your password, or it simply expires. `check()` short-circuits on `checked` for the rest of the page's life, so nothing would notice.
+
+`src/lib/session-invalidation.ts` is the single point that learns about it. Both transports report into it — the `fetch` wrapper in `useApiClient()` and `authClient`'s `fetchOptions.onError` — and `installSessionRecovery()` in `src/router/guards.ts` installs the one handler: `logout()` (which clears the store _and_ the query cache) followed by `router.replace('/login?redirect=…')`.
+
+Two exclusions keep it from firing wrongly:
+
+- 401s from `/sign-in`, `/sign-up`, `/sign-out` and `/get-session` are ignored. Better Auth answers a wrong password on sign-in with 401, and treating that as a dead session would sign out a user who mistyped.
+- The handler no-ops when the store already says nobody is signed in, and does not navigate when the user is already on `/login`.
+
+Recoveries do not stack: a page that fires six queries and collects six 401s signs out and redirects once.
+
+Realtime transport is owned by `src/plugins/server-events.ts`, which runs once at app bootstrap in `main.ts` and provides the bus via `app.provide(serverEventsKey, api)`; `useServerEvents()` injects it and is just a subscriber wrapper that unregisters listeners when the calling component scope is disposed. The WebSocket base URL comes from the runtime `wsBaseUrl` config (see `useLibrisConfig()`).
+
+The socket is **keyed on `userId`**, not opened once per tab. The server binds a subscription's user id and admin flag at upgrade time and never re-checks them, so a socket that outlives its session is a subscription in somebody else's name — and sign-out/sign-in are both SPA navigations, with no page load to reset anything. A watcher closes and re-dials whenever the signed-in identity changes, and no socket is opened at all while signed out.
 
 ## Keyboard Shortcuts
 

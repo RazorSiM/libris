@@ -14,7 +14,16 @@ import { authClient } from "~/lib/auth-client";
 export function useAuth() {
   const queryCache = useQueryCache();
   const store = useAuthStore();
-  const { authenticated, checked, admin, name, email, userId: storedUserId } = storeToRefs(store);
+  const {
+    authenticated,
+    checked,
+    admin,
+    name,
+    email,
+    userId: storedUserId,
+    generation,
+    inFlight,
+  } = storeToRefs(store);
 
   const isAuthenticated = computed(() => authenticated.value);
   const isAdmin = computed(() => admin.value);
@@ -39,21 +48,36 @@ export function useAuth() {
     storedUserId.value = null;
   }
 
-  // Generation counter to prevent stale check() responses from overwriting
-  // auth state that changed while the request was in-flight (e.g. logout
-  // happening while a login-triggered check is still pending).
-  let authGeneration = 0;
-  let pending: Promise<void> | null = null;
+  /**
+   * Declare that who is signed in has changed.
+   *
+   * Everything that moves the app between identities — signing in, signing
+   * out, being signed out by the server — goes through here, and the two lines
+   * are what make the move stick: the bump invalidates any session request
+   * already on the wire, and dropping the shared promise stops a later check()
+   * from awaiting an answer about the previous identity.
+   *
+   * Both fields live in the store rather than in this closure. useAuth() has no
+   * memoisation, so a counter declared here would be private to one caller and
+   * would guard nothing across the call sites that actually race.
+   */
+  function beginNewSession() {
+    generation.value++;
+    inFlight.value = null;
+  }
 
   async function check() {
     if (checked.value) return;
-    if (pending) return pending;
-    const gen = authGeneration;
-    pending = (async () => {
+    const existing = inFlight.value;
+    if (existing) return existing;
+
+    const gen = generation.value;
+    const request = (async () => {
       try {
         const { data } = await authClient.getSession();
-        // If auth state changed while we were waiting (e.g. logout), discard
-        if (gen !== authGeneration) return;
+        // If who is signed in changed while we were waiting (e.g. logout on a
+        // different useAuth() instance), this answer is about somebody else.
+        if (gen !== generation.value) return;
         if (data?.user) {
           authenticated.value = true;
           admin.value = data.user.role === "admin";
@@ -63,14 +87,21 @@ export function useAuth() {
         } else {
           clearAuthState();
         }
+        checked.value = true;
       } catch {
-        if (gen !== authGeneration) return;
+        if (gen !== generation.value) return;
         clearAuthState();
+        checked.value = true;
+      } finally {
+        // Only if the slot is still ours. Every replacement of it goes through
+        // beginNewSession(), which bumps the generation, so an unchanged
+        // generation means nobody has taken it — and clearing a NEWER caller's
+        // request would make the next check() fire a second one.
+        if (gen === generation.value) inFlight.value = null;
       }
-      checked.value = true;
-      pending = null;
     })();
-    return pending;
+    inFlight.value = request;
+    return request;
   }
 
   /**
@@ -97,6 +128,10 @@ export function useAuth() {
       throw new Error(result.error.message ?? "Invalid email or password");
     }
 
+    // Before anything else: a check() still in flight is asking about whoever
+    // was signed in a moment ago, and without this the await below would hand
+    // back THEIR session as the new one.
+    beginNewSession();
     clearFrontendQueryCache();
     clearAuthState();
     authenticated.value = true;
@@ -106,19 +141,19 @@ export function useAuth() {
   }
 
   async function logout() {
-    // Bump generation to invalidate any in-flight check() that might
-    // re-authenticate after we clear state.
-    authGeneration++;
-    pending = null;
-    try {
-      await authClient.signOut();
-    } catch {
-      // A failed sign-out request must not strand the user in a signed-in UI.
-      // The cookie may survive, but the next check() will discover that.
-    }
+    // Locally first, then the network. Clearing before the round-trip means the
+    // UI is never rendering a signed-in shell for a session the user has
+    // already ended, and a failed sign-out cannot strand them in one — the
+    // cookie may survive, but the next check() will discover that.
+    beginNewSession();
     clearAuthState();
     checked.value = true;
     clearFrontendQueryCache();
+    try {
+      await authClient.signOut();
+    } catch {
+      // Deliberately swallowed; see above.
+    }
   }
 
   /**
@@ -130,6 +165,10 @@ export function useAuth() {
    * what the sidebar renders.
    */
   async function refresh() {
+    // Not just `checked = false`: a request already in flight was issued before
+    // whatever the caller just changed, so awaiting it would return the state
+    // refresh() exists to get past.
+    beginNewSession();
     checked.value = false;
     await check();
   }

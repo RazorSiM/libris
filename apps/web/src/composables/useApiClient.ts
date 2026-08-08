@@ -1,5 +1,6 @@
 import { hc } from "hono/client";
 import type { AppType } from "@libris/api-hono/client";
+import { reportSessionInvalidated } from "~/lib/session-invalidation";
 
 export function useApiClient() {
   return hc<AppType>("", {
@@ -9,6 +10,11 @@ export function useApiClient() {
     fetch: async (input: RequestInfo | URL, requestInit?: RequestInit) => {
       const res = await fetch(input, requestInit);
       if (!res.ok) {
+        // A 401 here is the server telling us the cookie is dead. Every query
+        // in the app only runs while the store says we are signed in, so this
+        // is never "you were never signed in" — it is the session going away
+        // underneath us, and the app has to notice rather than toast.
+        if (res.status === 401) reportSessionInvalidated();
         const body = await res.text().catch(() => "");
         throw new ApiError(res.status, body);
       }

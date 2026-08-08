@@ -457,6 +457,44 @@ test.describe("signed-in devices", () => {
     await context.close();
   });
 
+  test("a password change updates the list without a reload", async ({ browser }) => {
+    // The card renders directly below the password form, so it is on screen at
+    // the moment it becomes wrong. Before this was fixed, the change succeeded,
+    // the toast said every other browser was signed out, and the list below
+    // still offered a live "Sign out" button for the phone that was already
+    // out — which then failed against a token that no longer existed, leaving
+    // the user unable to tell whether the revocation had worked.
+    const account = await createDisposableAccount("pw-devices");
+
+    const here = await freshContext(browser);
+    const herePage = await here.newPage();
+    await signInThroughUi(herePage, account.email, account.password);
+
+    const elsewhere = await freshContext(browser);
+    await signInThroughUi(await elsewhere.newPage(), account.email, account.password);
+
+    await openAccountTab(herePage);
+    await expect(deviceRows(herePage)).toHaveCount(2);
+
+    await fillPasswordChange(herePage, {
+      current: account.password,
+      next: "devices-must-catch-up-4",
+      revokeOthers: true,
+    });
+    await expect(herePage.getByTestId("current-password-input")).toHaveValue("");
+
+    // No reload anywhere in this test: that is the assertion.
+    await expect(deviceRows(herePage)).toHaveCount(1);
+    // And the badge survives the token rotation. It is derived by comparing the
+    // listed tokens against the current session's, so a stale list loses it
+    // even when the row count happens to be right.
+    await expect(herePage.getByTestId("current-session-badge")).toHaveCount(1);
+    await expect(herePage.getByTestId("sign-out-others-btn")).toHaveCount(0);
+
+    await here.close();
+    await elsewhere.close();
+  });
+
   test("works on a session older than the default freshness window", async ({ browser }) => {
     // list-sessions sits behind freshSessionMiddleware, whose default window is
     // 24 hours against a seven-day session. This asserts the page loads at all;
@@ -471,6 +509,74 @@ test.describe("signed-in devices", () => {
     await expect(page.getByTestId("account-sessions-card")).toBeVisible();
     await expect(page.getByTestId("sessions-error")).toHaveCount(0);
     await expect(deviceRows(page)).toHaveCount(1);
+
+    await context.close();
+  });
+});
+
+// ── Losing the session while the tab is open ─────────────────────────
+
+test.describe("server-side invalidation", () => {
+  test.slow();
+
+  test(
+    "a session revoked elsewhere lands the next navigation on /login",
+    { tag: "@smoke" },
+    async ({ browser }) => {
+      // The SPA used to have no 401 handler at all: check() short-circuits on
+      // `checked` for the rest of the page's life, so the router guard let every
+      // navigation through while every query 401'd into "Something went wrong".
+      // The tab looked signed in over a dead cookie until someone reloaded it.
+      const account = await createDisposableAccount("revoked-elsewhere");
+
+      const here = await freshContext(browser);
+      const herePage = await here.newPage();
+      await signInThroughUi(herePage, account.email, account.password);
+      await herePage.goto("/library");
+      await expect(herePage.getByRole("link", { name: "Home" })).toBeVisible();
+
+      // The other browser signs everything else out — this one included.
+      const elsewhere = await freshContext(browser);
+      const elsewherePage = await elsewhere.newPage();
+      await signInThroughUi(elsewherePage, account.email, account.password);
+      await openAccountTab(elsewherePage);
+      await elsewherePage.getByTestId("sign-out-others-btn").click();
+      await elsewherePage.getByTestId("confirm-sign-out-others-btn").click();
+      await expect(elsewherePage.getByTestId("sign-out-others-btn")).toHaveCount(0);
+
+      // An in-app navigation, not a reload: the SPA has to notice by itself.
+      // Best-effort, because a background refetch may get there first — either
+      // way the app discovered it without being reloaded, which is the claim.
+      await herePage
+        .getByRole("link", { name: "Inbox" })
+        .click({ timeout: 5_000 })
+        .catch(() => {});
+
+      await expect(herePage).toHaveURL(/\/login/, { timeout: 15_000 });
+
+      await here.close();
+      await elsewhere.close();
+    },
+  );
+
+  test("an admin cannot set a password on their own row", async ({ browser }) => {
+    // The server's after-hook deletes every session belonging to the target, so
+    // pointing "Set password" at your own row destroys the cookie in the tab you
+    // are using. "Ban" was gated on isSelf from the start; this was not, and the
+    // toast reported success while the app 401'd its way into nothing.
+    const admin = await createDisposableAccount("self-setpw", "admin");
+    const context = await freshContext(browser);
+    const page = await context.newPage();
+    await signInThroughUi(page, admin.email, admin.password);
+
+    await page.goto("/settings?tab=users");
+    await expect(page.getByTestId("users-panel")).toBeVisible();
+
+    const own = page.getByTestId(`set-password-btn-${admin.id}`);
+    await expect(own).toBeVisible();
+    await expect(own).toBeDisabled();
+    // Still on the Users tab with a live session, which is the point.
+    await expect(page).toHaveURL(/tab=users/);
 
     await context.close();
   });

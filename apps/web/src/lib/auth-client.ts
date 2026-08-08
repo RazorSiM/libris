@@ -1,6 +1,26 @@
 import { adminClient } from "better-auth/client/plugins";
 import { createAuthClient } from "better-auth/vue";
 import { apiKeyClient } from "@better-auth/api-key/client";
+import { reportSessionInvalidated } from "./session-invalidation";
+
+/**
+ * Endpoints whose 401 does not mean "your session died".
+ *
+ * Better Auth answers a wrong password on sign-in with 401 (verified in
+ * api/routes/sign-in.mjs — UNAUTHORIZED / INVALID_EMAIL_OR_PASSWORD), which is
+ * indistinguishable by status from a revoked session. Treating it as one would
+ * sign out a user who mistyped a password on the login page. get-session and
+ * sign-out are excluded for the same reason in reverse: they are the session
+ * probe and the sign-out itself, and neither should be able to trigger a
+ * recovery that starts with a sign-out.
+ */
+const SELF_INFLICTED_401_PATHS = ["/sign-in", "/sign-up", "/sign-out", "/get-session"];
+
+function isSelfInflicted401(url: string): boolean {
+  // The path only; a redirect target in the query string is not the endpoint.
+  const path = url.split("?")[0] ?? url;
+  return SELF_INFLICTED_401_PATHS.some((endpoint) => path.includes(endpoint));
+}
 
 /**
  * The Better Auth browser client.
@@ -20,6 +40,16 @@ import { apiKeyClient } from "@better-auth/api-key/client";
 export const authClient = createAuthClient({
   basePath: "/api/auth",
   plugins: [adminClient(), apiKeyClient()],
+  fetchOptions: {
+    // Better Auth's own endpoints are the ones that notice a dead session
+    // first: the account tab's device list and the admin panel both go through
+    // this client, not through useApiClient().
+    onError: (ctx) => {
+      if (ctx.response.status !== 401) return;
+      if (isSelfInflicted401(ctx.response.url || String(ctx.request.url ?? ""))) return;
+      reportSessionInvalidated();
+    },
+  },
 });
 
 /**

@@ -1,5 +1,6 @@
-import { useMutation } from "@pinia/colada";
+import { useMutation, useQueryCache } from "@pinia/colada";
 import { authClient, unwrapAuthResult } from "~/lib/auth-client";
+import { SESSIONS_KEY } from "./useSessionMutations";
 
 /**
  * The signed-in person acting on their own account.
@@ -44,8 +45,26 @@ export interface ChangePasswordVars {
 }
 
 export function useChangePassword() {
+  const queryCache = useQueryCache();
+
   return useMutation({
     mutation: async (vars: ChangePasswordVars) =>
       unwrapAuthResult(await authClient.changePassword(vars)),
+    /**
+     * The device list is rendered directly below this form, so it is on screen
+     * at the moment it becomes wrong.
+     *
+     * A password change rotates the current session's token even without
+     * `revokeOtherSessions`, and with it every other session is deleted. Both
+     * halves of the card go stale: the rows, and the "This browser" badge,
+     * which is derived by comparing listed tokens against the current one.
+     * Leaving it means offering "Sign out" buttons for devices that are already
+     * out — which then fail, and the user cannot tell whether the revocation
+     * worked.
+     *
+     * onSettled rather than onSuccess: a change that errors after the server
+     * committed would leave exactly the same stale list.
+     */
+    onSettled: () => queryCache.invalidateQueries({ key: SESSIONS_KEY }),
   });
 }

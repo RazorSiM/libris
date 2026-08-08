@@ -13,7 +13,12 @@ import { authClient, unwrapAuthResult } from "~/lib/auth-client";
  * and revokeSession clears both.
  */
 
-const SESSIONS_KEY = ["account", "sessions"];
+/**
+ * Exported, not local: anything that ends a session has to invalidate this, and
+ * useChangePassword lives in another file. Two copies of the literal is how the
+ * device list came to survive a password change still listing revoked devices.
+ */
+export const SESSIONS_KEY = ["account", "sessions"];
 
 interface ListedSession {
   id: string;
