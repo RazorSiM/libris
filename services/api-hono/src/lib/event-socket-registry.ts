@@ -31,8 +31,31 @@ export const EVENT_SOCKET_REVALIDATE_INTERVAL_MS = 60_000;
  * 4xxx is the range RFC 6455 reserves for the application. 4401 rather than
  * 1008 so a client can tell "you are no longer authenticated" apart from a
  * generic policy refusal.
+ *
+ * TERMINAL. A client that receives this must stop reconnecting and take the
+ * user to sign in: the session behind the socket is gone (revoked, banned,
+ * removed, expired) and every re-dial would 401 at the upgrade.
  */
 export const EVENT_SOCKET_REVOKED_CLOSE_CODE = 4401;
+
+/**
+ * Close code sent to a socket whose BINDING is stale while its credential is
+ * still perfectly good (libris-abt).
+ *
+ * The subscription's user id and admin flag are baked in at upgrade time and
+ * never change afterwards, so when the session behind the socket comes back
+ * with a different id or a different role, the socket is scoped to something
+ * the session no longer is. Nothing is wrong with the credential — the server
+ * simply wants the client back with a socket bound to the current answer.
+ *
+ * NOT terminal, and that distinction is the whole point of a second code. Sent
+ * as 4401, a promotion or a demotion signed the user out of the app: the
+ * client's only reading of 4401 is "your session is dead", which for a role
+ * change is false. 4409 mirrors HTTP 409 — a conflict of state, not of
+ * identity — and a client seeing it should reconnect exactly as it would after
+ * any ordinary drop.
+ */
+export const EVENT_SOCKET_RESCOPE_CLOSE_CODE = 4409;
 
 export interface EventSocketBinding {
   /** The account the subscription was opened for. */

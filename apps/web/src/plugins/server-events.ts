@@ -10,18 +10,40 @@ import type { AppConfig } from "~/composables/useLibrisConfig";
 export const serverEventsKey: InjectionKey<ServerEventsApi> = Symbol("libris:server-events");
 
 /**
- * The close code the server sends when the credential behind a socket is no
- * longer valid — a ban, a sign-out from another device, an admin revoking the
- * session, a role change, plain expiry (libris-e0p).
+ * The two close codes the server uses to end a socket on purpose.
  *
- * Mirrors EVENT_SOCKET_REVOKED_CLOSE_CODE in
- * `services/api-hono/src/lib/event-socket-registry.ts`. Restated here rather
- * than imported: it is a wire constant, and importing it would drag server code
- * into the SPA bundle for one number. 4401 sits in the 4000-4999 range RFC 6455
- * reserves for the application, so it can never collide with a transport-level
- * code.
+ * Both mirror `services/api-hono/src/lib/event-socket-registry.ts`. Restated
+ * here rather than imported: they are wire constants, and importing them would
+ * drag server code into the SPA bundle for two numbers. Both sit in the
+ * 4000-4999 range RFC 6455 reserves for the application, so neither can collide
+ * with a transport-level code.
+ *
+ * They exist as a pair because the server has two different things to say, and
+ * one code could only ever express one of them (libris-abt).
+ */
+
+/**
+ * The credential behind this socket is gone — a ban, a sign-out from another
+ * device, an admin revoking the session, plain expiry (libris-e0p).
+ *
+ * TERMINAL: every re-dial would be refused at the upgrade, so the only useful
+ * response is to take the user to sign in.
  */
 export const SESSION_REVOKED_CLOSE_CODE = 4401;
+
+/**
+ * The credential is still good; this socket's scope is stale (libris-abt).
+ *
+ * The server binds a subscription's user id and admin flag at upgrade and never
+ * changes them, so when the session comes back with a different role — or a
+ * different person — the socket has to go, even though nothing is wrong with
+ * the session. NOT terminal: reconnect and the new socket is bound to the
+ * current answer.
+ *
+ * Sent as 4401 this was a sign-out, which for a promoted admin meant being
+ * bounced to the login page as a reward for gaining rights.
+ */
+export const SOCKET_RESCOPE_CLOSE_CODE = 4409;
 
 function createDisabledServerEventsApi(): ServerEventsApi {
   return {
@@ -106,6 +128,11 @@ function createServerEventsApi(config: AppConfig): ServerEventsApi {
      * sign-out path would be a second answer to the same question.
      */
     onDisconnected(_ws: WebSocket, event: CloseEvent) {
+      // Spelled out rather than left to fall through the check below: the two
+      // application codes are one contract, and reading only half of it — "any
+      // 4xxx means signed out" — is exactly how a promotion became a sign-out.
+      // A re-scope is an ordinary reconnect; the server rebinds on the way in.
+      if (event.code === SOCKET_RESCOPE_CLOSE_CODE) return;
       if (event.code !== SESSION_REVOKED_CLOSE_CODE) return;
       revoked = true;
       reportSessionInvalidated();

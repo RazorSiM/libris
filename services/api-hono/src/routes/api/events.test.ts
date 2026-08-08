@@ -7,6 +7,7 @@ import { MAX_EVENT_SOCKET_CONNECTIONS_PER_PRINCIPAL } from "../../lib/socket-gua
 import {
   eventSocketRegistry,
   EVENT_SOCKET_REVALIDATE_INTERVAL_MS,
+  EVENT_SOCKET_RESCOPE_CLOSE_CODE,
   EVENT_SOCKET_REVOKED_CLOSE_CODE,
 } from "../../lib/event-socket-registry.js";
 import { publishEvent } from "../../services/event-bus.js";
@@ -321,10 +322,12 @@ describe("/api/events revocation", () => {
       expect(socket.closes).toEqual([]);
     });
 
-    it("closes a socket whose owner was demoted", async () => {
+    it("asks a socket to re-scope when its owner was demoted", async () => {
       // The admin flag is baked into the event-bus filter at upgrade, so an
       // ex-admin's socket would otherwise keep receiving every book event on
-      // the install. Closing makes the client re-dial and be re-scoped.
+      // the install. It has to be closed — but as 4409, not 4401. The session
+      // is untouched, and 4401 is the code that means "you are signed out": it
+      // sent a demoted (or promoted) user to the login page for no reason.
       let role = "admin";
       const { app } = appForUser(
         "demoted-user",
@@ -337,8 +340,61 @@ describe("/api/events revocation", () => {
       await vi.advanceTimersByTimeAsync(EVENT_SOCKET_REVALIDATE_INTERVAL_MS);
 
       expect(socket.closes).toEqual([
-        { code: EVENT_SOCKET_REVOKED_CLOSE_CODE, reason: "role changed" },
+        { code: EVENT_SOCKET_RESCOPE_CLOSE_CODE, reason: "role changed" },
       ]);
+    });
+
+    it("asks a socket to re-scope when it was promoted, not just demoted", async () => {
+      // The check is a mismatch in either direction. Promotion is the case that
+      // made this a bug worth a second code: being handed admin rights and
+      // signed out for it is a strange reward.
+      let role = "user";
+      const { app } = appForUser("promoted-user", () => ({
+        session: { token: "t" },
+        user: { id: "promoted-user", role },
+      }));
+      const socket = await openSocket(app);
+
+      role = "admin";
+      await vi.advanceTimersByTimeAsync(EVENT_SOCKET_REVALIDATE_INTERVAL_MS);
+
+      expect(socket.closes).toEqual([
+        { code: EVENT_SOCKET_RESCOPE_CLOSE_CODE, reason: "role changed" },
+      ]);
+    });
+
+    it("asks a socket to re-scope when its credential now resolves to somebody else", async () => {
+      // Somebody signed in as another user in a second tab, so the cookie this
+      // socket was upgraded with now belongs to them. The subscription is
+      // scoped to the wrong person and must be closed — but signing out here
+      // would end the session of the user who just signed in, which is a worse
+      // outcome than the stale scope.
+      let id = "shared-browser-user";
+      const { app } = appForUser("shared-browser-user", () => ({
+        session: { token: "t" },
+        user: { id, role: "user" },
+      }));
+      const socket = await openSocket(app);
+
+      id = "somebody-else";
+      await vi.advanceTimersByTimeAsync(EVENT_SOCKET_REVALIDATE_INTERVAL_MS);
+
+      expect(socket.closes).toEqual([
+        { code: EVENT_SOCKET_RESCOPE_CLOSE_CODE, reason: "identity changed" },
+      ]);
+    });
+
+    it("keeps the two codes distinct", () => {
+      // The whole contract in one line: a client that cannot tell these apart
+      // has to choose between signing people out on a promotion and never
+      // signing anyone out at all.
+      expect(EVENT_SOCKET_RESCOPE_CLOSE_CODE).not.toBe(EVENT_SOCKET_REVOKED_CLOSE_CODE);
+      // Both in the range RFC 6455 reserves for the application, so neither can
+      // ever collide with a transport-level code.
+      for (const code of [EVENT_SOCKET_REVOKED_CLOSE_CODE, EVENT_SOCKET_RESCOPE_CLOSE_CODE]) {
+        expect(code).toBeGreaterThanOrEqual(4000);
+        expect(code).toBeLessThanOrEqual(4999);
+      }
     });
 
     it("keeps the socket open when the auth store is unreachable", async () => {

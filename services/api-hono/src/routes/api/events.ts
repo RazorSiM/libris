@@ -11,6 +11,7 @@ import { eventSocketConnectionGuard } from "../../lib/socket-guard.js";
 import {
   eventSocketRegistry,
   EVENT_SOCKET_REVALIDATE_INTERVAL_MS,
+  EVENT_SOCKET_RESCOPE_CLOSE_CODE,
   EVENT_SOCKET_REVOKED_CLOSE_CODE,
 } from "../../lib/event-socket-registry.js";
 import { getUserId, isAdmin } from "../../shared/auth.js";
@@ -180,16 +181,27 @@ export function createEventsRoutes(upgradeWebSocket: UpgradeWebSocket) {
            * event-bus listener down first makes "closed" mean "receives
            * nothing", which is the property the fix is actually about.
            */
-          const closeRevoked = (reason: string): void => {
+          const closeWith = (code: number, reason: string): void => {
             teardown();
             try {
-              ws.close(EVENT_SOCKET_REVOKED_CLOSE_CODE, reason);
+              ws.close(code, reason);
             } catch {
               // Already gone at the transport level; the subscription is what
               // mattered and it is already released.
             }
-            logger.info(`Event socket for ${userId} closed: ${reason}`);
+            logger.info(`Event socket for ${userId} closed (${code}): ${reason}`);
           };
+
+          /** The credential is gone. The client must stop and sign in again. */
+          const closeRevoked = (reason: string): void =>
+            closeWith(EVENT_SOCKET_REVOKED_CLOSE_CODE, reason);
+
+          /**
+           * The credential is fine; this socket's scope is stale. The client
+           * should come straight back and be re-bound.
+           */
+          const closeForRescope = (reason: string): void =>
+            closeWith(EVENT_SOCKET_RESCOPE_CLOSE_CODE, reason);
 
           // Eager close: lib/auth.ts closes this the moment Better Auth deletes
           // the session row, bans the account or removes the user.
@@ -200,10 +212,19 @@ export function createEventsRoutes(upgradeWebSocket: UpgradeWebSocket) {
            * app password, a revocation served by another process. See
            * EVENT_SOCKET_REVALIDATE_INTERVAL_MS.
            *
-           * A demotion counts as a revocation too: `isAdmin` is baked into the
-           * event-bus filter at upgrade, so an ex-admin's socket would keep
-           * receiving every book event on the install. Closing makes the client
-           * re-dial and be re-scoped.
+           * Two verdicts, two close codes, because they ask the client for two
+           * different things:
+           *
+           *  - the credential is GONE (revoked, banned). Terminal: 4401, and
+           *    the client signs the user out.
+           *  - the credential is FINE but this socket no longer matches it (the
+           *    cookie now resolves to somebody else, or the account was
+           *    promoted or demoted). Both are baked into the event-bus filter at
+           *    upgrade, so an ex-admin's socket would keep receiving every book
+           *    event on the install — it has to be closed. But the session is
+           *    still good, so closing it as 4401 signed a promoted user out of
+           *    an account that was working perfectly. 4409 asks for a re-dial
+           *    instead, which is all this case ever needed.
            */
           revalidateTimer = setInterval(() => {
             void (async () => {
@@ -211,8 +232,8 @@ export function createEventsRoutes(upgradeWebSocket: UpgradeWebSocket) {
               if (current === undefined) return;
               if (current === null) return closeRevoked("session revoked");
               if (isUserBanned(current.user)) return closeRevoked("account banned");
-              if (current.user.id !== userId) return closeRevoked("identity changed");
-              if ((current.user.role === "admin") !== admin) return closeRevoked("role changed");
+              if (current.user.id !== userId) return closeForRescope("identity changed");
+              if ((current.user.role === "admin") !== admin) return closeForRescope("role changed");
             })();
           }, EVENT_SOCKET_REVALIDATE_INTERVAL_MS);
           // Never a reason to keep the process alive.

@@ -36,8 +36,12 @@ vi.mock("@vueuse/core", () => ({
   useWebSocket: (url: string, options: SocketOptions) => useWebSocket(url, options),
 }));
 
-const { setupServerEvents, serverEventsKey, SESSION_REVOKED_CLOSE_CODE } =
-  await import("./server-events");
+const {
+  setupServerEvents,
+  serverEventsKey,
+  SESSION_REVOKED_CLOSE_CODE,
+  SOCKET_RESCOPE_CLOSE_CODE,
+} = await import("./server-events");
 const { useAuthStore } = await import("~/stores/auth");
 const { setSessionRecovery } = await import("~/lib/session-invalidation");
 
@@ -206,7 +210,7 @@ describe("the socket's identity", () => {
 });
 
 /**
- * A revoked socket is terminal; a broken one is not (libris-abt).
+ * A revoked socket is terminal; a broken or re-scoped one is not (libris-abt).
  *
  * The server closes an event socket with 4401 when the credential behind it
  * stops being valid — banned, revoked from another device, expired. The client
@@ -214,8 +218,11 @@ describe("the socket's identity", () => {
  * so a banned user watched a page that quietly stopped updating and was told
  * nothing, while the server took an attempt every 30s per abandoned tab.
  *
- * The other direction is worse, though: latching on a transport-level close
- * would sign people out over a flaky connection. Both halves are pinned here.
+ * Both other directions are worse than the bug. Latching on a transport-level
+ * close would sign people out over a flaky connection; latching on the whole
+ * 4xxx range would sign them out on a promotion, since the server also closes a
+ * socket whose scope went stale (4409) while the session behind it is fine.
+ * All three cases are pinned here.
  */
 describe("a socket the server refuses", () => {
   /** Mount with a signed-in identity and a recovery installed. */
@@ -272,6 +279,37 @@ describe("a socket the server refuses", () => {
     // Still trying an hour later: retries is unbounded for a transport fault.
     expect(willReconnect(500)).toBe(true);
     expect(recovery).not.toHaveBeenCalled();
+  });
+
+  it("re-dials, and stays signed in, when the server only wants a re-scope", async () => {
+    // A promotion or a demotion closes the socket because the admin flag is
+    // baked in at upgrade — but the session is untouched. Under one close code
+    // this was indistinguishable from a ban, so being made an admin signed you
+    // out. The pairing of the two codes is the fix, so the value is pinned here
+    // as well as the behaviour: they are a wire contract with the server, and
+    // agreeing on 4409 is half of it.
+    expect(SOCKET_RESCOPE_CLOSE_CODE).toBe(4409);
+    expect(SESSION_REVOKED_CLOSE_CODE).toBe(4401);
+    const { recovery } = await signedIn();
+
+    disconnect(SOCKET_RESCOPE_CLOSE_CODE, "role changed");
+    await settle();
+
+    expect(willReconnect()).toBe(true);
+    expect(recovery).not.toHaveBeenCalled();
+  });
+
+  it("still signs out on a revocation that follows a re-scope", async () => {
+    // The re-scope must not leave anything latched that would swallow a real
+    // revocation arriving on the next socket.
+    const { recovery } = await signedIn();
+    disconnect(SOCKET_RESCOPE_CLOSE_CODE, "role changed");
+
+    disconnect(SESSION_REVOKED_CLOSE_CODE, "account banned");
+    await settle();
+
+    expect(willReconnect()).toBe(false);
+    expect(recovery).toHaveBeenCalledTimes(1);
   });
 
   it("re-dials normally for the next identity on the tab", async () => {
