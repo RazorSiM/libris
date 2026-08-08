@@ -3,10 +3,9 @@ import { afterAll, beforeAll, describe, expect, it } from "vite-plus/test";
 import type { PGlite } from "@electric-sql/pglite";
 import { eq } from "drizzle-orm";
 import { createApp } from "../../app.js";
-import { createTestDb, type TestDb } from "../../db/test-utils.js";
+import { createTestAuth, createTestDb, seedAppPassword, type TestDb } from "../../db/test-utils.js";
 import * as schema from "../../db/schema.js";
 import type { Env } from "../../env.js";
-import { generateApiKey } from "../../shared/auth.js";
 
 const TEST_ENV: Env = {
   NODE_ENV: "test",
@@ -15,10 +14,14 @@ const TEST_ENV: Env = {
   REDIS_URL: "redis://localhost:6379",
   LIBRIS_INBOX_PATH: "/tmp/libris-test-inbox",
   LIBRIS_LIBRARY_PATH: "/tmp/libris-test-library",
+  LIBRIS_COVER_FETCH_ALLOWLIST: [],
   API_SECRET_KEY: "test-secret-key-at-least-32-characters-long!!",
-  COOKIE_DOMAIN: "",
+  BETTER_AUTH_SECRET: "test-better-auth-secret-at-least-32-chars!!",
+  BETTER_AUTH_URL: "",
+  LIBRIS_COOKIE_SECURE: "0",
   MIGRATIONS_PATH: "./migrations",
   TRUST_PROXY_HEADERS: "0",
+  LIBRIS_TRUSTED_PROXIES: [],
   E2E_TEST: "",
   LOG_LEVEL: "info",
   LIBRIS_RATELIMIT_GENERAL_LIMIT: 600,
@@ -27,24 +30,18 @@ const TEST_ENV: Env = {
   LIBRIS_RATELIMIT_AUTH_WINDOW_SECONDS: 60,
   LIBRIS_RATELIMIT_KEY_CREATION_LIMIT: 30,
   LIBRIS_RATELIMIT_KEY_CREATION_WINDOW_SECONDS: 3600,
+  LIBRIS_HTTP_HEADERS_TIMEOUT_MS: 10_000,
+  LIBRIS_HTTP_REQUEST_TIMEOUT_MS: 30_000,
+  LIBRIS_HTTP_IDLE_TIMEOUT_MS: 30_000,
 };
 
 let pglite: PGlite;
 let db: TestDb;
 
 async function seedApiKey() {
-  const key = await generateApiKey();
-  const [row] = await db
-    .insert(schema.apiKeys)
-    .values({
-      keyPrefix: key.keyPrefix,
-      keyHash: key.keyHash,
-      label: "Books Test Key",
-      isAdmin: false,
-    })
-    .returning({ id: schema.apiKeys.id });
-
-  return { apiKeyId: row.id, rawKey: key.rawKey };
+  // A real Better Auth app password: the key column holds a hash the plugin
+  // computes, so a hand-written api_keys row cannot authenticate.
+  return await seedAppPassword(createTestAuth(db, TEST_ENV), db, { name: "Books Test Key" });
 }
 
 beforeAll(async () => {
@@ -59,13 +56,13 @@ afterAll(async () => {
 
 describe("POST /api/books/{id}/approve", () => {
   it("rejects a stale review-to-organized transition and does not enqueue organize", async () => {
-    const { apiKeyId, rawKey } = await seedApiKey();
+    const { userId, rawKey } = await seedApiKey();
     const [book] = await db
       .insert(schema.books)
       .values({
         status: "review",
         title: "Draft title",
-        createdBy: apiKeyId,
+        createdBy: userId,
       })
       .returning({ id: schema.books.id });
 
@@ -122,6 +119,7 @@ describe("POST /api/books/{id}/approve", () => {
         },
         redisStorage: createMemoryKVStore(),
         cacheStorage: createMemoryKVStore(),
+        auth: createTestAuth(db, TEST_ENV),
         shutdown: async () => {},
       },
       env: TEST_ENV,
@@ -158,10 +156,10 @@ describe("POST /api/books/{id}/approve", () => {
   });
 
   it("normalizes the language when approving a reviewed book", async () => {
-    const { apiKeyId, rawKey } = await seedApiKey();
+    const { userId, rawKey } = await seedApiKey();
     const [book] = await db
       .insert(schema.books)
-      .values({ status: "review", title: "Draft", createdBy: apiKeyId })
+      .values({ status: "review", title: "Draft", createdBy: userId })
       .returning({ id: schema.books.id });
 
     const { app } = createApp({
@@ -177,6 +175,7 @@ describe("POST /api/books/{id}/approve", () => {
         },
         redisStorage: createMemoryKVStore(),
         cacheStorage: createMemoryKVStore(),
+        auth: createTestAuth(db, TEST_ENV),
         shutdown: async () => {},
       },
       env: TEST_ENV,

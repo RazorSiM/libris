@@ -6,12 +6,42 @@
 const PG_UNIQUE_VIOLATION = "23505";
 
 /**
+ * Walk an error's `cause` chain, outermost first.
+ *
+ * Drizzle 1.0 no longer lets driver errors through untouched: every failed
+ * query is rethrown as a `DrizzleQueryError` carrying `{ query, params, cause }`,
+ * with the postgres.js / PGlite error underneath. Reading `err.code` off the
+ * top-level object therefore always yields undefined, which is why the checks
+ * below unwrap before looking. The chain is bounded so a self-referential
+ * `cause` cannot spin.
+ *
+ * Re-verified at drizzle-orm 1.0.0-rc.4: still exactly one wrapping layer,
+ * `DrizzleQueryError { query, params, cause }` over the driver error that
+ * actually carries `code`/`constraint`. Re-check on every drizzle bump — the
+ * tripwire is "returns 409, not 500, when a unique constraint rejects the
+ * write" in routes/api/credentials.test.ts, which drives a real 23505 through
+ * this code against PGlite.
+ */
+function* errorChain(err: unknown): Generator<Record<string, unknown>> {
+  let current = err;
+  for (let depth = 0; depth < 8; depth += 1) {
+    if (typeof current !== "object" || current === null) return;
+    const record = current as Record<string, unknown>;
+    yield record;
+    current = record.cause;
+  }
+}
+
+/**
  * Returns true when the given error is a PostgreSQL unique-constraint violation.
- * Works with both node-postgres (DatabaseError) and postgres.js error shapes.
+ * Works with node-postgres (DatabaseError), postgres.js and PGlite error shapes,
+ * wrapped or not.
  */
 export function isUniqueViolation(err: unknown): boolean {
-  if (typeof err !== "object" || err === null) return false;
-  return (err as Record<string, unknown>).code === PG_UNIQUE_VIOLATION;
+  for (const link of errorChain(err)) {
+    if (link.code === PG_UNIQUE_VIOLATION) return true;
+  }
+  return false;
 }
 
 /**
@@ -28,8 +58,10 @@ const CONSTRAINT_MESSAGES: Record<string, string> = {
  * to a generic message when the constraint name is not recognized.
  */
 export function uniqueViolationMessage(err: unknown): string {
-  if (typeof err === "object" && err !== null) {
-    const constraint = (err as Record<string, unknown>).constraint;
+  for (const link of errorChain(err)) {
+    // node-postgres and postgres.js spell it `constraint`; PGlite uses
+    // `constraint_name`. Both appear in practice — PGlite backs the tests.
+    const constraint = link.constraint ?? link.constraint_name;
     if (typeof constraint === "string" && CONSTRAINT_MESSAGES[constraint]) {
       return CONSTRAINT_MESSAGES[constraint];
     }

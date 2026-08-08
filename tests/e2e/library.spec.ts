@@ -14,6 +14,8 @@ import { test, expect } from "./fixtures";
 import {
   API_BASE,
   authHeaders,
+  getAdminUserId,
+  getRegularUserId,
   getSql,
   goPath,
   deleteAllBooks,
@@ -21,6 +23,7 @@ import {
   seedBookFile,
   waitForAllQueuesIdle,
 } from "./helpers";
+import { ADMIN, REGULAR_USER } from "./helpers/accounts.js";
 
 /** Navigate to library via sidebar link (avoids SSR redirect). */
 async function goLibrary(page: Page): Promise<void> {
@@ -29,20 +32,19 @@ async function goLibrary(page: Page): Promise<void> {
   await page.waitForLoadState("networkidle");
 }
 
-async function getKeyMetadata(): Promise<{
-  admin: { id: string; label: string };
-  regular: { id: string; label: string };
-}> {
-  const res = await fetch(`${API_BASE}/api/auth/keys`, { headers: authHeaders() });
-  const data = (await res.json()) as {
-    keys: Array<{ id: string; label: string; isAdmin: boolean }>;
-  };
-  const admin = data.keys.find((key) => key.isAdmin);
-  const regular = data.keys.find((key) => !key.isAdmin);
-  if (!admin || !regular) throw new Error("Expected both admin and regular API keys to exist");
+/**
+ * Who owns what, for the uploader filter and the detail page's byline.
+ *
+ * Was a fetch of /api/auth/keys picking the isAdmin key out of the list, which
+ * worked because a key WAS a person and its label WAS their display name. Both
+ * facts are gone: the route is removed, keys carry no isAdmin, and the byline
+ * shows the user's name. Nothing needs fetching now — global-setup already
+ * knows both accounts.
+ */
+function owners() {
   return {
-    admin: { id: admin.id, label: admin.label },
-    regular: { id: regular.id, label: regular.label },
+    admin: { id: getAdminUserId(), label: ADMIN.name },
+    regular: { id: getRegularUserId(), label: REGULAR_USER.name },
   };
 }
 
@@ -293,12 +295,12 @@ test.describe("Library", { tag: "@smoke" }, () => {
   test.describe("filters and uploader metadata", () => {
     let adminBookId: string;
     let regularBookId: string;
-    let keys: Awaited<ReturnType<typeof getKeyMetadata>>;
+    let keys: ReturnType<typeof owners>;
 
     test.beforeAll(async () => {
       await waitForAllQueuesIdle();
       await deleteAllBooks();
-      keys = await getKeyMetadata();
+      keys = owners();
 
       adminBookId = await seedOrganizedBook({
         title: "English Admin Book",
@@ -387,7 +389,7 @@ test.describe("Book Detail", { tag: "@smoke" }, () => {
         INSERT INTO books (
           status, title, author, description, genres,
           publisher, published_year, language, page_count,
-          isbn_10, isbn_13, cover_path, approved_at
+          isbn_10, isbn_13, cover_path, created_by, approved_at
         )
         VALUES (
           'organized',
@@ -397,6 +399,7 @@ test.describe("Book Detail", { tag: "@smoke" }, () => {
           'Penguin Books', 2023, 'en', 432,
           '1234567890', '9781234567890',
           'Jane Doe/Detailed Book Title/cover.jpg',
+          ${getAdminUserId()},
           NOW()
         )
         RETURNING id

@@ -1,5 +1,5 @@
 import { ofetch } from "ofetch";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 import { serviceCredentials } from "#db";
 import type {
@@ -75,7 +75,16 @@ function normalize(doc: HardcoverDoc): NormalizedMetadata {
   });
 }
 
-async function getHardcoverToken(): Promise<string | null> {
+/**
+ * The first Hardcover token on the install, belonging to whoever happens to hold
+ * it.
+ *
+ * Only background jobs may fall back to this: a scheduled enrichment run has no
+ * caller to bill, and the alternative is that automatic metadata lookup stops
+ * working for every book not uploaded by the token holder. Request paths must
+ * pass the caller's own token instead — see `options.token` below.
+ */
+async function getAnyHardcoverToken(): Promise<string | null> {
   const db = getDb();
   const [cred] = await db
     .select({ passwordHash: serviceCredentials.passwordHash })
@@ -86,7 +95,32 @@ async function getHardcoverToken(): Promise<string | null> {
   return unsealToken(cred.passwordHash, getEnv().API_SECRET_KEY);
 }
 
-export async function searchHardcover(query: MetadataSearchQuery): Promise<MetadataCandidate[]> {
+/** Decrypt the Hardcover token belonging to one specific user, if they have one. */
+export async function getHardcoverTokenForUser(userId: string): Promise<string | null> {
+  const db = getDb();
+  const [cred] = await db
+    .select({ passwordHash: serviceCredentials.passwordHash })
+    .from(serviceCredentials)
+    .where(and(eq(serviceCredentials.service, "hardcover"), eq(serviceCredentials.userId, userId)))
+    .limit(1);
+  if (!cred) return null;
+  return unsealToken(cred.passwordHash, getEnv().API_SECRET_KEY);
+}
+
+export interface SearchHardcoverOptions {
+  /**
+   * Token to spend on this search. Request paths MUST pass the caller's own
+   * token, so nobody's search is billed to and rate-limited against another
+   * user's Hardcover account. Omitting it falls back to any token on the
+   * install and is only appropriate for background jobs.
+   */
+  token?: string;
+}
+
+export async function searchHardcover(
+  query: MetadataSearchQuery,
+  options: SearchHardcoverOptions = {},
+): Promise<MetadataCandidate[]> {
   const isbn = query.isbn && isValidIsbn(query.isbn) ? query.isbn : null;
   const searchTerm = [query.title, query.author].filter(Boolean).join(" ");
   if (!searchTerm && !isbn) return [];
@@ -98,7 +132,7 @@ export async function searchHardcover(query: MetadataSearchQuery): Promise<Metad
     return [];
   }
 
-  const token = await getHardcoverToken();
+  const token = options.token ?? (await getAnyHardcoverToken());
   if (!token) {
     logger.info("No Hardcover token configured, skipping search");
     return [];

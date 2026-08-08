@@ -2,47 +2,98 @@
 
 ## E2E Tests (Playwright)
 
-~137 spec test bodies across 16 spec files in `tests/e2e/`, running sequentially (1 worker, shared database). 10 OPDS tests are skipped at runtime via `test.describe.skip()` (ported to Vitest integration tests), so ~127 actually execute. Regenerate the exact counts with `vp exec playwright test --list` (run from `tests/e2e/`) rather than hand-counting; the setup projects add 3 more test bodies on top of the spec total.
+185 spec test bodies across 19 spec files in `tests/e2e/`, running sequentially (1 worker, shared database). The setup projects add 3 executions, and `prod-config.spec.ts` (4 tests) runs only in its own CI job, so a complete ordinary run is 184 tests. Regenerate the exact counts with `vp exec playwright test --list` (run from `tests/e2e/`) rather than hand-counting.
 
 ### Test Files
 
-| File                       | Tests | Tags             | Coverage                                                                                                                              |
-| -------------------------- | ----- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `auth.spec.ts`             | 7     | @smoke           | Setup form, login, logout, session persistence                                                                                        |
-| `book-progress.spec.ts`    | 3     | @smoke           | Multi-device progress, empty state, finished badge                                                                                    |
-| `command-palette.spec.ts`  | 3     | —                | Global search modal, navigation, book results                                                                                         |
-| `errors.spec.ts`           | 8     | @smoke / @slow   | Auth Error Handling (3 @smoke), Error Toasts & Edge Cases (4 @smoke); Duplicate File Detection (1 @slow + @external)                  |
-| `hardcover.spec.ts`        | 10    | @smoke           | Token CRUD, status, sync button/log, feature toggles, persistence                                                                     |
-| `home.spec.ts`             | 6     | @smoke           | Dashboard stats, currently reading, recently added, wide-screen card constraints                                                      |
-| `inbox.spec.ts`            | 16    | @smoke           | List, search, pagination, empty state, metadata picker, approve, delete                                                               |
-| `ingestion.spec.ts`        | 1     | @slow @external  | Full EPUB pipeline: detect → parse → review → approve → library                                                                       |
-| `library.spec.ts`          | 18    | @smoke           | Grid/list view, filters, search, pagination, detail page, covers, downloads                                                           |
-| `multi-user-auth.spec.ts`  | 15    | —                | Ownership enforcement, admin vs regular key, cross-user 403s, credential rotation                                                     |
-| `multi-user.spec.ts`       | 11    | —                | Per-user data isolation (reading progress, stats, service credentials)                                                                |
-| `opds.spec.ts`             | 10    | @smoke (skipped) | Feed structure, search, covers, downloads, Basic auth (`test.describe.skip`)                                                          |
-| `reading-status.spec.ts`   | 8     | @smoke           | Sidebar links, status tabs, empty state, wide-screen cards, plus a parametrized loop covering the reading/finished/unread/paused tabs |
-| `settings.spec.ts`         | 8     | @smoke (4)       | Health & diagnostics (@smoke); jobs browser and queue management untagged                                                             |
-| `stats.spec.ts`            | 7     | @smoke           | Books finished, streaks, daily activity, genre distribution                                                                           |
-| `websocket-events.spec.ts` | 6     | —                | Realtime event bus over WebSocket — job status, pipeline events, Hardcover sync updates                                               |
+| File                       | Tests | Tags            | Coverage                                                                                                                                    |
+| -------------------------- | ----- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `account.spec.ts`          | 20    | @smoke (4)      | Profile, password changes, session and device management, account access                                                                    |
+| `admin-authority.spec.ts`  | 4     | —               | Routes whose admin authority lives inside the handler, refused to app passwords and served to the same person's session                     |
+| `auth.spec.ts`             | 49    | mostly @smoke   | Sign-in, sessions, authorization, app passwords, OPDS authentication, user management                                                       |
+| `book-progress.spec.ts`    | 3     | @smoke          | Multi-device progress, empty state, finished badge                                                                                          |
+| `command-palette.spec.ts`  | 3     | —               | Global search modal, navigation, book results                                                                                               |
+| `errors.spec.ts`           | 5     | @smoke / @slow  | Error toasts, conflict handling, network failures, and duplicate file detection                                                             |
+| `first-run-setup.spec.ts`  | 2     | — (see below)   | Empty-install setup and first-admin creation. Cannot be tagged — its project depends on `chromium`, and dependency projects ignore `--grep` |
+| `hardcover.spec.ts`        | 10    | @smoke          | Token CRUD, status, sync button/log, feature toggles, persistence                                                                           |
+| `home.spec.ts`             | 6     | @smoke          | Dashboard stats, currently reading, recently added, wide-screen card constraints                                                            |
+| `inbox.spec.ts`            | 16    | @smoke          | List, search, pagination, empty state, metadata picker, approve, delete                                                                     |
+| `ingestion.spec.ts`        | 1     | @slow @external | Full EPUB pipeline: detect → parse → review → approve → library                                                                             |
+| `library.spec.ts`          | 18    | @smoke          | Grid/list view, filters, search, pagination, detail page, covers, downloads                                                                 |
+| `isolation.spec.ts`        | 10    | @smoke (6)      | Ownership controls, per-user progress and stats, credential persistence, cache and upload isolation                                         |
+| `prod-config.spec.ts`      | 4     | prod-config     | Production-config install: first-run setup, sign-in, sign-out, session revocation. Only runs in the `e2e-prod-config` CI job                |
+| `opds.spec.ts`             | 2     | @smoke          | Real-filesystem cover and ebook streaming through the live server                                                                           |
+| `reading-status.spec.ts`   | 8     | @smoke          | Sidebar links, status tabs, empty state, wide-screen cards, plus a parametrized loop covering the reading/finished/unread/paused tabs       |
+| `settings.spec.ts`         | 8     | @smoke (4)      | Health & diagnostics (@smoke); jobs browser and queue management untagged                                                                   |
+| `stats.spec.ts`            | 7     | @smoke          | Books finished, streaks, daily activity, genre distribution                                                                                 |
+| `websocket-events.spec.ts` | 9     | @smoke (3)      | Realtime event bus over WebSocket — job status, pipeline events, per-user scoping, and socket teardown when a session is revoked            |
 
-> **Note:** `opds.spec.ts` uses `test.describe.skip()` — the OPDS tests have been ported to
-> Vitest integration tests at `services/api-hono/src/routes/opds.test.ts`. The E2E versions
-> are retained for optional live-server testing but do not run by default.
+> **Note:** Feed structure, search, language filtering, authentication, and content-type
+> contracts live in `services/api-hono/src/routes/opds.test.ts`. `opds.spec.ts` retains only
+> the two cases that require the configured library directory and a running server: cover and
+> ebook streaming.
 
 ### Tags
 
-| Tag         | Count       | Meaning                                                                                                                                     |
-| ----------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `@smoke`    | 96 / 86 run | Critical paths — runs on PRs via `--grep @smoke`. `--list` reports 96 tagged bodies; 10 are the skipped OPDS tests, so 86 actually execute. |
-| `@slow`     | 2           | File processing / queue waits                                                                                                               |
-| `@external` | 2           | Requires external API access (Hardcover in practice)                                                                                        |
-| _untagged_  | 39          | Run on main push (full suite) but skipped on PR smoke runs                                                                                  |
+| Tag         | Meaning                                                                         |
+| ----------- | ------------------------------------------------------------------------------- |
+| `@smoke`    | Critical paths — runs on PRs via `--grep @smoke`                                |
+| `@slow`     | File processing or queue waits                                                  |
+| `@external` | Exercises a boundary normally backed by an external service or filesystem event |
+| _untagged_  | Runs in the complete suite but not the PR smoke selection                       |
 
-Untagged specs (command palette, multi-user flows, WebSocket events) validate behavior that doesn't need to block every PR but must pass on main.
+Untagged specs (command palette, jobs browser, most WebSocket cases) validate behavior that doesn't need to block every PR but must pass on main.
+
+**`@smoke` is the PR gate's entire definition of "covered".** The `e2e` job runs
+`--grep @smoke` on pull requests and the full suite only on pushes to main, so an
+untagged spec first executes _after_ the merge that broke it. That is not a
+theoretical cost: the auth work on this branch initially left `account.spec.ts`,
+`isolation.spec.ts`, `websocket-events.spec.ts` and every `auth.spec.ts` block
+except `sign-in` untagged, which meant app passwords, app-password scoping, OPDS
+Basic auth, the admin user-management walk and the last-admin 409 were not
+gating anything.
+
+The rule now: **anything that pins an authentication, authorization, ownership or
+session invariant carries `@smoke`.** Concretely that is the sign-in,
+post-sign-in redirect, session, authorization, app-password, app-password-scope,
+OPDS and user-management blocks of `auth.spec.ts`; the ownership, per-user
+stats, sign-out cache and upload-collision blocks of `isolation.spec.ts`; the
+WebSocket per-user event scoping, identity-switch and ban-severs-the-socket
+cases; and the password-change, session-token-leak, device-revocation and
+non-admin-access cases in `account.spec.ts`. Presentation and convenience
+coverage stays untagged so the gate stays a gate. That takes the PR selection
+from 89 tests to 139.
+
+::: warning `first-run-setup.spec.ts` cannot be tagged
+Its `first-run` project declares `dependencies: ["chromium"]` so it sorts last —
+it wipes every account, so nothing may follow it. Playwright does **not** apply
+`--grep` to a dependency project: it runs the whole thing. Tagging anything in
+that file therefore drags the entire `chromium` project into the PR run (139
+tests becomes all 184) and the gate silently stops being a gate.
+
+First-run setup runs on main only. If you want it on PRs, the honest change is
+to run the full suite on PRs, not to tag the file.
+:::
+
+### What CI actually exercises
+
+Green does not mean "every configuration works" — it means the configurations
+below were tried.
+
+| Config branch                                     | Exercised by                                  | Notes                                                                                                                                      |
+| ------------------------------------------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `NODE_ENV=development` + `E2E_TEST=1`, plain HTTP | `e2e` job (3 shards), `./scripts/test-e2e.sh` | The main suite. Dev `trustedOrigins`, in-memory KV and secondary storage, `/__test/*` mounted, Better Auth rate limiting relaxed.          |
+| `NODE_ENV=production`, no `E2E_TEST`, plain HTTP  | `e2e-prod-config` job (`prod-config.spec.ts`) | Empty `trustedOrigins` resolved from a required `BETTER_AUTH_URL`, Redis-backed KV and secondary storage, no support routes, Pino logging. |
+| `NODE_ENV=test`                                   | `vp run test` (Vitest, PGlite)                | Unit and integration only — never boots a real server.                                                                                     |
+| Real HTTPS / a TLS-terminating reverse proxy      | **Nothing**                                   | `LIBRIS_COOKIE_SECURE=1`, `Secure` cookies, `TRUST_PROXY_HEADERS=1` and forwarded-header handling are covered by unit tests at best.       |
+| `NODE_ENV=development` without `E2E_TEST`         | **Nothing**                                   | The interactive dev path, including the pretty-terminal logger transport.                                                                  |
+
+The last two rows are the standing gap. Read them before concluding that a green
+matrix clears a deployment change.
 
 ### Running Tests
 
-Playwright global setup waits for the API, clears BullMQ queue history from Redis, resets the database, and then seeds two API keys so queue/admin diagnostics start from a deterministic state: an admin key (via `POST /api/auth/setup`, exposed as `E2E_API_KEY`) and a non-admin regular-user key (via `POST /api/auth/keys`, exposed as `E2E_USER_API_KEY`). Both seeders fall back to direct database insertion (bcryptjs + `postgres`) when the endpoint is rate-limited (429). The multi-user suites depend on both keys being present.
+Playwright global setup waits for the API, clears BullMQ queue history from Redis, resets the database, bootstraps the admin, creates a regular user, signs both in, and issues each an app password through `POST /api/app-passwords`. Their sessions and app passwords are exposed to the specs through the E2E helper environment so tests can deliberately exercise either cookie or header authentication.
 
 Docker mode runs backing services from `docker-compose.test.yml` on non-default ports to avoid colliding with a local stack: Postgres on `5433` and Redis on `6380`.
 
@@ -68,15 +119,15 @@ cd tests/e2e && vp exec playwright test --ui            # interactive Playwright
 
 ### Infrastructure
 
-| File                      | Purpose                                                                                                               |
-| ------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| `playwright.config.ts`    | Config: 1 worker, retries in CI, reporters, webServer auto-start, two setup projects                                  |
-| `global-setup.ts`         | Waits for API health, resets DB (delete all rows), seeds admin + regular-user keys                                    |
-| `auth.setup.ts`           | `setup` project — logs in the admin key via API, saves session to `.auth/user.json`                                   |
-| `user-auth.setup.ts`      | `user-setup` project — logs in the non-admin `E2E_USER_API_KEY`, saves `.auth/regular-user.json` for multi-user tests |
-| `fixtures.ts`             | Custom fixtures: `authedPage` (pre-authenticated page)                                                                |
-| `helpers/index.ts`        | `seedOrganizedBook()`, `deleteAllBooks()`, `waitForJob()`, `goPath()`, etc.                                           |
-| `helpers/resolve-urls.ts` | `requireDatabaseUrl()` / `requireRedisUrl()` — DB/Redis URL resolution used by `global-setup.ts`                      |
+| File                      | Purpose                                                                                                                                                                              |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `playwright.config.ts`    | Config: 1 worker, retries in CI, reporters, webServer auto-start, two setup projects. `E2E_PROD_CONFIG=1` collapses it to the single `prod-config` project                           |
+| `global-setup.ts`         | Waits for API health, resets DB (delete all rows), seeds admin + regular-user keys. Stops after the reset under `E2E_PROD_CONFIG=1` — that run has no support routes to seed through |
+| `auth.setup.ts`           | `setup` project — logs in the admin key via API, saves session to `.auth/user.json`                                                                                                  |
+| `user-auth.setup.ts`      | `user-setup` project — logs in the non-admin `E2E_USER_API_KEY`, saves `.auth/regular-user.json` for multi-user tests                                                                |
+| `fixtures.ts`             | Custom fixtures: `authedPage` (pre-authenticated page)                                                                                                                               |
+| `helpers/index.ts`        | `seedOrganizedBook()`, `deleteAllBooks()`, `waitForJob()`, `goPath()`, etc.                                                                                                          |
+| `helpers/resolve-urls.ts` | `requireDatabaseUrl()` / `requireRedisUrl()` — DB/Redis URL resolution used by `global-setup.ts`                                                                                     |
 
 ### Database Seeding
 
@@ -90,7 +141,7 @@ Tests seed data via direct PostgreSQL queries (not API calls), using the `postgr
 
 ## API Exploration (Bruno)
 
-The `bruno/` directory contains a [Bruno](https://www.usebruno.com/) API collection auto-generated from the OpenAPI spec. It provides a ready-to-use set of all API endpoints for manual testing and exploration.
+The ignored `bruno/` directory contains a [Bruno](https://www.usebruno.com/) API collection auto-generated from the OpenAPI spec. Generate it locally with `vp run bruno:import` before using it for manual testing and exploration.
 
 ### Opening the Collection
 
@@ -108,9 +159,11 @@ bru run --env Local bruno/health/     # Quick health check
 
 | Environment | File                           | Base URL                |
 | ----------- | ------------------------------ | ----------------------- |
-| Local       | `bruno/environments/Local.bru` | `http://localhost:3000` |
+| Local       | `bruno/environments/Local.yml` | `http://localhost:3000` |
 
-Requests use a <code v-pre>{{baseUrl}}</code> variable which resolves from the selected environment.
+Requests use <code v-pre>{{baseUrl}}</code> for the server and inherit collection-level Bearer
+authentication from <code v-pre>{{apiKey}}</code>. Set `apiKey` to an app password issued from
+**Settings → Connections**; browser session cookies are not needed for Bruno.
 
 ### Regenerating the Collection
 
@@ -127,8 +180,9 @@ This runs `scripts/bruno-import.sh` which:
 3. Imports into `bruno/` grouped by OpenAPI tags
 4. Removes internal/test endpoints
 5. Preserves existing environment files
+6. Configures inherited `Authorization: Bearer {{apiKey}}` authentication
 
-The collection is committed to git so it's available immediately after cloning.
+The generated collection is not committed. Run `vp run bruno:import` after cloning and whenever the API routes change.
 
 ### Structure
 
@@ -136,7 +190,8 @@ Requests are organized by OpenAPI tag into folders:
 
 | Folder            | Endpoints                                            |
 | ----------------- | ---------------------------------------------------- |
-| `auth/`           | Setup, API key CRUD                                  |
+| `auth/`           | First-run setup status and bootstrap (`/api/setup`)  |
+| `app-passwords/`  | Mint, list, and revoke app passwords                 |
 | `books/`          | Approve metadata, delete, get candidates             |
 | `credentials/`    | Service credential management                        |
 | `dashboard/`      | Dashboard data                                       |
@@ -158,44 +213,121 @@ Requests are organized by OpenAPI tag into folders:
 
 Test config lives in each workspace's `vite.config.ts` `test` block, per Vite+ guidance — there are no `vitest.config.ts` files.
 
+### A test that cannot fail is worse than no test
+
+It gets counted as coverage. An adversarial review of the multi-user auth and
+security-hardening work found several issues closed on the strength of tests
+that were structurally incapable of failing; a follow-up pass replaced them and
+left these rules behind.
+
+**The bar for a new test is that you watched it go red.** Break the code it
+claims to cover — delete the lock, drop the `WHERE`, remove the guard — and
+confirm it fails. If it stays green it does not test that thing. Name the
+mutation you used in the commit message.
+
+Shapes to refuse:
+
+| Shape                                                                     | Why it cannot fail                                                                                                                                                                                                         |
+| ------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Asserting on the **echoed** request body a handler sent back              | A handler echoing its input satisfies it with the write deleted. Re-read the persisted row.                                                                                                                                |
+| Inserting rows yourself, then `SELECT`ing them back with the same filter  | No `src/` code runs — it asserts that PostgreSQL honours a `WHERE` clause. Drive the endpoint.                                                                                                                             |
+| A concurrency test on PGlite or an in-memory `Map`                        | One connection / one JS turn. A row lock cannot contend and a `Map` write cannot be lost.                                                                                                                                  |
+| `expect(x).toBeDefined()` where `x` cannot be undefined                   | The function returns an object on every path.                                                                                                                                                                              |
+| String-matching source text (a Lua script against `/INCR/`)               | Pins the text, not the behaviour. Any rewrite keeping the substring passes.                                                                                                                                                |
+| `expect(status).not.toBe(200)`                                            | Satisfied by 500 and 429 — cannot tell "refused" from "crashed".                                                                                                                                                           |
+| `expect(rows.length).toBeGreaterThanOrEqual(n)` where exactly `n` exist   | Cannot notice a listing that leaked someone else's rows.                                                                                                                                                                   |
+| A **negative control** produced by omitting a wrapper, middleware or flag | Only meaningful while that thing is genuinely optional. Once the wiring moves into `createApp`, the flag disables nothing and the "proves the bug" test silently becomes decoration. Re-check these whenever wiring moves. |
+
+A test that only pins the schema is legitimate — name it `SCHEMA:` so a
+close-reason cannot cite it as endpoint coverage. `src/db/db.test.ts` and the
+reading-progress block of `tests/auth-access-control.test.ts` follow that
+convention.
+
+### Tests that need a real PostgreSQL or Redis
+
+Most of the suite runs on PGlite, which is one embedded backend on one
+connection. Anything whose _subject_ is concurrency, or whose subject is the
+production driver's own behaviour, cannot run there:
+
+| File                                              | Needs      | Why PGlite will not do                                                                                                                                                                                          |
+| ------------------------------------------------- | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tests/last-admin-lock.postgres.test.ts`          | PostgreSQL | `SELECT ... FOR UPDATE` can only block a _different_ session, so on one connection the lock never contends.                                                                                                     |
+| `tests/admin-subtree-http.postgres.test.ts`       | PostgreSQL | `lastAdminMiddleware` holds its transaction open across `next()`, and Better Auth's write inside `next()` needs a second connection. PGlite has one, behind an exclusive mutex, so the request deadlocks.       |
+| `tests/reading-status-isolation.postgres.test.ts` | PostgreSQL | `/api/reading-status/*` reads its rows out of a raw `db.execute()`. postgres-js's array-like `RowList` is the shape `rowsOf()` has to get right for production; PGlite only ever exercises the `{ rows }` half. |
+| `tests/redis-increment.test.ts`                   | Redis      | `createMemoryKVStore.increment` is a synchronous `Map` write that cannot lose an update, so it passes against a broken production path.                                                                         |
+
+`tests/backing-services.ts` resolves the connections and creates a uniquely
+named throwaway database per suite (dropped afterwards), so several checkouts
+can share one server.
+
+| Variable                   | Default                                                         |
+| -------------------------- | --------------------------------------------------------------- |
+| `LIBRIS_TEST_POSTGRES_URL` | `postgres://libris_test:libris_test@localhost:5433/libris_test` |
+| `LIBRIS_TEST_REDIS_URL`    | `redis://localhost:6380`                                        |
+
+Both defaults match `docker-compose.test.yml`, so a full local run is:
+
+```bash
+docker compose -f docker-compose.test.yml up -d --wait postgres redis
+vp run -F @libris/api-hono test
+```
+
+Without them those suites **skip loudly**, printing `[SKIPPED — NOT COVERED]`
+and how to start the service. **When `CI` is set they fail instead of skipping**
+— a silently skipped concurrency test is the exact failure mode this convention
+exists to remove. The CI `test` job therefore runs `postgres:17` and `redis:7`
+service containers and points both variables at them.
+
 ### API Unit/Integration Test Files
 
 Paths relative to `services/api-hono/`. Test DB uses in-memory PGlite with mocked BullMQ queues.
 
-| File                                                | Coverage                                                              |
-| --------------------------------------------------- | --------------------------------------------------------------------- |
-| `src/db/db.test.ts`                                 | Database schema, migrations, and query helpers                        |
-| `src/env.test.ts`                                   | Environment variable parsing (Redis URL, required vars, defaults)     |
-| `src/lib/epub/embed-metadata.test.ts`               | EPUB metadata embedding (OPF rewriting)                               |
-| `src/lib/hardcover/client.test.ts`                  | Hardcover GraphQL client (request shaping, response mapping)          |
-| `src/lib/hardcover/matching.test.ts`                | Hardcover ISBN / title matching for sync linkage                      |
-| `src/lib/hardcover/pull-status.test.ts`             | Pulling existing Hardcover reading statuses (DNF → paused mapping)    |
-| `src/lib/languages.test.ts`                         | Canonical ISO 639-1 language normalization (aliases, BCP-47, 639-2/3) |
-| `src/lib/metadata/clients/metadata-clients.test.ts` | External metadata API clients (MSW mocked)                            |
-| `src/lib/metadata/detect-language.test.ts`          | Content-based language detection (tinyld)                             |
-| `src/lib/metadata/extractors/epub.test.ts`          | EPUB metadata extraction (OPF parsing, cover detection)               |
-| `src/lib/metadata/sanitize.test.ts`                 | HTML stripping and metadata field sanitization                        |
-| `src/lib/progress-aggregate.test.ts`                | Per-device reading-progress aggregation                               |
-| `src/lib/reading-aggregate.test.ts`                 | Per-(user, book) reading aggregate derivation                         |
-| `src/lib/reading-status.test.ts`                    | Reading status derivation from KoSync progress                        |
-| `src/lib/socket-guard.test.ts`                      | WebSocket connection auth guard                                       |
-| `src/middleware/rate-limit.test.ts`                 | Per-IP tiered rate limiting (auth / keyCreation / general)            |
-| `src/routes/api/books.test.ts`                      | `/api/books/*` approve, delete, candidates (integration)              |
-| `src/routes/api/hardcover.test.ts`                  | `/api/hardcover/*` search, sync status, trigger, log (integration)    |
-| `src/routes/api/inbox.test.ts`                      | `/api/inbox/*` list, detail, approve, delete (integration)            |
-| `src/routes/api/library.test.ts`                    | `/api/library/*` list, detail, covers, downloads (integration)        |
-| `src/routes/api/settings.test.ts`                   | `/api/settings/*` get/update including combined status endpoint       |
-| `src/routes/opds.test.ts`                           | OPDS feed endpoints (integration, Hono test client + PGlite)          |
-| `src/services/queue-diagnostics.test.ts`            | BullMQ aggregation for home/settings diagnostics                      |
-| `src/services/settings.test.ts`                     | App settings service CRUD                                             |
-| `src/shared/checksum.test.ts`                       | File checksum helpers used by the ingestion pipeline                  |
-| `src/shared/kosync-auth.test.ts`                    | KoSync header-based auth (`x-auth-user` / `x-auth-key`)               |
-| `src/shared/request-ip.test.ts`                     | Client IP extraction with and without `TRUST_PROXY_HEADERS`           |
-| `src/shared/route-policy.test.ts`                   | Route auth policy lookup table (public/api-key/admin/opds/kosync)     |
-| `src/workers/book-detected.test.ts`                 | `BOOK_DETECTED` worker: checksum, format detect, dedup                |
-| `src/workers/book-fetch-metadata.test.ts`           | `BOOK_FETCH_METADATA` worker: Hardcover lookup, promote to review     |
-| `src/workers/book-parse-file.test.ts`               | `BOOK_PARSE_FILE` worker: metadata extraction orchestration           |
-| `src/workers/cleanup-orphaned-files.test.ts`        | Scheduled orphan-file cleanup worker                                  |
+| File                                                | Coverage                                                                                               |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `src/db/db.test.ts`                                 | Database schema, migrations, and query helpers                                                         |
+| `src/db/rows.test.ts`                               | `rowsOf()` / `rowCount()`: the postgres-js vs PGlite `db.execute()` result shapes                      |
+| `src/env.test.ts`                                   | Environment variable parsing (Redis URL, required vars, defaults)                                      |
+| `src/lib/epub/embed-metadata.test.ts`               | EPUB metadata embedding (OPF rewriting)                                                                |
+| `src/lib/hardcover/client.test.ts`                  | Hardcover GraphQL client (request shaping, response mapping)                                           |
+| `src/lib/hardcover/matching.test.ts`                | Hardcover ISBN / title matching for sync linkage                                                       |
+| `src/lib/hardcover/pull-status.test.ts`             | Pulling existing Hardcover reading statuses (DNF → paused mapping)                                     |
+| `src/lib/languages.test.ts`                         | Canonical ISO 639-1 language normalization (aliases, BCP-47, 639-2/3)                                  |
+| `src/lib/metadata/clients/metadata-clients.test.ts` | External metadata API clients (MSW mocked)                                                             |
+| `src/lib/metadata/detect-language.test.ts`          | Content-based language detection (tinyld)                                                              |
+| `src/lib/metadata/extractors/epub.test.ts`          | EPUB metadata extraction (OPF parsing, cover detection)                                                |
+| `src/lib/metadata/sanitize.test.ts`                 | HTML stripping and metadata field sanitization                                                         |
+| `src/lib/progress-aggregate.test.ts`                | Per-device reading-progress aggregation                                                                |
+| `src/lib/reading-aggregate.test.ts`                 | Per-(user, book) reading aggregate derivation                                                          |
+| `src/lib/reading-status.test.ts`                    | Reading status derivation from KoSync progress                                                         |
+| `src/lib/socket-guard.test.ts`                      | WebSocket connection auth guard                                                                        |
+| `src/middleware/rate-limit.test.ts`                 | Per-IP tiered rate limiting (auth / keyCreation / general)                                             |
+| `src/routes/api/books.test.ts`                      | `/api/books/*` approve, delete, candidates (integration)                                               |
+| `src/routes/api/dashboard.test.ts`                  | `/api/dashboard` owner scoping of inbox count, byte volume and pipeline                                |
+| `src/routes/api/events.test.ts`                     | `/api/events` upgrade guard, connection cap, and closing sockets on revocation                         |
+| `src/routes/api/hardcover.test.ts`                  | `/api/hardcover/*` search, sync status, trigger, log (integration)                                     |
+| `src/routes/api/inbox.test.ts`                      | `/api/inbox/*` list, detail, approve, delete (integration)                                             |
+| `src/routes/api/library.test.ts`                    | `/api/library/*` list, detail, covers, downloads (integration)                                         |
+| `src/routes/api/settings.test.ts`                   | `/api/settings/*` get/update including combined status endpoint                                        |
+| `src/routes/opds.test.ts`                           | OPDS feed endpoints (integration, Hono test client + PGlite)                                           |
+| `src/services/cache.test.ts`                        | Route cache invalidation degrading, deferring and retrying when the KV store is down                   |
+| `src/services/cache-invalidation.test.ts`           | A real mutation evicts the cached OPDS/stats entry, and cached mounts still match invalidated prefixes |
+| `src/services/queue-diagnostics.test.ts`            | BullMQ aggregation for home/settings diagnostics                                                       |
+| `src/services/rate-limit.test.ts`                   | Tier limits, window anchoring, and the in-memory fallback used when Redis is down                      |
+| `src/services/settings.test.ts`                     | App settings service CRUD                                                                              |
+| `src/shared/checksum.test.ts`                       | File checksum helpers used by the ingestion pipeline                                                   |
+| `src/shared/kosync-auth.test.ts`                    | KoSync header-based auth (`x-auth-user` / `x-auth-key`)                                                |
+| `src/shared/request-ip.test.ts`                     | Trusted-proxy chain validation, IPv6 `/64` buckets, and auth IP injection                              |
+| `src/shared/route-policy.test.ts`                   | Route auth policy lookup table (public/api-key/admin/opds/kosync)                                      |
+| `src/workers/book-detected.test.ts`                 | `BOOK_DETECTED` worker: checksum, format detect, dedup                                                 |
+| `src/workers/book-fetch-metadata.test.ts`           | `BOOK_FETCH_METADATA` worker: Hardcover lookup, promote to review                                      |
+| `src/workers/book-parse-file.test.ts`               | `BOOK_PARSE_FILE` worker: metadata extraction orchestration                                            |
+| `src/workers/cleanup-orphaned-files.test.ts`        | Scheduled orphan-file cleanup worker                                                                   |
+| `tests/last-admin-lock.postgres.test.ts`            | The last-admin row lock under real contention (needs PostgreSQL)                                       |
+| `tests/admin-subtree-http.postgres.test.ts`         | `/api/auth/admin/*` over HTTP: last-admin 409s and remove-user book reassignment (needs PostgreSQL)    |
+| `tests/user-deletion-atomicity.postgres.test.ts`    | Why remove-user's book reassignment must commit outside the last-admin transaction (needs PostgreSQL)  |
+| `tests/reading-status.test.ts`                      | Per-user `/api/reading-status/counts` and `/{status}` over HTTP                                        |
+| `tests/reading-status-isolation.postgres.test.ts`   | The same two endpoints on the postgres-js driver's result shape (needs PostgreSQL)                     |
+| `tests/redis-increment.test.ts`                     | Atomicity of both rate-limit increments (needs Redis)                                                  |
 
 ### Web Unit Test Files
 
@@ -217,6 +349,7 @@ That command deletes only Libris BullMQ keys, which keeps Home and Settings queu
 
 See [ci-cd.md](ci-cd.md) for the full CI workflow. Summary:
 
-- **PRs:** `@smoke` E2E tests only
-- **main push:** Full E2E suite
-- Test results posted as PR comments
+- **PRs:** `@smoke` E2E tests (3 shards), plus the whole `e2e-prod-config` job
+- **main push:** Full E2E suite, plus `e2e-prod-config`
+- Results are surfaced by GitHub's native checks UI. A failure uploads the
+  Playwright report, the traces, and the API server log.

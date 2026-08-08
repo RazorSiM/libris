@@ -33,8 +33,8 @@ describe("queue diagnostics", () => {
         completed: 3,
         failed: 4,
         delayed: 5,
-        paused: 0,
       }),
+      isPaused: vi.fn().mockResolvedValue(false),
     } as unknown as Queue;
     const queueB = {
       name: "book-organize",
@@ -44,8 +44,10 @@ describe("queue diagnostics", () => {
         completed: 0,
         failed: 0,
         delayed: 0,
-        paused: 0,
       }),
+      // Paused queues keep their jobs in `waiting` — the flag is the only
+      // signal that this queue is not draining.
+      isPaused: vi.fn().mockResolvedValue(true),
     } as unknown as Queue;
 
     const counts = await collectQueueCounts([queueA, queueB]);
@@ -57,7 +59,7 @@ describe("queue diagnostics", () => {
         completed: 3,
         failed: 4,
         delayed: 5,
-        paused: 0,
+        isPaused: false,
       },
       "book-organize": {
         waiting: 0,
@@ -65,7 +67,7 @@ describe("queue diagnostics", () => {
         completed: 0,
         failed: 0,
         delayed: 0,
-        paused: 0,
+        isPaused: true,
       },
     });
   });

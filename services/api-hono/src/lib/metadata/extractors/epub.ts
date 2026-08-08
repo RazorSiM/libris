@@ -6,9 +6,10 @@ import {
   EOCD_MIN_SIZE,
   LOCAL_HEADER_SIG,
   findEocd,
-  parseCentralDirectory,
+  readCentralDirectory,
   readRange,
   readZipEntry,
+  ZipLimitError,
 } from "../../epub/zip.js";
 import type { ZipEntry } from "../../epub/zip.js";
 import { normalizeLanguage } from "../../languages.js";
@@ -22,11 +23,176 @@ const logger = getLogger("epub-extractor");
 // META-INF/container.xml to locate the OPF, then parses Dublin Core metadata.
 // Supports both STORE (uncompressed) and DEFLATE entries.
 
+// --- Linear XML scanning primitives ---
+//
+// Every scan in this file is built from `indexOf` plus fixed-offset ASCII
+// comparisons. Regexes such as /<dc:title(?:\s[^>]*)?>/gi or /<item[^>]+>/gi
+// look bounded but backtrack quadratically: on `"<dc:title ".repeat(n)` the
+// cost is exactly 4x per doubling of n, so a 2 MB OPF (which deflates to a few
+// hundred bytes inside a ~1 KB EPUB) pins the event loop for minutes. This is
+// the second attempt at the problem — the previous "fix" swapped one
+// backtracking pattern for another and measured no faster.
+//
+// Scanning at fixed offsets also removes a correctness bug: the old code
+// searched `xml.toLowerCase()` for the closing tag but sliced the *original*
+// string with the resulting offset. Lowercasing can change UTF-16 length
+// (U+0130 lowercases to two code units), which desynchronised the two indices
+// and appended a stray "<" to every dc: field after such a character.
+
+const CHAR_GT = 0x3e; // ">"
+const CHAR_SLASH = 0x2f; // "/"
+const CHAR_EQUALS = 0x3d; // "="
+const CHAR_DQUOTE = 0x22; // '"'
+const CHAR_SQUOTE = 0x27; // "'"
+
+function isXmlSpace(code: number): boolean {
+  return code === 0x20 || code === 0x09 || code === 0x0a || code === 0x0d;
+}
+
+function asciiLower(code: number): number {
+  return code >= 0x41 && code <= 0x5a ? code + 0x20 : code;
+}
+
+/**
+ * True when `haystack` contains `needleLower` at `at`, folding ASCII letters.
+ * `needleLower` must already be lowercase. XML element and attribute names are
+ * ASCII, so ASCII-only folding is both sufficient and safer than `toLowerCase`.
+ */
+function matchesAt(haystack: string, at: number, needleLower: string): boolean {
+  if (at < 0 || at + needleLower.length > haystack.length) return false;
+  for (let i = 0; i < needleLower.length; i++) {
+    if (asciiLower(haystack.charCodeAt(at + i)) !== needleLower.charCodeAt(i)) return false;
+  }
+  return true;
+}
+
+/**
+ * Case-insensitive `indexOf` for a needle beginning with "<". Native
+ * `indexOf("<")` skips between candidates, so the total cost is
+ * O(haystack length x needle length) with no backtracking.
+ */
+function indexOfTag(haystack: string, needleLower: string, from: number): number {
+  const limit = haystack.length - needleLower.length;
+  let i = Math.max(0, from);
+  while (i <= limit) {
+    const at = haystack.indexOf("<", i);
+    if (at === -1 || at > limit) return -1;
+    if (matchesAt(haystack, at, needleLower)) return at;
+    i = at + 1;
+  }
+  return -1;
+}
+
+/** Case-insensitive `indexOf` for an arbitrary ASCII-lowercase needle. */
+function indexOfCaseInsensitive(haystack: string, needleLower: string, from: number): number {
+  const limit = haystack.length - needleLower.length;
+  for (let i = Math.max(0, from); i <= limit; i++) {
+    if (matchesAt(haystack, i, needleLower)) return i;
+  }
+  return -1;
+}
+
+interface XmlTag {
+  /** Full source text of the tag, angle brackets included. */
+  text: string;
+  /** Index of "<". */
+  start: number;
+  /** Index just past ">". */
+  end: number;
+}
+
+/**
+ * Iterate every `<name ...>` tag in `xml`, case-insensitively. `name` must be
+ * lowercase. `<items>` does not match a scan for `item`. Linear in `xml.length`
+ * because the cursor only ever moves forward.
+ */
+function* scanTags(xml: string, name: string): Generator<XmlTag> {
+  const open = `<${name}`;
+  let pos = 0;
+  while (pos < xml.length) {
+    const start = indexOfTag(xml, open, pos);
+    if (start === -1) return;
+    const after = start + open.length;
+    const next = after < xml.length ? xml.charCodeAt(after) : -1;
+    if (next !== CHAR_GT && next !== CHAR_SLASH && !isXmlSpace(next)) {
+      pos = start + 1;
+      continue;
+    }
+    const gt = xml.indexOf(">", after);
+    if (gt === -1) return;
+    yield { text: xml.slice(start, gt + 1), start, end: gt + 1 };
+    pos = gt + 1;
+  }
+}
+
+/**
+ * Read an attribute value out of a single tag's source text. `name` must be
+ * lowercase; the attribute name must start at a whitespace boundary, so a scan
+ * for `href` does not pick up `xlink:href`. Returns undefined for absent or
+ * empty values, matching the `("[^"]+")` regexes this replaces.
+ */
+function getAttribute(tag: string, name: string): string | undefined {
+  for (let i = 1; i + name.length < tag.length; i++) {
+    if (!isXmlSpace(tag.charCodeAt(i - 1))) continue;
+    if (!matchesAt(tag, i, name)) continue;
+    let j = i + name.length;
+    while (j < tag.length && isXmlSpace(tag.charCodeAt(j))) j++;
+    if (tag.charCodeAt(j) !== CHAR_EQUALS) continue;
+    j++;
+    while (j < tag.length && isXmlSpace(tag.charCodeAt(j))) j++;
+    const quote = tag.charCodeAt(j);
+    if (quote !== CHAR_DQUOTE && quote !== CHAR_SQUOTE) continue;
+    const close = tag.indexOf(quote === CHAR_DQUOTE ? '"' : "'", j + 1);
+    if (close === -1) return undefined;
+    const value = tag.slice(j + 1, close);
+    return value.length > 0 ? value : undefined;
+  }
+  return undefined;
+}
+
+/**
+ * Text between the first `<name ...>` and its `</name>`. Returns undefined when
+ * either is missing. A failed close-tag search ends the scan rather than
+ * retrying later open tags: any later tag starts after the failed search
+ * window, so it could not find a close tag either.
+ */
+function elementContent(xml: string, name: string): string | undefined {
+  for (const tag of scanTags(xml, name)) {
+    if (tag.text.endsWith("/>")) continue;
+    const close = indexOfTag(xml, `</${name}>`, tag.end);
+    if (close === -1) return undefined;
+    return xml.slice(tag.end, close);
+  }
+  return undefined;
+}
+
+/** Drop `<name>...</name>` elements (content included), replacing each with a space. */
+function removeElements(html: string, names: readonly string[]): string {
+  let result = html;
+  for (const name of names) {
+    const closeTag = `</${name}>`;
+    let out = "";
+    let pos = 0;
+    for (const tag of scanTags(result, name)) {
+      if (tag.start < pos) continue; // already inside a removed region
+      const close = indexOfTag(result, closeTag, tag.end);
+      if (close === -1) break;
+      out += `${result.slice(pos, tag.start)} `;
+      pos = close + closeTag.length;
+    }
+    if (pos > 0) result = out + result.slice(pos);
+  }
+  return result;
+}
+
 // --- container.xml parsing ---
 
 function parseContainerXml(xml: string): string | null {
-  const m = xml.match(/<rootfile[^>]+full-path="([^"]+)"[^>]*>/i);
-  return m?.[1] || null;
+  for (const tag of scanTags(xml, "rootfile")) {
+    const fullPath = getAttribute(tag.text, "full-path");
+    if (fullPath) return fullPath;
+  }
+  return null;
 }
 
 // --- OPF parsing ---
@@ -34,6 +200,17 @@ function parseContainerXml(xml: string): string | null {
 // Field length limits to prevent DoS via extremely long metadata strings
 const MAX_FIELD_LENGTH = 1000;
 const MAX_DESCRIPTION_LENGTH = 5000;
+// A real OPF is a few tens of KB even for a large manifest. The old 2 MB budget
+// existed only because the parser could not be trusted with less.
+const MAX_OPF_BYTES = 256 * 1024;
+// Per-element and per-tag caps. These bound the work handed to stripHtml(),
+// whose /<[^>]+>/g pass is itself quadratic on a run of "<" characters.
+const MAX_XML_ELEMENT_BYTES = 8 * 1024;
+const MAX_DC_ELEMENTS = 128;
+const MAX_COVER_BYTES = 10 * 1024 * 1024;
+// Only TEXT_SAMPLE_TARGET characters of prose are ever needed per spine doc,
+// so there is no reason to hand a multi-megabyte body to the text stripper.
+const MAX_TEXT_SCAN_BYTES = 8 * 1024;
 
 // Body-text sampling for language detection (see extractEpubTextSample).
 const TEXT_SAMPLE_TARGET = 1500; // stop once this many chars of prose are collected
@@ -45,31 +222,82 @@ function truncate(value: string | undefined, max: number): string | undefined {
   return value.length > max ? value.slice(0, max) : value;
 }
 
-function parseOpf(xml: string): NormalizedMetadata {
-  const getAll = (tag: string): string[] => {
-    const results: string[] = [];
-    for (const m of xml.matchAll(new RegExp(`<dc:${tag}[^>]*>([\\s\\S]*?)</dc:${tag}>`, "gi"))) {
-      const text = m[1]?.trim();
-      if (text) results.push(text);
+/**
+ * Strip markup out of a metadata field, then truncate. Empty results collapse
+ * to undefined so callers can `??` past them.
+ *
+ * `stripHtml` runs `/<[^>]+>/g`, which backtracks quadratically over a run of
+ * "<" characters, so the input must already be bounded — every call site here
+ * feeds it a value capped at MAX_XML_ELEMENT_BYTES by collectDcElements or a
+ * single regex capture group.
+ */
+function stripField(value: string | undefined, max: number): string | undefined {
+  if (!value) return undefined;
+  return truncate(stripHtml(value).trim() || undefined, max);
+}
+
+/**
+ * Text content of every `<dc:{tag}>` element, in document order.
+ *
+ * Linear: the cursor only moves forward, every lookup is an `indexOf`, and a
+ * missing close tag ends the scan instead of restarting it. Compare the
+ * previous regex implementation, which took ~3 minutes on a 2 MB OPF of
+ * repeated `"<dc:title "` tokens.
+ */
+function collectDcElements(xml: string, tag: string): string[] {
+  const results: string[] = [];
+  const openTag = `<dc:${tag}`;
+  const closeTag = `</dc:${tag}>`;
+  let pos = 0;
+
+  while (pos < xml.length && results.length < MAX_DC_ELEMENTS) {
+    const start = indexOfTag(xml, openTag, pos);
+    if (start === -1) break;
+
+    const after = start + openTag.length;
+    const next = after < xml.length ? xml.charCodeAt(after) : -1;
+    // The name must end here: reject <dc:titlefoo> when looking for <dc:title>.
+    if (next !== CHAR_GT && !isXmlSpace(next)) {
+      pos = start + 1;
+      continue;
     }
-    return results;
-  };
+
+    const gt = xml.indexOf(">", after);
+    if (gt === -1) break; // unterminated tag — nothing further can match
+    if (xml.charCodeAt(gt - 1) === CHAR_SLASH) {
+      pos = gt + 1; // <dc:title/> — empty element, no content
+      continue;
+    }
+
+    const contentStart = gt + 1;
+    const contentEnd = indexOfTag(xml, closeTag, contentStart);
+    if (contentEnd === -1) break;
+
+    const text = xml
+      .slice(contentStart, Math.min(contentEnd, contentStart + MAX_XML_ELEMENT_BYTES))
+      .trim();
+    if (text) results.push(text);
+    pos = contentEnd + closeTag.length;
+  }
+
+  return results;
+}
+
+export function parseOpf(xml: string): NormalizedMetadata {
+  const getAll = (tag: string): string[] => collectDcElements(xml, tag);
 
   const get = (tag: string): string | undefined => getAll(tag)[0] || undefined;
 
   // Strip HTML from text fields that could contain injected tags
-  const title = truncate(stripHtml(get("title") ?? "").trim() || undefined, MAX_FIELD_LENGTH);
+  const title = stripField(get("title"), MAX_FIELD_LENGTH);
 
   // Multiple creators — join with ", "
   const creators = getAll("creator")
-    .map((c) => stripHtml(c).trim())
-    .filter(Boolean);
+    .map((c) => stripField(c, MAX_FIELD_LENGTH))
+    .filter((c): c is string => Boolean(c));
   const author = truncate(creators.length > 0 ? creators.join(", ") : undefined, MAX_FIELD_LENGTH);
 
-  const publisher = truncate(
-    stripHtml(get("publisher") ?? "").trim() || undefined,
-    MAX_FIELD_LENGTH,
-  );
+  const publisher = stripField(get("publisher"), MAX_FIELD_LENGTH);
   // Normalize the embedded language tag to a canonical ISO 639-1 code when we
   // recognize it (e.g. "en-GB" -> "en", "Italian" -> "it"); otherwise keep the
   // raw value so the file candidate still records what the file actually said.
@@ -77,24 +305,15 @@ function parseOpf(xml: string): NormalizedMetadata {
   const language = normalizeLanguage(rawLanguage) ?? rawLanguage;
 
   // Description may contain HTML
-  const rawDescription = get("description");
-  const description = truncate(
-    rawDescription ? stripHtml(rawDescription) : undefined,
-    MAX_DESCRIPTION_LENGTH,
-  );
+  const description = stripField(get("description"), MAX_DESCRIPTION_LENGTH);
 
   // dc:subject → genres
   const genres = getAll("subject");
 
-  // Scan all dc:identifier elements for ISBNs
+  // Scan all dc:identifier elements for ISBNs. This already covers identifiers
+  // carrying opf:scheme="ISBN" — the separate (and quadratic) regex that used
+  // to re-scan for them was pure duplication.
   const identifiers = getAll("identifier");
-  // Also grab identifiers with opf:scheme="ISBN"
-  for (const m of xml.matchAll(
-    /<dc:identifier[^>]+opf:scheme="ISBN"[^>]*>([^<]*)<\/dc:identifier>/gi,
-  )) {
-    const v = m[1]?.trim();
-    if (v && !identifiers.includes(v)) identifiers.push(v);
-  }
 
   let isbn10: string | undefined;
   let isbn13: string | undefined;
@@ -123,10 +342,7 @@ function parseOpf(xml: string): NormalizedMetadata {
   const seriesIndexMatch = xml.match(
     /<meta\s+name=["']calibre:series_index["']\s+content=["']([^"']+)["']\s*\/?>/i,
   );
-  const series = truncate(
-    stripHtml(seriesMatch?.[1]?.trim() ?? "").trim() || undefined,
-    MAX_FIELD_LENGTH,
-  );
+  const series = stripField(seriesMatch?.[1], MAX_FIELD_LENGTH);
   const seriesIndexRaw = seriesIndexMatch?.[1]?.trim();
   const seriesIndex =
     seriesIndexRaw && !Number.isNaN(Number.parseFloat(seriesIndexRaw))
@@ -159,44 +375,34 @@ interface CoverRef {
 }
 
 function extractManifestItemAttrs(tag: string): { href?: string; mediaType?: string } {
-  const hrefMatch = tag.match(/href="([^"]+)"/i);
-  const mtMatch = tag.match(/media-type="([^"]+)"/i);
-  return { href: hrefMatch?.[1], mediaType: mtMatch?.[1] };
+  return { href: getAttribute(tag, "href"), mediaType: getAttribute(tag, "media-type") };
 }
 
 function extractCoverHref(xml: string): CoverRef | undefined {
   // EPUB2: <meta name="cover" content="cover-image-id" />
-  const metaMatch = xml.match(/<meta[^>]+name="cover"[^>]+content="([^"]+)"/i);
-  if (metaMatch) {
-    const coverId = metaMatch[1]!;
+  let coverId: string | undefined;
+  for (const tag of scanTags(xml, "meta")) {
+    if (getAttribute(tag.text, "name") !== "cover") continue;
+    coverId = getAttribute(tag.text, "content");
+    if (coverId) break;
+  }
 
-    // Find manifest item with matching id
-    const itemRe = new RegExp(`<item[^>]+id="${escapeRegex(coverId)}"[^>]*>`, "i");
-    const m1 = xml.match(itemRe);
-    if (m1) {
-      const attrs = extractManifestItemAttrs(m1[0]);
+  // Find the manifest item with that id (attribute order is irrelevant here).
+  if (coverId) {
+    for (const tag of scanTags(xml, "item")) {
+      if (getAttribute(tag.text, "id") !== coverId) continue;
+      const attrs = extractManifestItemAttrs(tag.text);
       if (attrs.href) return { href: attrs.href, mediaType: attrs.mediaType };
-    }
-
-    // Try reversed attribute order (id after href)
-    const itemRe2 = new RegExp(
-      `<item[^>]+href="[^"]+"[^>]+id="${escapeRegex(coverId)}"[^>]*>`,
-      "i",
-    );
-    const m2 = xml.match(itemRe2);
-    if (m2) {
-      const attrs = extractManifestItemAttrs(m2[0]);
-      if (attrs.href) return { href: attrs.href, mediaType: attrs.mediaType };
+      break;
     }
   }
 
   // EPUB3: <item properties="cover-image" href="..." />
   // The properties attribute may contain multiple space-separated values
-  for (const m of xml.matchAll(/<item[^>]+>/gi)) {
-    const tag = m[0];
-    const propsMatch = tag.match(/properties="([^"]+)"/i);
-    if (propsMatch && propsMatch[1]?.split(/\s+/).includes("cover-image")) {
-      const attrs = extractManifestItemAttrs(tag);
+  for (const tag of scanTags(xml, "item")) {
+    const props = getAttribute(tag.text, "properties");
+    if (props?.split(/\s+/).includes("cover-image")) {
+      const attrs = extractManifestItemAttrs(tag.text);
       if (attrs.href) return { href: attrs.href, mediaType: attrs.mediaType };
     }
   }
@@ -212,21 +418,49 @@ function extractCoverHref(xml: string): CoverRef | undefined {
  */
 function extractImageHrefFromXhtml(xhtml: string): string | undefined {
   // SVG <image> with xlink:href or href attribute
-  const svgImageXlink = xhtml.match(/<image[^>]+xlink:href="([^"]+)"/i);
-  if (svgImageXlink?.[1]) return svgImageXlink[1];
-
-  const svgImageHref = xhtml.match(/<image[^>]+href="([^"]+)"/i);
-  if (svgImageHref?.[1]) return svgImageHref[1];
+  for (const tag of scanTags(xhtml, "image")) {
+    const xlink = getAttribute(tag.text, "xlink:href");
+    if (xlink) return xlink;
+  }
+  for (const tag of scanTags(xhtml, "image")) {
+    const href = getAttribute(tag.text, "href");
+    if (href) return href;
+  }
 
   // HTML <img> with src attribute
-  const imgSrc = xhtml.match(/<img[^>]+src="([^"]+)"/i);
-  if (imgSrc?.[1]) return imgSrc[1];
+  for (const tag of scanTags(xhtml, "img")) {
+    const src = getAttribute(tag.text, "src");
+    if (src) return src;
+  }
 
   // CSS background-image: url(...)
-  const bgImage = xhtml.match(/background-image:\s*url\(["']?([^"')]+)["']?\)/i);
-  if (bgImage?.[1]) return bgImage[1];
+  return extractCssBackgroundImage(xhtml);
+}
 
-  return undefined;
+/** `background-image: url("...")` value, scanned with indexOf rather than a backtracking regex. */
+function extractCssBackgroundImage(css: string): string | undefined {
+  const property = "background-image:";
+  let from = 0;
+  for (;;) {
+    const at = indexOfCaseInsensitive(css, property, from);
+    if (at === -1) return undefined;
+    from = at + property.length;
+
+    const open = css.indexOf("(", from);
+    if (open === -1) return undefined;
+    // Only whitespace and the "url" keyword may sit between the colon and "(".
+    if (css.slice(from, open).trim().toLowerCase() !== "url") continue;
+
+    const close = css.indexOf(")", open + 1);
+    if (close === -1) return undefined;
+
+    let value = css.slice(open + 1, close).trim();
+    const first = value.charCodeAt(0);
+    if (first === CHAR_DQUOTE || first === CHAR_SQUOTE) value = value.slice(1);
+    const last = value.charCodeAt(value.length - 1);
+    if (last === CHAR_DQUOTE || last === CHAR_SQUOTE) value = value.slice(0, -1);
+    if (value.length > 0) return value;
+  }
 }
 
 /**
@@ -251,10 +485,6 @@ function resolveRelativePath(basePath: string, relativePath: string): string {
   }
 
   return parts.join("/");
-}
-
-function escapeRegex(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function parseYear(dateStr: string): number | undefined {
@@ -352,8 +582,7 @@ async function readEpubOpf(filePath: string): Promise<EpubOpfResult | null> {
   const cdSize = tailBuf.readUInt32LE(eocdPos + 12);
   const cdOffset = tailBuf.readUInt32LE(eocdPos + 16);
 
-  const cdBuf = await readRange(filePath, cdOffset, cdSize);
-  const entries = parseCentralDirectory(cdBuf, cdSize);
+  const entries = await readCentralDirectory(filePath, cdOffset, cdSize);
 
   const containerEntry = entries.find((e) => e.fileName === "META-INF/container.xml");
   let opfPath: string | null = null;
@@ -373,7 +602,10 @@ async function readEpubOpf(filePath: string): Promise<EpubOpfResult | null> {
   }
   if (!opfEntry) return null;
 
-  const opfBuf = await readZipEntry(filePath, opfEntry);
+  const opfBuf = await readZipEntry(filePath, opfEntry, {
+    maxOutputBytes: MAX_OPF_BYTES,
+    label: "OPF document",
+  });
   if (!opfBuf) return null;
 
   return { entries, opfEntry, opfXml: opfBuf.toString("utf8") };
@@ -423,7 +655,10 @@ export async function extractEpubCoverImage(filePath: string): Promise<Buffer | 
           `Cover manifest item is XHTML (${coverRef.mediaType}): ${coverEntry.fileName}. ` +
             `Parsing for embedded image reference.`,
         );
-        const xhtmlBuf = await readZipEntry(filePath, coverEntry);
+        const xhtmlBuf = await readZipEntry(filePath, coverEntry, {
+          maxOutputBytes: MAX_OPF_BYTES,
+          label: "cover XHTML document",
+        });
         if (xhtmlBuf) {
           const imageHref = extractImageHrefFromXhtml(xhtmlBuf.toString("utf8"));
           if (imageHref) {
@@ -481,7 +716,10 @@ export async function extractEpubCoverImage(filePath: string): Promise<Buffer | 
       return null;
     }
 
-    const data = await readZipEntry(filePath, coverEntry);
+    const data = await readZipEntry(filePath, coverEntry, {
+      maxOutputBytes: MAX_COVER_BYTES,
+      label: "cover image",
+    });
     if (!data || data.length === 0) {
       logger.warn(
         `Cover extraction failed: readZipEntry returned empty data for ${coverEntry.fileName}`,
@@ -503,20 +741,21 @@ export async function extractEpubCoverImage(filePath: string): Promise<Buffer | 
 function parseSpineHrefs(opfXml: string): string[] {
   // manifest id -> href (only (X)HTML content documents)
   const idToHref = new Map<string, string>();
-  for (const m of opfXml.matchAll(/<item\b[^>]*>/gi)) {
-    const tag = m[0];
-    const id = tag.match(/\bid="([^"]+)"/i)?.[1];
-    const href = tag.match(/\bhref="([^"]+)"/i)?.[1];
-    const mediaType = tag.match(/\bmedia-type="([^"]+)"/i)?.[1];
+  for (const tag of scanTags(opfXml, "item")) {
+    const id = getAttribute(tag.text, "id");
+    const href = getAttribute(tag.text, "href");
+    const mediaType = getAttribute(tag.text, "media-type");
     if (id && href && (!mediaType || /html|xml/i.test(mediaType))) {
       idToHref.set(id, href);
     }
   }
 
-  const spineXml = opfXml.match(/<spine\b[^>]*>([\s\S]*?)<\/spine>/i)?.[1] ?? "";
+  const spineXml = elementContent(opfXml, "spine") ?? "";
   const hrefs: string[] = [];
-  for (const m of spineXml.matchAll(/<itemref\b[^>]*\bidref="([^"]+)"[^>]*>/gi)) {
-    const href = idToHref.get(m[1]!);
+  for (const tag of scanTags(spineXml, "itemref")) {
+    const idref = getAttribute(tag.text, "idref");
+    if (!idref) continue;
+    const href = idToHref.get(idref);
     if (href) hrefs.push(href);
   }
   return hrefs;
@@ -524,8 +763,11 @@ function parseSpineHrefs(opfXml: string): string[] {
 
 /** Readable prose from an XHTML content document — body only, no script/style. */
 function xhtmlToText(xhtml: string): string {
-  const body = xhtml.match(/<body\b[^>]*>([\s\S]*?)<\/body>/i)?.[1] ?? xhtml;
-  const withoutCode = body.replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, " ");
+  const body = elementContent(xhtml, "body") ?? xhtml;
+  // We only ever keep TEXT_SAMPLE_TARGET characters, so cap the input before
+  // handing it to stripHtml() rather than stripping a whole 16 MB chapter.
+  const bounded = body.length > MAX_TEXT_SCAN_BYTES ? body.slice(0, MAX_TEXT_SCAN_BYTES) : body;
+  const withoutCode = removeElements(bounded, ["script", "style"]);
   return stripHtml(withoutCode).replace(/\s+/g, " ").trim();
 }
 
@@ -582,7 +824,8 @@ export async function extractEpubMetadata(filePath: string): Promise<NormalizedM
     if (!result) return fallbackExtract(filePath);
 
     return parseOpf(result.opfXml);
-  } catch {
+  } catch (error: unknown) {
+    if (error instanceof ZipLimitError) throw error;
     return {};
   }
 }

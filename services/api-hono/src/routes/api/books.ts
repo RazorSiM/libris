@@ -1,18 +1,20 @@
-import { OpenAPIHono, createRoute } from "@hono/zod-openapi";
+import { createRoute } from "@hono/zod-openapi";
+import { createOpenApiRouter } from "../../shared/openapi.js";
 import { HTTPException } from "hono/http-exception";
 import { and, eq } from "drizzle-orm";
 import { unlink } from "node:fs/promises";
 import { join } from "node:path";
-import { books, bookFiles, bookMetadataCandidates } from "#db";
+import { books, bookColumns, bookFiles, bookMetadataCandidates } from "#db";
 import type { AppVariables } from "../../context.js";
 import { normalizeLanguage } from "../../lib/languages.js";
 import { requireBookOwnership } from "../../shared/auth.js";
 import { invalidateRouteCache } from "../../services/cache.js";
+import { enqueueBookOrganize } from "../../shared/enqueue-book-organize.js";
 import { isUniqueViolation, uniqueViolationMessage } from "../../shared/db-errors.js";
 import { IdParamSchema } from "../../shared/validation.js";
 import {
   ApproveBookBodySchema,
-  BookApprovedResponseSchema,
+  BookUpdatedSchema,
   BookCandidatesResponseSchema,
 } from "../../shared/schemas.js";
 
@@ -63,7 +65,12 @@ const approveRoute = createRoute({
       description: "Book approved and organize job enqueued",
       content: {
         "application/json": {
-          schema: BookApprovedResponseSchema,
+          // The updated book row, same shape PATCH /api/library/{id} returns.
+          // This used to declare a seven-field summary while the handler's bare
+          // `.returning()` answered with the entire row — so the response
+          // carried `search_vector`, and the fields callers actually read off
+          // it (isbn13, publisher, language, approvedAt) were undocumented.
+          schema: BookUpdatedSchema,
         },
       },
     },
@@ -120,7 +127,7 @@ const METADATA_FIELDS = new Set([
 
 // ── Router ───────────────────────────────────────────────────────
 
-export const booksRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
+export const booksRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
   .openapi(deleteBookRoute, async (c) => {
     const { id } = c.req.valid("param");
     const db = c.get("db");
@@ -162,13 +169,9 @@ export const booksRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
       }
     }
 
-    // Invalidate caches
-    await invalidateRouteCache(
-      cacheStorage,
-      "/api/library",
-      "/api/inbox",
-      `/api/books/${id}/candidates`,
-    );
+    // The book is gone from every OPDS feed that listed it, and from the genre
+    // counts on /api/stats. Nothing else the API serves is cached.
+    await invalidateRouteCache(cacheStorage, "/opds", "/api/stats");
 
     return c.body(null, 204);
   })
@@ -237,7 +240,9 @@ export const booksRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
           .update(books)
           .set(bookUpdates)
           .where(and(eq(books.id, id), eq(books.status, "review")))
-          .returning();
+          // `bookColumns` — the list BookUpdatedSchema above is derived from,
+          // so the query and the declared response are two views of one thing.
+          .returning(bookColumns);
 
         if (!result) {
           const [currentBook] = await tx
@@ -268,15 +273,13 @@ export const booksRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
     }
 
     // Enqueue organize job AFTER transaction commits successfully
-    await queues.bookOrganize.add("organize", { bookId: id });
+    await enqueueBookOrganize(queues.bookOrganize, { bookId: id });
 
-    // Invalidate caches
-    await invalidateRouteCache(
-      cacheStorage,
-      "/api/library",
-      "/api/inbox",
-      `/api/books/${id}/candidates`,
-    );
+    // The transaction already set status to "organized", so the book is in the
+    // OPDS catalogue as of now — that is exactly the feed an e-reader refreshes
+    // right after an approval, so it must not keep serving the pre-approval
+    // copy. Its genres also move the /api/stats distribution.
+    await invalidateRouteCache(cacheStorage, "/opds", "/api/stats");
 
     return c.json(updated, 200);
   })

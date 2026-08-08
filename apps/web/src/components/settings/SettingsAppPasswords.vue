@@ -13,8 +13,15 @@ const deletingKeyId = ref<string | null>(null);
 const pendingDeleteKeyId = ref<string | null>(null);
 
 // New key form
+// 32 is the server's limit (routes/api/app-passwords.ts, and the apiKey
+// plugin's own maximumNameLength behind it). A longer label used to pass this
+// form, pass the API's zod schema, and come back as a 500.
+const MAX_LABEL_LENGTH = 32;
 const createSchema = z.object({
-  label: z.string().min(1, "Label is required").max(50, "Max 50 characters"),
+  label: z
+    .string()
+    .min(1, "Label is required")
+    .max(MAX_LABEL_LENGTH, `Max ${MAX_LABEL_LENGTH} characters`),
 });
 const createForm = reactive({ label: "" });
 
@@ -26,9 +33,9 @@ async function handleCreate() {
     const result = await createKey(createForm.label);
     revealedKey.value = result.key;
     createForm.label = "";
-    toast.add({ title: "API key created", color: "success" });
+    toast.add({ title: "App password created", color: "success" });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : "Failed to create key";
+    const message = err instanceof Error ? err.message : "Failed to create app password";
     toast.add({ title: message, color: "error" });
   }
 }
@@ -40,9 +47,9 @@ async function handleDelete() {
   deletingKeyId.value = keyId;
   try {
     await deleteKey(keyId);
-    toast.add({ title: "API key deleted", color: "success" });
+    toast.add({ title: "App password revoked", color: "success" });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : "Failed to delete key";
+    const message = err instanceof Error ? err.message : "Failed to revoke app password";
     toast.add({ title: message, color: "error" });
   } finally {
     deletingKeyId.value = null;
@@ -52,7 +59,7 @@ async function handleDelete() {
 function copyKey() {
   if (!revealedKey.value) return;
   copy(revealedKey.value);
-  toast.add({ title: "API key copied to clipboard", color: "success" });
+  toast.add({ title: "App password copied to clipboard", color: "success" });
 }
 
 function dismissRevealedKey() {
@@ -61,11 +68,17 @@ function dismissRevealedKey() {
 </script>
 
 <template>
-  <div class="space-y-6 pt-6">
-    <div>
-      <h2 class="text-lg font-semibold">API Keys</h2>
-      <p class="text-sm text-muted mt-1">Manage API keys for accessing this server.</p>
-    </div>
+  <UCard>
+    <template #header>
+      <div class="flex items-center gap-2">
+        <UIcon name="i-lucide-key-round" class="text-primary" />
+        <h3 class="text-sm font-semibold">App Passwords</h3>
+      </div>
+      <p class="text-xs text-muted mt-1">
+        One password per device or script. Use your account email as the username, and an app
+        password below as the password — your account password never goes into a reader.
+      </p>
+    </template>
 
     <!-- Revealed key banner -->
     <div
@@ -75,7 +88,9 @@ function dismissRevealedKey() {
     >
       <div class="flex items-start gap-2">
         <UIcon name="i-lucide-triangle-alert" class="text-warning mt-0.5 shrink-0" />
-        <p class="text-sm text-warning">Copy this key now. It cannot be retrieved later.</p>
+        <p class="text-sm text-warning">
+          Copy this now — it is shown once and cannot be retrieved later.
+        </p>
       </div>
       <div class="flex items-center gap-2">
         <code
@@ -87,7 +102,7 @@ function dismissRevealedKey() {
         <UButton
           :icon="copied ? 'i-lucide-check' : 'i-lucide-copy'"
           :color="copied ? 'success' : 'neutral'"
-          aria-label="Copy new API key"
+          aria-label="Copy new app password"
           variant="outline"
           size="md"
           data-testid="copy-new-key-btn"
@@ -95,7 +110,7 @@ function dismissRevealedKey() {
         />
         <UButton
           icon="i-lucide-x"
-          aria-label="Dismiss new API key"
+          aria-label="Dismiss new app password"
           variant="ghost"
           color="neutral"
           size="md"
@@ -108,17 +123,18 @@ function dismissRevealedKey() {
     <!-- Create key form -->
     <UForm :schema="createSchema" :state="createForm" @submit="handleCreate">
       <div class="flex items-end gap-2">
-        <UFormField name="label" label="New Key Label" class="flex-1">
+        <UFormField name="label" label="Name this device" class="flex-1">
           <UInput
             v-model="createForm.label"
-            placeholder="e.g. My KoReader"
+            placeholder="e.g. Kobo Clara, laptop script"
+            :maxlength="MAX_LABEL_LENGTH"
             class="w-full"
             data-testid="field-new-key-label"
           />
         </UFormField>
         <UButton
           type="submit"
-          label="Create Key"
+          label="Create app password"
           icon="i-lucide-plus"
           color="primary"
           :loading="createPending"
@@ -142,28 +158,31 @@ function dismissRevealedKey() {
         <div class="flex-1 min-w-0">
           <div class="flex items-center gap-2">
             <span class="text-sm font-medium text-highlighted">
-              {{ apiKeyItem.label }}
+              {{ apiKeyItem.name }}
             </span>
+            <!-- No admin badge: being an admin is a property of the person
+                 now, not of a credential, so every app password a user holds
+                 carries the same authority they do. -->
             <UBadge
-              v-if="apiKeyItem.isAdmin"
+              v-if="apiKeyItem.start"
               variant="subtle"
-              color="warning"
+              color="neutral"
               size="xs"
-              data-testid="admin-badge"
+              data-testid="app-password-prefix"
             >
-              Admin
+              {{ apiKeyItem.start }}&hellip;
             </UBadge>
           </div>
           <div class="flex items-center gap-2 text-xs text-dimmed mt-0.5">
             <span>Created {{ new Date(apiKeyItem.createdAt).toLocaleDateString() }}</span>
-            <span v-if="apiKeyItem.lastUsedAt">
-              &middot; Last used {{ new Date(apiKeyItem.lastUsedAt).toLocaleDateString() }}
+            <span v-if="apiKeyItem.lastRequest">
+              &middot; Last used {{ new Date(apiKeyItem.lastRequest).toLocaleDateString() }}
             </span>
           </div>
         </div>
         <UButton
           icon="i-lucide-trash-2"
-          aria-label="Delete API key"
+          aria-label="Revoke app password"
           variant="ghost"
           color="error"
           size="sm"
@@ -173,13 +192,15 @@ function dismissRevealedKey() {
         />
       </div>
     </div>
-    <p v-else class="text-sm text-muted">No API keys found.</p>
-  </div>
+    <p v-else class="text-sm text-muted" data-testid="no-app-passwords">
+      No app passwords yet. Create one to connect a reader.
+    </p>
+  </UCard>
 
   <UModal
     :open="!!pendingDeleteKeyId"
-    title="Delete API Key"
-    description="This will permanently revoke access for anyone using this key. This action cannot be undone."
+    title="Revoke app password"
+    description="Any device still using it stops working immediately. This cannot be undone."
     @update:open="
       (v: boolean) => {
         if (!v) pendingDeleteKeyId = null;

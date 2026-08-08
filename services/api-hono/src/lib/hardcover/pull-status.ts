@@ -44,7 +44,7 @@ export interface PullStatusResult {
 export async function pullHardcoverStatusesForUser(
   db: Db,
   token: string,
-  apiKeyId: string,
+  userId: string,
 ): Promise<PullStatusResult> {
   const userBooksResult = await getUserBooks(token);
   if (!userBooksResult.ok) {
@@ -87,13 +87,13 @@ export async function pullHardcoverStatusesForUser(
     await db
       .insert(readingAggregate)
       .values({
-        apiKeyId,
+        userId,
         bookId: localBookId,
         externalStatus: status,
         externalStatusSyncedAt: now,
       })
       .onConflictDoUpdate({
-        target: [readingAggregate.apiKeyId, readingAggregate.bookId],
+        target: [readingAggregate.userId, readingAggregate.bookId],
         set: {
           externalStatus: status,
           externalStatusSyncedAt: now,

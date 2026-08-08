@@ -34,6 +34,10 @@ describe("stripHtml", () => {
     expect(stripHtml("just plain text")).toBe("just plain text");
   });
 
+  test("removes XML-invalid control characters", () => {
+    expect(stripHtml("clean\u0001dirty\u000Btext\u001F")).toBe("cleandirtytext");
+  });
+
   test("strips script tags", () => {
     expect(stripHtml('<script>alert("xss")</script>safe')).toBe('alert("xss")safe');
   });

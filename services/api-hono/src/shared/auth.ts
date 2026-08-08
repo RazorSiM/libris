@@ -1,4 +1,4 @@
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { hash } from "bcryptjs";
 import * as Iron from "iron-webcrypto";
 import { HTTPException } from "hono/http-exception";
@@ -10,24 +10,6 @@ import type { AppVariables } from "../context.js";
 
 /** Cost factor for bcrypt hashing — used for both key creation and verification */
 export const BCRYPT_ROUNDS = 12;
-
-/**
- * Pre-computed bcrypt hash of "dummy" with 12 rounds.
- * Used to normalize timing when username doesn't match — prevents
- * username enumeration via response time differences.
- */
-export const DUMMY_HASH = "$2a$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LedYxBSt1QFr5wuXK";
-
-/**
- * Constant-time string comparison to prevent timing attacks on username checks.
- * Length difference is not hidden (acceptable for usernames, which are not secret).
- */
-export function safeCompare(a: string, b: string): boolean {
-  const bufA = Buffer.from(a);
-  const bufB = Buffer.from(b);
-  if (bufA.length !== bufB.length) return false;
-  return timingSafeEqual(bufA, bufB);
-}
 
 /** MD5 hex digest — used by KOReader's KoSync client for password hashing */
 export function md5(input: string): string {
@@ -57,16 +39,27 @@ export async function generateApiKey(): Promise<{
 
 // ── Authorization helpers ──────────────────────────────────────────────
 
+/**
+ * Whether the current user is an admin.
+ *
+ * Derived from the role the middleware read off the Better Auth session, never
+ * stored alongside it — being an admin is a property of the person, and the
+ * role field is the only place that fact lives.
+ */
+export function isAdmin(c: Context<{ Variables: AppVariables }>): boolean {
+  return c.get("role") === "admin";
+}
+
 /** Throw 403 if the current user is not an admin. */
 export function requireAdmin(c: Context<{ Variables: AppVariables }>): void {
-  if (!c.get("isAdmin")) {
+  if (!isAdmin(c)) {
     throw new HTTPException(403, { message: "Admin access required" });
   }
 }
 
-/** Get the current user's API key ID. Throws 401 if not authenticated. */
-export function getApiKeyId(c: Context<{ Variables: AppVariables }>): string {
-  const id = c.get("apiKeyId");
+/** Get the current user's id. Throws 401 if not authenticated. */
+export function getUserId(c: Context<{ Variables: AppVariables }>): string {
+  const id = c.get("userId");
   if (!id) throw new HTTPException(401, { message: "Authentication required" });
   return id;
 }
@@ -86,13 +79,11 @@ export async function requireBookOwnership(
     .where(eq(books.id, bookId))
     .limit(1);
   if (!book) throw new HTTPException(404, { message: "Book not found" });
-  if (c.get("isAdmin")) return;
-  if (book.createdBy && book.createdBy !== getApiKeyId(c)) {
+  if (isAdmin(c)) return;
+  // No unowned-book branch: created_by is NOT NULL since the cutover migration,
+  // so "only admin can modify unowned books" was unreachable.
+  if (book.createdBy !== getUserId(c)) {
     throw new HTTPException(403, { message: "Only the book owner or admin can modify this book" });
-  }
-  // Unowned books (createdBy = null) are admin-only
-  if (!book.createdBy) {
-    throw new HTTPException(403, { message: "Only admin can modify unowned books" });
   }
 }
 

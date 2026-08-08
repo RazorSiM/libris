@@ -1,4 +1,5 @@
-import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
+import { createRoute, z } from "@hono/zod-openapi";
+import { createOpenApiRouter } from "../../shared/openapi.js";
 import { and, eq, count, sql, inArray } from "drizzle-orm";
 import { books, bookColumns, bookFiles } from "#db";
 import type { AppVariables } from "../../context.js";
@@ -7,18 +8,9 @@ import {
   paginationLinks,
   OPDS_MIME_ACQUISITION,
   OPDS_MIME_OPENSEARCH,
+  escapeXml,
 } from "../../shared/opds-xml.js";
 import { getBaseUrl, OPDS_PER_PAGE, bookToEntry } from "../../shared/opds-helpers.js";
-
-/** Escape XML attribute values (superset of text escaping for & < > " ') */
-function escapeXmlAttr(str: string): string {
-  return str
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&apos;");
-}
 
 // ── Route definitions ───────────────────────────────────────────────
 
@@ -60,7 +52,7 @@ const searchRoute = createRoute({
 
 // ── Handlers ────────────────────────────────────────────────────────
 
-export const opdsSearchRoutes = new OpenAPIHono<{ Variables: AppVariables }>().openapi(
+export const opdsSearchRoutes = createOpenApiRouter<{ Variables: AppVariables }>().openapi(
   searchRoute,
   async (c) => {
     const { q: rawQ, page: rawPage } = c.req.valid("query");
@@ -77,7 +69,7 @@ export const opdsSearchRoutes = new OpenAPIHono<{ Variables: AppVariables }>().o
         "  <Description>Search the Libris catalog</Description>",
         "  <InputEncoding>UTF-8</InputEncoding>",
         "  <OutputEncoding>UTF-8</OutputEncoding>",
-        `  <Url type="${OPDS_MIME_ACQUISITION}" template="${escapeXmlAttr(baseUrl)}/opds/search?q={searchTerms}&amp;page={startPage?}"/>`,
+        `  <Url type="${OPDS_MIME_ACQUISITION}" template="${escapeXml(baseUrl)}/opds/search?q={searchTerms}&amp;page={startPage?}"/>`,
         "</OpenSearchDescription>",
       ].join("\n");
 

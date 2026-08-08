@@ -86,12 +86,11 @@ export const LibraryListQuerySchema = z.object({
     description: "Filter by language code (exact, case-insensitive)",
   }),
   series: searchString.openapi({ description: "Filter by series name (exact match)" }),
-  uploaderId: z
-    .string()
-    .trim()
-    .optional()
-    .default("")
-    .openapi({ description: "Filter by uploader API key ID (exact match)", default: "" }),
+  uploaderId: z.string().trim().optional().default("").openapi({
+    description:
+      "Filter by uploader. Takes the opaque `uploaders[].id` reference from GET /api/library/facets, not a user id; an unrecognised value returns an empty page.",
+    default: "",
+  }),
   q: searchString.openapi({
     description: "Full-text search across title, author, and description with typo tolerance",
   }),
@@ -172,12 +171,18 @@ export const SettingsPatchBodySchema = z.object({
 // === Credential schemas ===
 
 export const CredentialServiceParamSchema = z.object({
-  service: z.enum(["opds", "kosync", "hardcover"]).openapi({
+  // No "opds": OPDS clients authenticate with app passwords now
+  // (/api/app-passwords), not with a row in service_credentials.
+  service: z.enum(["kosync", "hardcover"]).openapi({
     description: "Service name",
   }),
 });
 
 export const CredentialPutBodySchema = z.object({
   username: z.string().max(200).trim().min(1, "username is required"),
-  password: z.string().max(4096).min(1, "password is required"),
+  password: z
+    .string()
+    .max(4096)
+    .min(12, "password must be at least 12 characters")
+    .openapi({ description: "KoSync password or Hardcover API token (minimum 12 characters)" }),
 });

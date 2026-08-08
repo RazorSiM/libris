@@ -23,7 +23,7 @@ import {
   invalidateServerCache,
   seedOrganizedBook,
   seedBookFile,
-  getAdminKeyId,
+  getAdminUserId,
   waitForAllQueuesIdle,
 } from "./helpers";
 
@@ -63,17 +63,17 @@ async function seedProgress(
   const sql = getSql();
   const ts = Math.floor((Date.now() - daysAgo * 86400000) / 1000);
   const createdAt = new Date(Date.now() - daysAgo * 86400000);
-  const apiKeyId = await getAdminKeyId();
+  const ownerId = getAdminUserId();
   try {
     await sql`
-      INSERT INTO reading_progress (api_key_id, book_id, document, device, progress, percentage, timestamp)
-      VALUES (${apiKeyId}, ${bookId}, ${contentHash}, ${device}, ${"position-data"}, ${percentage.toFixed(4)}, ${ts})
-      ON CONFLICT (api_key_id, document, device) DO UPDATE SET book_id = ${bookId}, percentage = ${percentage.toFixed(4)}, timestamp = ${ts}
+      INSERT INTO reading_progress (user_id, book_id, document, device, progress, percentage, timestamp)
+      VALUES (${ownerId}, ${bookId}, ${contentHash}, ${device}, ${"position-data"}, ${percentage.toFixed(4)}, ${ts})
+      ON CONFLICT (user_id, document, device) DO UPDATE SET book_id = ${bookId}, percentage = ${percentage.toFixed(4)}, timestamp = ${ts}
     `;
     await sql`
-      INSERT INTO reading_progress_history (api_key_id, book_id, document, device, progress, percentage, timestamp, created_at)
+      INSERT INTO reading_progress_history (user_id, book_id, document, device, progress, percentage, timestamp, created_at)
       VALUES (
-        ${apiKeyId}, ${bookId}, ${contentHash}, ${device}, ${"position-data"}, ${percentage.toFixed(4)}, ${ts},
+        ${ownerId}, ${bookId}, ${contentHash}, ${device}, ${"position-data"}, ${percentage.toFixed(4)}, ${ts},
         ${createdAt}
       )
     `;

@@ -171,7 +171,7 @@ export function buildProgressAggregate(
 export async function buildProgressAggregateForBook(
   db: Db,
   bookId: string,
-  apiKeyId: string,
+  userId: string,
 ): Promise<ProgressAggregate> {
   const [progressRows, aggregateRows] = await Promise.all([
     db
@@ -182,7 +182,7 @@ export async function buildProgressAggregateForBook(
         timestamp: readingProgress.timestamp,
       })
       .from(readingProgress)
-      .where(and(eq(readingProgress.bookId, bookId), eq(readingProgress.apiKeyId, apiKeyId))),
+      .where(and(eq(readingProgress.bookId, bookId), eq(readingProgress.userId, userId))),
     db
       .select({
         bookId: readingAggregate.bookId,
@@ -197,16 +197,16 @@ export async function buildProgressAggregateForBook(
         externalStatusSyncedAt: readingAggregate.externalStatusSyncedAt,
       })
       .from(readingAggregate)
-      .where(and(eq(readingAggregate.bookId, bookId), eq(readingAggregate.apiKeyId, apiKeyId))),
+      .where(and(eq(readingAggregate.bookId, bookId), eq(readingAggregate.userId, userId))),
   ]);
 
   return buildProgressAggregate(progressRows, aggregateRows);
 }
 
 /**
- * Batch variant for the bulk sync endpoint. Aggregates across all api keys —
- * the sync feed is library-wide rather than per-user (mirror clients show the
- * library to whichever user is reading the export).
+ * Batch variant for the bulk sync endpoint. Callers must supply rows already
+ * scoped to the authenticated user; this pure reducer has no identity column
+ * with which to enforce that boundary itself.
  */
 export function buildProgressAggregatesForBooks(
   bookIds: string[],

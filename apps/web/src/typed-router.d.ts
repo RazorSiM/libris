@@ -58,6 +58,13 @@ declare module "vue-router/auto-routes" {
       { id: ParamValue<false> },
       never
     >;
+    "/login": RouteRecordInfo<
+      "/login",
+      "/login",
+      Record<never, never>,
+      Record<never, never>,
+      never
+    >;
     "/reading/": RouteRecordInfo<
       "/reading/",
       "/reading",
@@ -137,6 +144,11 @@ declare module "vue-router/auto-routes" {
       routes: "/library/[id]";
       views: never;
       pathParamNames: "id";
+    };
+    "src/pages/login.vue": {
+      routes: "/login";
+      views: never;
+      pathParamNames: never;
     };
     "src/pages/reading/index.vue": {
       routes: "/reading/";

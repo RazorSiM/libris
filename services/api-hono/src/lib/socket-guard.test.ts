@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vite-plus/test";
-import { guardSocketErrors } from "./socket-guard";
+import { guardSocketErrors, SocketConnectionGuard } from "./socket-guard";
 
 // A LogLayer-shaped stub: withError(err).debug(msg)
 function makeLogger() {
@@ -44,5 +44,32 @@ describe("guardSocketErrors", () => {
     expect(() => a.emit("error", new Error("EPIPE"))).not.toThrow();
     expect(() => b.emit("error", new Error("ETIMEDOUT"))).not.toThrow();
     expect(debug).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("SocketConnectionGuard", () => {
+  it("refuses a sixth connection for one principal until one closes", () => {
+    const guard = new SocketConnectionGuard(10, 5);
+    const releases = Array.from({ length: 5 }, () => guard.tryAcquire("user:one"));
+
+    expect(releases).not.toContain(null);
+    expect(guard.tryAcquire("user:one")).toBeNull();
+
+    releases[0]!();
+    expect(guard.tryAcquire("user:one")).not.toBeNull();
+  });
+
+  it("refuses every principal after the total cap and releases idempotently", () => {
+    const guard = new SocketConnectionGuard(2, 2);
+    const releaseOne = guard.tryAcquire("user:one")!;
+    const releaseTwo = guard.tryAcquire("user:two")!;
+
+    expect(guard.tryAcquire("user:three")).toBeNull();
+
+    releaseOne();
+    releaseOne();
+    expect(guard.tryAcquire("user:three")).not.toBeNull();
+
+    releaseTwo();
   });
 });

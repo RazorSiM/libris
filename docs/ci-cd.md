@@ -85,7 +85,9 @@ Retention is 1 day (intermediate build artifact, not a release asset).
 
 Playwright end-to-end tests — runs on both PRs and pushes to main, depends on `build`.
 
-**Container:** `mcr.microsoft.com/playwright:v1.60.0-jammy` — Microsoft's official Playwright image with browsers + system deps pre-installed. The Playwright version is pinned in `pnpm-workspace.yaml` under the catalog (`@playwright/test: 1.60.0`); `tests/e2e/package.json` references it as `catalog:`. When upgrading Playwright, bump the workspace catalog and the `ci.yml` container tag in lockstep. (`docker-compose.test.yml` uses the `-noble` variant, `v1.60.0-noble`, for the local Playwright service.)
+**Container:** `mcr.microsoft.com/playwright:v1.62.1-jammy` — Microsoft's official Playwright image with browsers + system deps pre-installed. The Playwright version is pinned in `pnpm-workspace.yaml` under the catalog (`@playwright/test: 1.62.1`); `tests/e2e/package.json` references it as `catalog:`. When upgrading Playwright, bump the workspace catalog and the `ci.yml` container tag in lockstep. (`docker-compose.test.yml` uses the `-noble` variant, `v1.62.1-noble`, for the local Playwright service.)
+
+Nothing enforces that lockstep. The image ships only the browser build its own version pins, so a catalog bump on its own leaves every E2E job failing at browser launch with `Executable doesn't exist at /ms-playwright/...` — the tests never start, so the failure looks nothing like a test regression.
 
 **Services:** PostgreSQL 17 + Redis 7 (inline service containers, each with a health check — `pg_isready` / `redis-cli ping` — with a 2s interval).
 
@@ -94,16 +96,33 @@ Playwright end-to-end tests — runs on both PRs and pushes to main, depends on 
 - On `pull_request` — the `@smoke` subset, for fast feedback.
 - On `push` to main — the full suite, no tag filter.
 
+`@smoke` is therefore the PR gate's whole definition of "covered". Everything that pins an authentication or authorization invariant carries the tag — see [testing.md § Tags](testing.md#tags) for what that includes and why. When you add a security-relevant spec, tag it, or it first runs post-merge.
+
 **Artifacts:**
 
 - Playwright HTML report — `e2e-report-<idx>` (always uploaded, 7-day retention).
 - Test results (screenshots, videos, traces) — `e2e-test-results-<idx>` (uploaded on failure, 7-day retention).
+- API server log — `e2e-api-log-<idx>` (uploaded on failure, 7-day retention). The trace shows the 401; this shows why the API sent it.
 
 `<idx>` is `strategy.job-index`. Artifacts use `actions/upload-artifact@v4`, whose names must be unique within a run — hence the per-shard index.
 
 Pass/fail is surfaced by GitHub's native checks UI on the PR; there is no bot comment.
 
-### 5. deploy-docs
+### 5. e2e-prod-config
+
+The production configuration branch — runs on both PRs and pushes to main, depends on `build`, one runner, no sharding.
+
+**Why it is a separate job.** The `e2e` job structurally cannot reach production config: `bootstrap.ts` throws `E2E_TEST=1 is not allowed in NODE_ENV=production`, and without `E2E_TEST` the `/__test/*` support routes the suite depends on are never mounted. So every ordinary shard exercises the _development_ side of every `NODE_ENV` branch — `trustedOrigins` in `lib/auth.ts`, the Redis-vs-memory store split in `bootstrap.ts`, and the logger transport. A 150-test green suite consequently missed "production HTTPS deployments cannot sign in" entirely.
+
+**What it runs.** `vp exec playwright test --project=prod-config`, with `E2E_PROD_CONFIG=1`. That variable reshapes `tests/e2e/playwright.config.ts` into a one-project run over `prod-config.spec.ts`, and short-circuits `global-setup.ts` after the database reset — there are no support routes and no seeded accounts, so the spec drives first-run setup, sign-out, sign-in and cookie replay through the browser.
+
+**The configuration under test:** `NODE_ENV=production`, no `E2E_TEST`, no `TEST_ROUTE_TOKEN`, and `BETTER_AUTH_URL` set to the origin the browser drives. That last one is the crux: `trustedOrigins` is `[]` in production and Better Auth resolves its trusted origin from `baseURL` **once, at startup**, so an absent or wrong `BETTER_AUTH_URL` does not fail to boot — it turns every cookie-bearing POST into a 403 `INVALID_ORIGIN`. `env.ts` requires the variable in production for that reason; this job is what proves the required value is _sufficient_ to sign in, sign out and revoke with. `LIBRIS_COOKIE_SECURE=0` is the single concession to running over plain HTTP; Chromium would otherwise discard the session cookie.
+
+It gets its own `libris_prod_test` database and its own Redis so it cannot disturb the sharded suite.
+
+**Artifacts:** `e2e-prod-config-report` (always), `e2e-prod-config-test-results` and `e2e-prod-config-api-log` (on failure).
+
+### 6. deploy-docs
 
 Deploys VitePress documentation to Cloudflare Pages — runs on push to main only, depends on `check` passing.
 
@@ -120,7 +139,9 @@ Set on the `e2e` job:
 
 ```
 CI=true
+NODE_ENV=development
 E2E_TEST=1
+LIBRIS_COOKIE_SECURE=0
 POSTGRES_HOST=postgres
 POSTGRES_PORT=5432
 POSTGRES_USER=libris_test
@@ -130,10 +151,61 @@ REDIS_HOST=redis
 REDIS_PORT=6379
 LIBRIS_INBOX_PATH=/tmp/e2e-inbox
 LIBRIS_LIBRARY_PATH=/tmp/e2e-library
-API_SECRET_KEY=ci-e2e-test-secret-key-minimum-32-chars!
-COOKIE_DOMAIN=""
+API_SECRET_KEY=<openssl rand -hex 32>
+BETTER_AUTH_SECRET=<openssl rand -hex 32>
+TEST_ROUTE_TOKEN=<openssl rand -hex 32>
 MIGRATIONS_PATH=./services/api-hono/migrations
+LIBRIS_API_LOG=/tmp/e2e-api.log
 ```
+
+Four of those are easy to get wrong and each one is fatal rather than flaky:
+
+- **`NODE_ENV`** has no default in `services/api-hono/src/env.ts`. Omit it and
+  `getEnv()` throws a `ZodError` before the server binds a port, so Playwright's
+  `webServer` times out after 60s and every shard fails without running a test.
+  The value must match `docker-compose.test.yml` (`development`) so the two
+  harnesses exercise the same branches. It must **not** be `production`:
+  `bootstrap.ts` throws `E2E_TEST=1 is not allowed in NODE_ENV=production`. The
+  production config is covered by its own job, `e2e-prod-config`.
+- **`TEST_ROUTE_TOKEN`** authenticates the `/__test/*` support routes that seed
+  books, clear caches and emit events. `tests/e2e/helpers/index.ts` throws
+  outright when it is unset, and `src/middleware/auth.ts` rejects any token
+  shorter than 32 bytes — a short value silently 401s every support-route call
+  rather than reporting a config error.
+- **`API_SECRET_KEY` / `BETTER_AUTH_SECRET`** are validated at startup:
+  published placeholders and low-diversity strings are rejected. Generate CI's
+  throwaway values with `openssl rand -hex 32` like any other, so a future
+  tightening of the validator does not take CI down with it.
+- **`LIBRIS_API_LOG`** is Libris-specific, not a framework variable. When it is
+  set, `tests/e2e/playwright.config.ts` tees the API process's stdout/stderr to
+  that path so a failing shard can upload it (`e2e-api-log-<idx>`).
+
+`services/api-hono/src/workflow-env.test.ts` parses these blocks straight out of
+`ci.yml` and runs them through the real `parseEnv()`, so a variable that goes
+missing fails in `vp run test` rather than in a 60-second webServer timeout.
+
+Set on the `e2e-prod-config` job — the same shape, inverted where it matters:
+
+```
+CI=true
+E2E_PROD_CONFIG=1
+NODE_ENV=production
+LIBRIS_COOKIE_SECURE=0
+POSTGRES_DB=libris_prod_test          # its own database
+LIBRIS_INBOX_PATH=/tmp/e2e-prod-inbox
+LIBRIS_LIBRARY_PATH=/tmp/e2e-prod-library
+API_SECRET_KEY=<openssl rand -hex 32>
+BETTER_AUTH_SECRET=<openssl rand -hex 32>
+MIGRATIONS_PATH=./services/api-hono/migrations
+LIBRIS_API_LOG=/tmp/e2e-prod-api.log
+```
+
+Three variables are **absent on purpose** and the job is pointless without that:
+`E2E_TEST` (would be refused by `bootstrap.ts`, and would mount support routes a
+production build must not have), `TEST_ROUTE_TOKEN` (same), and
+`BETTER_AUTH_URL` — present here and nowhere else, because `env.ts` requires it
+under `NODE_ENV=production` and the whole point of the job is to check the
+required value actually works.
 
 ## Release (release.yml)
 

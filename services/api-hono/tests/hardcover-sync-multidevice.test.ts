@@ -1,6 +1,6 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vite-plus/test";
 import { eq } from "drizzle-orm";
-import { createTestApp, createFetchHelper } from "./setup.js";
+import { bootstrapAdmin, createTestApp, createFetchHelper } from "./setup.js";
 import type { Db } from "../src/db/client.js";
 import {
   bookFiles,
@@ -16,7 +16,7 @@ import {
   resolveBookIdForDocument,
 } from "../src/lib/progress-linking.js";
 
-// Multi-device Hardcover sync (libris-3cw8).
+// Multi-device Hardcover sync.
 //
 // reading_progress.book_id is resolved from the KoReader `document` hash at
 // write time. Progress that arrives before a book is organized — or that
@@ -26,22 +26,19 @@ import {
 
 let $fetchRaw: ReturnType<typeof createFetchHelper>;
 let testDb: Db;
-let apiKeyId: string;
+let services: Awaited<ReturnType<typeof createTestApp>>["services"];
+let userId: string;
 
 beforeAll(async () => {
   const testApp = await createTestApp();
   $fetchRaw = createFetchHelper(testApp.app);
   testDb = testApp.db;
+  services = testApp.services;
 });
 
 beforeEach(async () => {
   await $fetchRaw("/__test/cleanup", { method: "POST" });
-  const { data, status } = await $fetchRaw("/api/auth/setup", {
-    method: "POST",
-    body: { label: "integration-test-key" },
-  });
-  expect(status).toBe(201);
-  apiKeyId = data.id;
+  ({ userId } = await bootstrapAdmin(services, $fetchRaw));
 });
 
 afterEach(async () => {
@@ -52,6 +49,7 @@ async function seedBook(hardcoverBookId: number) {
   const [row] = await testDb
     .insert(books)
     .values({
+      createdBy: userId,
       title: "Wintersteel",
       author: "Will Wight",
       status: "organized",
@@ -84,7 +82,7 @@ async function seedDeviceProgress(opts: {
   const ts = Math.floor(Date.now() / 1000);
   await testDb.insert(readingProgress).values({
     bookId: opts.bookId,
-    apiKeyId,
+    userId,
     document: opts.document,
     device: opts.device,
     progress: "0",
@@ -93,7 +91,7 @@ async function seedDeviceProgress(opts: {
   });
   await testDb.insert(readingProgressHistory).values({
     bookId: opts.bookId,
-    apiKeyId,
+    userId,
     document: opts.document,
     device: opts.device,
     progress: "0",
@@ -135,7 +133,7 @@ describe("linkOrphanProgressForBook", () => {
     });
 
     // Before linking, sync only sees device A's 30%.
-    let rows = await findBooksToSyncToHardcover(testDb, apiKeyId);
+    let rows = await findBooksToSyncToHardcover(testDb, userId);
     expect(Number(rows[0]!.max_percentage)).toBe(0.3);
 
     // Organizing the book (or re-embedding) links the orphaned rows.
@@ -143,7 +141,7 @@ describe("linkOrphanProgressForBook", () => {
     expect(linked).toBe(1);
 
     // Now the furthest progress (60%) is visible to Hardcover sync.
-    rows = await findBooksToSyncToHardcover(testDb, apiKeyId);
+    rows = await findBooksToSyncToHardcover(testDb, userId);
     expect(Number(rows[0]!.max_percentage)).toBe(0.6);
   });
 
@@ -183,7 +181,7 @@ describe("reconcileOrphanProgressBookIds", () => {
     expect(history).toBe(2);
 
     // The two matchable rows now drive sync (max 0.50); the stranger stays orphaned.
-    const rows = await findBooksToSyncToHardcover(testDb, apiKeyId);
+    const rows = await findBooksToSyncToHardcover(testDb, userId);
     expect(rows).toHaveLength(1);
     expect(Number(rows[0]!.max_percentage)).toBe(0.5);
 
@@ -206,7 +204,7 @@ describe("inherent limit", () => {
       percentage: "0.3000",
     });
     await testDb.insert(hardcoverSyncLog).values({
-      apiKeyId,
+      userId,
       bookId,
       hardcoverUserBookId: 9,
       lastStatus: "reading",
@@ -224,7 +222,7 @@ describe("inherent limit", () => {
     // Nothing matches that hash, so it can't be linked and sync sees no change.
     const { progress } = await reconcileOrphanProgressBookIds(testDb);
     expect(progress).toBe(0);
-    const rows = await findBooksToSyncToHardcover(testDb, apiKeyId);
+    const rows = await findBooksToSyncToHardcover(testDb, userId);
     expect(rows).toHaveLength(0);
   });
 });

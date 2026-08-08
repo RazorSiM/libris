@@ -1,5 +1,6 @@
 import type { Db } from "#db";
 import type { Env } from "./env.js";
+import type { Auth } from "./lib/auth.js";
 import type {
   BookDetectedPayload,
   BookParseFilePayload,
@@ -23,9 +24,22 @@ export interface Queues {
 }
 
 export type AppVariables = HonoLogLayerVariables & {
-  apiKeyId: string | undefined;
-  apiKeyLabel: string | undefined;
-  isAdmin: boolean;
+  /** Trusted client address resolved from the TCP peer and proxy policy. */
+  clientIp: string;
+  /** The authenticated person. Set from the Better Auth session, or undefined. */
+  userId: string | undefined;
+  /** Display name, for logs and responses. */
+  userName: string | undefined;
+  /**
+   * Admin plugin role — "admin" or "user", undefined when anonymous.
+   *
+   * The single source of truth for privilege. There is deliberately no derived
+   * `isAdmin` boolean beside it: two variables holding the same fact can drift,
+   * and a route that set one without the other would be a silent privilege bug.
+   * Use isAdmin(c) from shared/auth.ts to read it.
+   */
+  role: string | undefined;
+  auth: Auth;
   db: Db;
   queues: Queues;
   env: Env;

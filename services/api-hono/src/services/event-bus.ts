@@ -1,5 +1,7 @@
 import Redis from "ioredis";
 import { EventEmitter } from "node:events";
+import { eq } from "drizzle-orm";
+import { books, type Db } from "#db";
 import { getLogger } from "../lib/logger.js";
 import { getEnv, parseRedisUrl } from "../env.js";
 import { getSharedRedis } from "./redis.js";
@@ -15,6 +17,8 @@ export interface ServerEvent {
   bookId?: string;
   payload?: Record<string, unknown>;
   timestamp: string;
+  /** Internal routing key. Never serialize this to a WebSocket client. */
+  userId?: string;
 }
 
 /**
@@ -105,14 +109,39 @@ export async function publishEvent(event: Omit<ServerEvent, "timestamp">): Promi
 }
 
 /**
- * Subscribe to server events. Returns an unsubscribe function.
- * Used by the SSE endpoint to stream events to clients.
+ * Publish a book event to its owner. Events without an owner are intentionally
+ * visible only to administrators, rather than leaking pipeline details to every
+ * authenticated subscriber.
  */
-export function onServerEvent(callback: (event: ServerEvent) => void): () => void {
+export async function publishBookEvent(
+  db: Db,
+  event: Omit<ServerEvent, "timestamp" | "userId"> & { bookId: string },
+): Promise<void> {
+  const [book] = await db
+    .select({ userId: books.createdBy })
+    .from(books)
+    .where(eq(books.id, event.bookId))
+    .limit(1);
+
+  await publishEvent({ ...event, userId: book?.userId });
+}
+
+/**
+ * Subscribe to server events. Returns an unsubscribe function.
+ * Each subscriber is filtered at the event bus before its WebSocket sends.
+ */
+export function onServerEvent(
+  callback: (event: ServerEvent) => void,
+  subscriber: { userId: string; isAdmin: boolean },
+): () => void {
   initRedis();
-  localEmitter.on("event", callback);
+  const scopedCallback = (event: ServerEvent) => {
+    if (!subscriber.isAdmin && event.userId !== subscriber.userId) return;
+    callback(event);
+  };
+  localEmitter.on("event", scopedCallback);
   return () => {
-    localEmitter.off("event", callback);
+    localEmitter.off("event", scopedCallback);
   };
 }
 

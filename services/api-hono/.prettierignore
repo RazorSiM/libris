@@ -1,2 +1,5 @@
 CHANGELOG.md
 openapi.json
+# drizzle-kit output — regenerated unformatted on every migration, so
+# formatting it just creates churn in the next generated diff.
+migrations/**/snapshot.json

@@ -1,4 +1,5 @@
-import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
+import { createRoute, z } from "@hono/zod-openapi";
+import { createOpenApiRouter } from "../../shared/openapi.js";
 import { HTTPException } from "hono/http-exception";
 import { and, asc, count, desc, eq, ilike, inArray, isNotNull, ne, or, sql } from "drizzle-orm";
 import { createReadStream, existsSync, realpathSync } from "node:fs";
@@ -8,7 +9,7 @@ import { assertPathWithinRoot } from "../../lib/assert-path-within-root.js";
 import { normalizeLanguage } from "../../lib/languages.js";
 import { Readable } from "node:stream";
 import {
-  apiKeys,
+  users,
   books,
   bookColumns,
   bookFiles,
@@ -17,10 +18,12 @@ import {
   readingProgress,
 } from "#db";
 import type { AppVariables } from "../../context.js";
-import { getApiKeyId, requireBookOwnership } from "../../shared/auth.js";
+import { getUserId, isAdmin, requireBookOwnership } from "../../shared/auth.js";
+import { resolveUploaderRef, scopeCreatedBy, uploaderRef } from "../../shared/uploader-ref.js";
 import { invalidateRouteCache } from "../../services/cache.js";
 import { isUniqueViolation, uniqueViolationMessage } from "../../shared/db-errors.js";
 import { escapeIlike } from "../../shared/escape-ilike.js";
+import { enqueueBookOrganize, enqueueUserReorganize } from "../../shared/enqueue-book-organize.js";
 import {
   IdParamSchema,
   IdFileIdParamSchema,
@@ -105,7 +108,8 @@ const listRoute = createRoute({
   path: "/",
   tags: ["library"],
   summary: "List library books",
-  description: "Paginated list of organized books with optional search and filtering",
+  description:
+    "Paginated list of organized books with optional search and filtering. The organized library is shared, so every caller sees every book together with its uploader's display label. `uploader.id` is an opaque per-install reference, never the uploader's user id; pass a value from `GET /api/library/facets` as `uploaderId` to filter. An unrecognised `uploaderId` returns an empty page.",
   request: {
     query: LibraryListQuerySchema,
   },
@@ -125,7 +129,7 @@ const syncRoute = createRoute({
   tags: ["library"],
   summary: "Bulk library sync feed",
   description:
-    "Single paginated endpoint optimised for full-vault mirror clients and CLIs. Returns BookSyncRecord[] bundling each organised book's metadata + a per-book progress aggregate (max % across devices + derived reading status). Optional ?since=<ISO> filters to books whose metadata or progress changed after that time.",
+    "Single paginated endpoint optimised for full-vault mirror clients and CLIs. Returns BookSyncRecord[] bundling each organised book's metadata + a per-book progress aggregate (max % across devices + derived reading status). Optional ?since=<ISO> filters to books whose metadata or progress changed after that time. `uploader.id` is an opaque per-install reference, never the uploader's user id.",
   request: {
     query: LibrarySyncQuerySchema,
   },
@@ -144,7 +148,8 @@ const getRoute = createRoute({
   path: "/{id}",
   tags: ["library"],
   summary: "Get library book",
-  description: "Retrieve a single organized book with its files",
+  description:
+    "Retrieve a single organized book with its files. `uploader.id` is an opaque per-install reference, never the uploader's user id.",
   request: {
     params: IdParamSchema,
   },
@@ -259,10 +264,11 @@ const facetsRoute = createRoute({
   path: "/facets",
   tags: ["library"],
   summary: "Get library filter facets",
-  description: "Returns distinct authors and genres from organized books for filter dropdowns",
+  description:
+    "Returns library filter values. The organized library is shared, so every caller receives every uploader who owns an organized book. Each uploader is identified by an opaque per-install reference plus a display label — never by user id. Pass the reference back as `uploaderId` on `GET /api/library`.",
   responses: {
     200: {
-      description: "Distinct authors and genres",
+      description: "Distinct authors, genres, languages, series, and uploader values",
       content: {
         "application/json": { schema: FacetsResponseSchema },
       },
@@ -404,18 +410,30 @@ const libraryDownloadRoute = createRoute({
 
 // ── Handlers ────────────────────────────────────────────────────────
 
-function formatUploader(row: { uploaderId: string | null; uploaderLabel: string | null }) {
+/**
+ * Uploader attribution for a book row.
+ *
+ * `id` is the opaque uploader reference, never `users.id` — see
+ * `shared/uploader-ref.ts` for why.
+ */
+function formatUploader(
+  row: { uploaderId: string | null; uploaderLabel: string | null },
+  secret: string,
+) {
   if (!row.uploaderId || !row.uploaderLabel) return null;
-  return { id: row.uploaderId, label: row.uploaderLabel };
+  return { id: uploaderRef(row.uploaderId, secret), label: row.uploaderLabel };
 }
 
-export const libraryRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
+export const libraryRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
   // --- GET / (list) ---
   .openapi(listRoute, async (c) => {
     const { page, limit, author, genre, language, series, uploaderId, q, sort } =
       c.req.valid("query");
     const offset = (page - 1) * limit;
     const db = c.get("db");
+    const secret = c.get("env").API_SECRET_KEY;
+    const userId = getUserId(c);
+    const callerIsAdmin = isAdmin(c);
 
     // Build WHERE conditions
     const conditions = [eq(books.status, "organized")];
@@ -433,7 +451,11 @@ export const libraryRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
     }
 
     if (uploaderId) {
-      conditions.push(eq(books.createdBy, uploaderId));
+      // uploaderId is the opaque reference handed out by /facets, not a user id.
+      // An unknown reference matches nothing, so a harvested or guessed raw user
+      // id cannot be replayed here as a filter.
+      const resolved = await resolveUploaderRef(db, uploaderId, secret);
+      conditions.push(resolved ? eq(books.createdBy, resolved) : sql`false`);
     }
 
     if (genre) {
@@ -486,11 +508,11 @@ export const libraryRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
       db
         .select({
           ...bookColumns,
-          uploaderId: apiKeys.id,
-          uploaderLabel: apiKeys.label,
+          uploaderId: users.id,
+          uploaderLabel: users.name,
         })
         .from(books)
-        .leftJoin(apiKeys, eq(apiKeys.id, books.createdBy))
+        .leftJoin(users, eq(users.id, books.createdBy))
         .where(where)
         .orderBy(orderBy)
         .limit(limit)
@@ -518,7 +540,8 @@ export const libraryRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
       {
         data: items.map((book) => ({
           ...(({ uploaderId: _uploaderId, uploaderLabel: _uploaderLabel, ...rest }) => rest)(book),
-          uploader: formatUploader(book),
+          createdBy: scopeCreatedBy(book.createdBy, userId, callerIsAdmin),
+          uploader: formatUploader(book, secret),
           files: (filesByBook.get(book.id) ?? []).map((f) => ({
             id: f.id,
             format: f.format,
@@ -543,6 +566,9 @@ export const libraryRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
     const { page, limit, since } = c.req.valid("query");
     const offset = (page - 1) * limit;
     const db = c.get("db");
+    const userId = getUserId(c);
+    const secret = c.get("env").API_SECRET_KEY;
+    const callerIsAdmin = isAdmin(c);
 
     const conditions = [eq(books.status, "organized")];
     if (since) {
@@ -552,6 +578,7 @@ export const libraryRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
         OR EXISTS (
           SELECT 1 FROM ${readingProgress} rp
           WHERE rp.book_id = ${books.id}
+          AND rp.user_id = ${userId}
           AND to_timestamp(rp.timestamp) > ${since}
         )
       )`);
@@ -563,11 +590,11 @@ export const libraryRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
       db
         .select({
           ...bookColumns,
-          uploaderId: apiKeys.id,
-          uploaderLabel: apiKeys.label,
+          uploaderId: users.id,
+          uploaderLabel: users.name,
         })
         .from(books)
-        .leftJoin(apiKeys, eq(apiKeys.id, books.createdBy))
+        .leftJoin(users, eq(users.id, books.createdBy))
         .where(where)
         // Ascending by updatedAt gives clients a stable, resumable cursor.
         .orderBy(asc(books.updatedAt), asc(books.id))
@@ -605,7 +632,13 @@ export const libraryRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
           timestamp: readingProgress.timestamp,
         })
         .from(readingProgress)
-        .where(and(isNotNull(readingProgress.bookId), inArray(readingProgress.bookId, bookIds))),
+        .where(
+          and(
+            eq(readingProgress.userId, userId),
+            isNotNull(readingProgress.bookId),
+            inArray(readingProgress.bookId, bookIds),
+          ),
+        ),
       db
         .select({
           bookId: readingAggregate.bookId,
@@ -620,7 +653,13 @@ export const libraryRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
           externalStatusSyncedAt: readingAggregate.externalStatusSyncedAt,
         })
         .from(readingAggregate)
-        .where(and(isNotNull(readingAggregate.bookId), inArray(readingAggregate.bookId, bookIds))),
+        .where(
+          and(
+            eq(readingAggregate.userId, userId),
+            isNotNull(readingAggregate.bookId),
+            inArray(readingAggregate.bookId, bookIds),
+          ),
+        ),
     ]);
 
     const progressByBook = buildProgressAggregatesForBooks(bookIds, progressRows, aggregateRows);
@@ -631,7 +670,8 @@ export const libraryRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
           const progress = progressByBook.get(book.id) ?? emptyProgressAggregate();
           return {
             ...(({ uploaderId: _u, uploaderLabel: _l, ...rest }) => rest)(book),
-            uploader: formatUploader(book),
+            createdBy: scopeCreatedBy(book.createdBy, userId, callerIsAdmin),
+            uploader: formatUploader(book, secret),
             files: (filesByBook.get(book.id) ?? []).map((f) => ({
               id: f.id,
               format: f.format,
@@ -651,6 +691,7 @@ export const libraryRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
   // --- GET /facets ---
   .openapi(facetsRoute, async (c) => {
     const db = c.get("db");
+    const secret = c.get("env").API_SECRET_KEY;
 
     const [authorsResult, genresResult, languagesResult, seriesResult, uploadersResult] =
       await Promise.all([
@@ -675,11 +716,11 @@ export const libraryRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
           .where(and(eq(books.status, "organized"), isNotNull(books.series)))
           .orderBy(books.series),
         db
-          .selectDistinct({ id: apiKeys.id, label: apiKeys.label })
+          .selectDistinct({ id: users.id, label: users.name })
           .from(books)
-          .innerJoin(apiKeys, eq(apiKeys.id, books.createdBy))
+          .innerJoin(users, eq(users.id, books.createdBy))
           .where(eq(books.status, "organized"))
-          .orderBy(apiKeys.label),
+          .orderBy(users.name),
       ]);
 
     return c.json(
@@ -688,7 +729,9 @@ export const libraryRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
         genres: genresResult.map((r) => r.genre).filter(Boolean) as string[],
         languages: languagesResult.map((r) => r.language).filter(Boolean) as string[],
         series: seriesResult.map((r) => r.series).filter(Boolean) as string[],
-        uploaders: uploadersResult,
+        // Opaque references, never raw user ids — the list endpoint resolves
+        // them back when one is passed as ?uploaderId.
+        uploaders: uploadersResult.map((u) => ({ id: uploaderRef(u.id, secret), label: u.label })),
       },
       200,
     );
@@ -698,16 +741,17 @@ export const libraryRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
   .openapi(getRoute, async (c) => {
     const { id } = c.req.valid("param");
     const db = c.get("db");
-    const apiKeyId = getApiKeyId(c);
+    const userId = getUserId(c);
+    const secret = c.get("env").API_SECRET_KEY;
 
     const [book] = await db
       .select({
         ...bookColumns,
-        uploaderId: apiKeys.id,
-        uploaderLabel: apiKeys.label,
+        uploaderId: users.id,
+        uploaderLabel: users.name,
       })
       .from(books)
-      .leftJoin(apiKeys, eq(apiKeys.id, books.createdBy))
+      .leftJoin(users, eq(users.id, books.createdBy))
       .where(and(eq(books.id, id), eq(books.status, "organized")));
 
     if (!book) {
@@ -716,13 +760,14 @@ export const libraryRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
 
     const [files, progress] = await Promise.all([
       db.select().from(bookFiles).where(eq(bookFiles.bookId, id)),
-      buildProgressAggregateForBook(db, id, apiKeyId),
+      buildProgressAggregateForBook(db, id, userId),
     ]);
 
     return c.json(
       (({ uploaderId: _uploaderId, uploaderLabel: _uploaderLabel, ...rest }) => ({
         ...rest,
-        uploader: formatUploader(book),
+        createdBy: scopeCreatedBy(book.createdBy, userId, isAdmin(c)),
+        uploader: formatUploader(book, secret),
         files: files.map((f) => ({
           id: f.id,
           format: f.format,
@@ -774,7 +819,12 @@ export const libraryRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
         .update(books)
         .set({ ...updates, updatedAt: new Date() })
         .where(eq(books.id, id))
-        .returning();
+        // `bookColumns`, not a bare `.returning()`: the bare form returns every
+        // column, `search_vector` included, which BookUpdatedSchema does not
+        // declare and no client can use. Both sides of the
+        // contract now derive from the same list — see the drift test in
+        // shared/schemas.test.ts.
+        .returning(bookColumns);
     } catch (err) {
       if (isUniqueViolation(err)) {
         throw new HTTPException(409, { message: uniqueViolationMessage(err) });
@@ -789,11 +839,16 @@ export const libraryRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
     const coverChanged = "coverUrl" in updates;
     const needsReorganize = Object.keys(updates).some((field) => EPUB_EMBEDDED_FIELDS.has(field));
     if (needsReorganize) {
-      await queues.bookOrganize.add("organize", { bookId: id, forceRedownloadCover: coverChanged });
+      await enqueueBookOrganize(queues.bookOrganize, {
+        bookId: id,
+        forceRedownloadCover: coverChanged,
+      });
     }
 
-    // Invalidate library list and detail caches
-    await invalidateRouteCache(cacheStorage, "/api/library");
+    // Title, author, series, language and genres are all rendered into the OPDS
+    // feeds, and genres feed the /api/stats distribution. `/api/library` itself
+    // is not cached, so it needs no invalidation.
+    await invalidateRouteCache(cacheStorage, "/opds", "/api/stats");
 
     return c.json(updated, 200);
   })
@@ -826,7 +881,7 @@ export const libraryRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
     }
 
     // Join reading_progress via content hash match
-    const apiKeyId = getApiKeyId(c);
+    const userId = getUserId(c);
     const progress = await db
       .select({
         document: readingProgress.document,
@@ -844,7 +899,7 @@ export const libraryRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
           eq(readingProgress.document, bookFiles.originalContentHash),
         ),
       )
-      .where(and(eq(bookFiles.bookId, id), eq(readingProgress.apiKeyId, apiKeyId)))
+      .where(and(eq(bookFiles.bookId, id), eq(readingProgress.userId, userId)))
       .orderBy(desc(readingProgress.timestamp));
 
     return c.json(
@@ -868,7 +923,6 @@ export const libraryRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
     const { id } = c.req.valid("param");
     const db = c.get("db");
     const queues = c.get("queues");
-    const cacheStorage = c.get("cacheStorage");
 
     // Ownership check (owner or admin)
     await requireBookOwnership(c, db, id);
@@ -908,8 +962,10 @@ export const libraryRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
       skipStatusChange: true,
     });
 
-    // Invalidate candidates cache
-    await invalidateRouteCache(cacheStorage, `/api/books/${id}/candidates`);
+    // No invalidation: this deletes candidates and enqueues a refetch, and the
+    // candidates endpoint is not cached. The book row itself is untouched, so
+    // the OPDS feeds still describe it correctly. (The worker's later write is
+    // the worker's to invalidate — see cache.ts.)
 
     return c.json({ status: "refetching" as const, bookId: id, searchQuery }, 200);
   })
@@ -919,7 +975,6 @@ export const libraryRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
     const { id } = c.req.valid("param");
     const db = c.get("db");
     const queues = c.get("queues");
-    const cacheStorage = c.get("cacheStorage");
 
     // Ownership check (owner or admin)
     await requireBookOwnership(c, db, id);
@@ -935,10 +990,11 @@ export const libraryRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
     }
 
     // Enqueue organize job — the worker handles re-organize when inboxPath is null
-    await queues.bookOrganize.add("organize", { bookId: id });
+    await enqueueUserReorganize(queues.bookOrganize, id, getUserId(c));
 
-    // Invalidate caches since the book's file locations may change
-    await invalidateRouteCache(cacheStorage, "/api/library");
+    // No invalidation: nothing this handler changes is visible in a cached
+    // response. A re-organize moves files on disk, but OPDS acquisition links
+    // address them by bookFiles.id, which the move does not change.
 
     return c.json({ message: "Reorganize job enqueued" as const, bookId: id }, 200);
   })
@@ -1009,7 +1065,9 @@ export const libraryRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
           .update(books)
           .set(bookUpdates)
           .where(eq(books.id, id))
-          .returning();
+          // Same contract as PATCH /{id} above — BookUpdatedSchema, so
+          // bookColumns.
+          .returning(bookColumns);
 
         for (const [candidateId, fields] of candidateSelections) {
           await tx
@@ -1029,13 +1087,14 @@ export const libraryRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
 
     // Enqueue re-organize job to move files and re-embed EPUB metadata
     const coverUrlChanged = "coverUrl" in bookUpdates;
-    await queues.bookOrganize.add("organize", {
+    await enqueueBookOrganize(queues.bookOrganize, {
       bookId: id,
       forceRedownloadCover: coverUrlChanged,
     });
 
-    // Invalidate caches
-    await invalidateRouteCache(cacheStorage, "/api/library", `/api/books/${id}/candidates`);
+    // Applying a candidate rewrites the same fields the OPDS feeds render, and
+    // the genres behind /api/stats.
+    await invalidateRouteCache(cacheStorage, "/opds", "/api/stats");
 
     return c.json(updated, 200);
   })
@@ -1046,7 +1105,7 @@ export const libraryRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
     const body = c.req.valid("json");
     const db = c.get("db");
     const cacheStorage = c.get("cacheStorage");
-    const apiKeyId = getApiKeyId(c);
+    const userId = getUserId(c);
 
     const now = new Date();
     const startedAt = body.startedAt ? new Date(body.startedAt) : null;
@@ -1091,7 +1150,7 @@ export const libraryRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
     await db
       .insert(readingAggregate)
       .values({
-        apiKeyId,
+        userId,
         bookId: id,
         manualStatus: body.status,
         manualStartedAt,
@@ -1100,7 +1159,7 @@ export const libraryRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
         manualSetAt: now,
       })
       .onConflictDoUpdate({
-        target: [readingAggregate.apiKeyId, readingAggregate.bookId],
+        target: [readingAggregate.userId, readingAggregate.bookId],
         set: {
           manualStatus: body.status,
           manualStartedAt,
@@ -1111,9 +1170,12 @@ export const libraryRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
         },
       });
 
-    const aggregate = await buildProgressAggregateForBook(db, id, apiKeyId);
+    const aggregate = await buildProgressAggregateForBook(db, id, userId);
 
-    await invalidateRouteCache(cacheStorage, "/api/library", "/api/reading-status");
+    // A manual reading status feeds the finished counts and streaks on
+    // /api/stats, whose cache key is per user. The OPDS feeds carry no reading
+    // state, and neither /api/library nor /api/reading-status is cached.
+    await invalidateRouteCache(cacheStorage, "/api/stats");
 
     return c.json(aggregate, 200);
   })
@@ -1123,7 +1185,7 @@ export const libraryRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
     const { id } = c.req.valid("param");
     const db = c.get("db");
     const cacheStorage = c.get("cacheStorage");
-    const apiKeyId = getApiKeyId(c);
+    const userId = getUserId(c);
 
     const [book] = await db
       .select({ id: books.id })
@@ -1141,11 +1203,14 @@ export const libraryRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
         manualSetAt: null,
         updatedAt: new Date(),
       })
-      .where(and(eq(readingAggregate.apiKeyId, apiKeyId), eq(readingAggregate.bookId, id)));
+      .where(and(eq(readingAggregate.userId, userId), eq(readingAggregate.bookId, id)));
 
-    const aggregate = await buildProgressAggregateForBook(db, id, apiKeyId);
+    const aggregate = await buildProgressAggregateForBook(db, id, userId);
 
-    await invalidateRouteCache(cacheStorage, "/api/library", "/api/reading-status");
+    // A manual reading status feeds the finished counts and streaks on
+    // /api/stats, whose cache key is per user. The OPDS feeds carry no reading
+    // state, and neither /api/library nor /api/reading-status is cached.
+    await invalidateRouteCache(cacheStorage, "/api/stats");
 
     return c.json(aggregate, 200);
   })

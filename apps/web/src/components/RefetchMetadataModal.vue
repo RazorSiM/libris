@@ -41,11 +41,14 @@ const emit = defineEmits<{
   applied: [];
 }>();
 
-const client = useApiClient(); // kept for candidates GET inside WS handler
 const toast = useToast();
 const queryCache = useQueryCache();
 const { mutateAsync: refetchMetadata } = useRefetchMetadata();
 const { mutateAsync: applyMetadataMutation, isLoading: applying } = useApplyMetadata();
+// Disabled query: the pipeline decides when there is anything to read, so the
+// event handler below drives it. Going through Colada anyway means the result
+// is cached under ["library", id, …] and invalidated with the rest of the book.
+const { refetch: refetchCandidates } = useBookCandidatesQuery(() => book.id);
 
 type Phase = "idle" | "fetching" | "picking" | "no-results" | "error";
 const phase = ref<Phase>("idle");
@@ -60,50 +63,48 @@ const { on, close: closeEvents } = useServerEvents({ bookId: book.id });
 on("book:metadata-ready", async () => {
   if (phase.value !== "fetching") return;
 
-  try {
-    const res = await client.api.books[":id"].candidates.$get({
-      param: { id: book.id },
-    });
-    if (!res.ok) throw new Error("Failed to fetch candidates"); // type guard
-    const result = await res.json();
-
-    // Filter to only non-file candidates (freshly fetched)
-    const externalCandidates = result.candidates.filter(
-      (c: { source: string }) => c.source !== "file",
-    );
-
-    if (externalCandidates.length === 0) {
-      phase.value = "no-results";
-      return;
-    }
-
-    // Build synthetic "current" candidate from the book's existing metadata
-    const currentCandidate: Candidate = {
-      id: "current",
-      source: "current" as MetadataSource,
-      normalized: {
-        title: book.title,
-        author: book.author,
-        isbn10: book.isbn10,
-        isbn13: book.isbn13,
-        publisher: book.publisher,
-        publishedYear: book.publishedYear,
-        language: book.language,
-        description: book.description,
-        coverUrl: book.coverUrl,
-        pageCount: book.pageCount,
-        genres: book.genres,
-      },
-      confidence: "1.0",
-      selectedFields: [],
-    };
-
-    candidates.value = [currentCandidate, ...(externalCandidates as Candidate[])];
-    phase.value = "picking";
-  } catch {
+  // `refetch()` resolves with the entry's state instead of rejecting, so a
+  // failure is a status here rather than a catch.
+  const state = await refetchCandidates();
+  if (state.status === "error" || !state.data) {
     phase.value = "error";
     errorMessage.value = "Failed to load metadata candidates";
+    return;
   }
+
+  // Filter to only non-file candidates (freshly fetched)
+  const externalCandidates = state.data.candidates.filter(
+    (c: { source: string }) => c.source !== "file",
+  );
+
+  if (externalCandidates.length === 0) {
+    phase.value = "no-results";
+    return;
+  }
+
+  // Build synthetic "current" candidate from the book's existing metadata
+  const currentCandidate: Candidate = {
+    id: "current",
+    source: "current" as MetadataSource,
+    normalized: {
+      title: book.title,
+      author: book.author,
+      isbn10: book.isbn10,
+      isbn13: book.isbn13,
+      publisher: book.publisher,
+      publishedYear: book.publishedYear,
+      language: book.language,
+      description: book.description,
+      coverUrl: book.coverUrl,
+      pageCount: book.pageCount,
+      genres: book.genres,
+    },
+    confidence: "1.0",
+    selectedFields: [],
+  };
+
+  candidates.value = [currentCandidate, ...(externalCandidates as Candidate[])];
+  phase.value = "picking";
 });
 
 on("job:failed", (event) => {
@@ -267,4 +268,3 @@ onUnmounted(() => closeEvents());
     </template>
   </UModal>
 </template>
-import { inboxKeys } from "~/composables/queries/inboxKeys";

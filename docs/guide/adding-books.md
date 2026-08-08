@@ -21,7 +21,17 @@ From the Inbox page, click the **Upload** button in the top bar. A modal opens w
 
 ![Upload Books modal](./images/upload-modal.webp)
 
-Only EPUB files are accepted, with a maximum size of 100 MB per file. The upload endpoint writes the file into the inbox directory and records the uploading API key as the file's owner (keyed on the file checksum). It does not start the pipeline itself. The file watcher detects the newly written file and starts processing, exactly as it does for files dropped directly into the inbox folder.
+Only EPUB files are accepted, with a maximum size of 100 MB per file. The upload endpoint writes the file into the inbox directory and records the uploading account as the file's owner (keyed on the file checksum). It does not start the pipeline itself. The file watcher detects the newly written file and starts processing, exactly as it does for files dropped directly into the inbox folder.
+
+Ownership is the one difference between the two routes in. A book uploaded through the web UI belongs to whoever uploaded it. A file dropped straight into the inbox directory has no uploader to attribute it to, so it is owned by the oldest admin account — which is who can then edit or delete it.
+
+#### Files already in the library
+
+Ingestion deduplicates by checksum, so a file whose exact contents are already on the server would be written to the inbox and then dropped without ever becoming a book. The upload endpoint detects this up front and does not write the file at all. It reports it as **skipped**, not as an error: nothing went wrong, the library already holds that book, which is what you were after.
+
+The modal says so in its own words. A batch where everything was new reads "3 files uploaded"; a mixed batch reads "3 files uploaded" with "1 already in your library" underneath; a batch where every file was already present reads "1 file is already in your library" on its own. Genuine rejections — not an EPUB, over 100 MB, unreadable — are still shown separately as errors.
+
+This applies across accounts. If another user already uploaded the same file, your copy is skipped too, and the message is the same either way; it never tells you who holds the existing copy or what state it is in.
 
 ## The Ingestion Pipeline
 

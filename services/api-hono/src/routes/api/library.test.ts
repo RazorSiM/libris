@@ -1,11 +1,13 @@
 import { afterAll, beforeAll, describe, expect, it } from "vite-plus/test";
 import type { PGlite } from "@electric-sql/pglite";
 import { createApp } from "../../app.js";
-import { createTestDb, type TestDb } from "../../db/test-utils.js";
+import { createTestAuth, createTestDb, seedAppPassword, type TestDb } from "../../db/test-utils.js";
 import * as schema from "../../db/schema.js";
 import type { Env } from "../../env.js";
-import { generateApiKey } from "../../shared/auth.js";
 import { createMemoryKVStore } from "../../services/kv-store.js";
+import { uploaderRef } from "../../shared/uploader-ref.js";
+import { mkdir, rm } from "node:fs/promises";
+import { inArray } from "drizzle-orm";
 
 const TEST_ENV: Env = {
   NODE_ENV: "test",
@@ -14,10 +16,14 @@ const TEST_ENV: Env = {
   REDIS_URL: "redis://localhost:6379",
   LIBRIS_INBOX_PATH: "/tmp/libris-test-inbox",
   LIBRIS_LIBRARY_PATH: "/tmp/libris-test-library",
+  LIBRIS_COVER_FETCH_ALLOWLIST: [],
   API_SECRET_KEY: "test-secret-key-at-least-32-characters-long!!",
-  COOKIE_DOMAIN: "",
+  BETTER_AUTH_SECRET: "test-better-auth-secret-at-least-32-chars!!",
+  BETTER_AUTH_URL: "",
+  LIBRIS_COOKIE_SECURE: "0",
   MIGRATIONS_PATH: "./migrations",
   TRUST_PROXY_HEADERS: "0",
+  LIBRIS_TRUSTED_PROXIES: [],
   E2E_TEST: "",
   LOG_LEVEL: "info",
   LIBRIS_RATELIMIT_GENERAL_LIMIT: 600,
@@ -26,24 +32,22 @@ const TEST_ENV: Env = {
   LIBRIS_RATELIMIT_AUTH_WINDOW_SECONDS: 60,
   LIBRIS_RATELIMIT_KEY_CREATION_LIMIT: 30,
   LIBRIS_RATELIMIT_KEY_CREATION_WINDOW_SECONDS: 3600,
+  LIBRIS_HTTP_HEADERS_TIMEOUT_MS: 10_000,
+  LIBRIS_HTTP_REQUEST_TIMEOUT_MS: 30_000,
+  LIBRIS_HTTP_IDLE_TIMEOUT_MS: 30_000,
 };
 
 let pglite: PGlite;
 let db: TestDb;
 
 async function seedApiKey(label = "Library Test Key") {
-  const key = await generateApiKey();
-  const [row] = await db
-    .insert(schema.apiKeys)
-    .values({
-      keyPrefix: key.keyPrefix,
-      keyHash: key.keyHash,
-      label,
-      isAdmin: false,
-    })
-    .returning({ id: schema.apiKeys.id });
+  const seeded = await seedAppPassword(createTestAuth(db, TEST_ENV), db, { name: label });
+  return { ...seeded, label };
+}
 
-  return { apiKeyId: row.id, rawKey: key.rawKey, label };
+/** The opaque uploader reference the API should emit for a given user id. */
+function refFor(userId: string) {
+  return uploaderRef(userId, TEST_ENV.API_SECRET_KEY);
 }
 
 function createTestApp() {
@@ -60,6 +64,7 @@ function createTestApp() {
       },
       redisStorage: createMemoryKVStore(),
       cacheStorage: createMemoryKVStore(),
+      auth: createTestAuth(db, TEST_ENV),
       shutdown: async () => {},
     },
     env: TEST_ENV,
@@ -90,6 +95,7 @@ function createOrganizeRecordingApp() {
       },
       redisStorage: createMemoryKVStore(),
       cacheStorage: createMemoryKVStore(),
+      auth: createTestAuth(db, TEST_ENV),
       shutdown: async () => {},
     },
     env: TEST_ENV,
@@ -108,15 +114,67 @@ afterAll(async () => {
 });
 
 describe("GET /api/library", () => {
+  it("returns 404 for missing files and 403 for paths outside the library", async () => {
+    const { userId, rawKey } = await seedApiKey("Path Boundary Test Key");
+    await mkdir(TEST_ENV.LIBRIS_LIBRARY_PATH, { recursive: true });
+
+    const [missingBook] = await db
+      .insert(schema.books)
+      .values({ status: "organized", title: "Missing", createdBy: userId })
+      .returning({ id: schema.books.id });
+    const [missingFile] = await db
+      .insert(schema.bookFiles)
+      .values({
+        bookId: missingBook.id,
+        format: "epub",
+        originalName: "missing.epub",
+        storagePath: "Missing/missing.epub",
+      })
+      .returning({ id: schema.bookFiles.id });
+
+    const [escapedBook] = await db
+      .insert(schema.books)
+      .values({ status: "organized", title: "Escaped", createdBy: userId })
+      .returning({ id: schema.books.id });
+    const [escapedFile] = await db
+      .insert(schema.bookFiles)
+      .values({
+        bookId: escapedBook.id,
+        format: "epub",
+        originalName: "escaped.epub",
+        storagePath: "../escaped.epub",
+      })
+      .returning({ id: schema.bookFiles.id });
+
+    const { app } = createTestApp();
+    const headers = { Authorization: `Bearer ${rawKey}` };
+    const missing = await app.request(`/api/library/${missingBook.id}/download/${missingFile.id}`, {
+      headers,
+    });
+    const escaped = await app.request(`/api/library/${escapedBook.id}/download/${escapedFile.id}`, {
+      headers,
+    });
+
+    expect(missing.status).toBe(404);
+    expect(escaped.status).toBe(403);
+    // These rows belong only to this test; remove them so the suite can keep
+    // its intentionally cumulative auth fixtures without leaking books.
+    await db
+      .delete(schema.bookFiles)
+      .where(inArray(schema.bookFiles.bookId, [missingBook.id, escapedBook.id]));
+    await db.delete(schema.books).where(inArray(schema.books.id, [missingBook.id, escapedBook.id]));
+    await rm(TEST_ENV.LIBRIS_LIBRARY_PATH, { recursive: true, force: true });
+  });
+
   it("returns uploader labels in list responses without exposing api key fields", async () => {
-    const { apiKeyId, rawKey, label } = await seedApiKey();
+    const { userId, rawKey, label } = await seedApiKey();
     const [book] = await db
       .insert(schema.books)
       .values({
         status: "organized",
         title: "Uploaded Book",
         author: "Uploader Author",
-        createdBy: apiKeyId,
+        createdBy: userId,
       })
       .returning({ id: schema.books.id });
 
@@ -136,7 +194,8 @@ describe("GET /api/library", () => {
     expect(response.status).toBe(200);
     const body = await response.json();
     expect(body.data).toHaveLength(1);
-    expect(body.data[0].uploader).toEqual({ id: apiKeyId, label });
+    expect(body.data[0].uploader).toEqual({ id: refFor(userId), label });
+    expect(body.data[0].uploader.id).not.toBe(userId);
     expect(body.data[0].uploader).not.toHaveProperty("key");
     expect(body.data[0].uploader).not.toHaveProperty("keyPrefix");
     expect(body.data[0].uploader).not.toHaveProperty("keyHash");
@@ -145,14 +204,14 @@ describe("GET /api/library", () => {
   });
 
   it("returns uploader labels in detail responses", async () => {
-    const { apiKeyId, rawKey, label } = await seedApiKey();
+    const { userId, rawKey, label } = await seedApiKey();
     const [book] = await db
       .insert(schema.books)
       .values({
         status: "organized",
         title: "Detail Book",
         author: "Detail Author",
-        createdBy: apiKeyId,
+        createdBy: userId,
       })
       .returning({ id: schema.books.id });
 
@@ -171,7 +230,8 @@ describe("GET /api/library", () => {
 
     expect(response.status).toBe(200);
     const body = await response.json();
-    expect(body.uploader).toEqual({ id: apiKeyId, label });
+    expect(body.uploader).toEqual({ id: refFor(userId), label });
+    expect(body.uploader.id).not.toBe(userId);
     expect(body.uploader).not.toHaveProperty("key");
     expect(body.uploader).not.toHaveProperty("keyPrefix");
     expect(body.uploader).not.toHaveProperty("keyHash");
@@ -179,7 +239,7 @@ describe("GET /api/library", () => {
     expect(body.uploader).not.toHaveProperty("lastUsedAt");
   });
 
-  it("filters by language and uploader and returns matching facets", async () => {
+  it("filters by language and by the opaque uploader reference from the facets", async () => {
     const uploaderA = await seedApiKey("Uploader A");
     const uploaderB = await seedApiKey("Uploader B");
 
@@ -189,7 +249,7 @@ describe("GET /api/library", () => {
         title: "English Book",
         author: "Author A",
         language: "en",
-        createdBy: uploaderA.apiKeyId,
+        createdBy: uploaderA.userId,
         genres: ["Sci-Fi"],
       },
       {
@@ -197,30 +257,17 @@ describe("GET /api/library", () => {
         title: "French Book",
         author: "Author B",
         language: "fr",
-        createdBy: uploaderB.apiKeyId,
+        createdBy: uploaderB.userId,
         genres: ["Fantasy"],
       },
     ]);
 
     const { app } = createTestApp();
-    const filteredResponse = await app.request(
-      `/api/library?language=en&uploaderId=${uploaderA.apiKeyId}`,
-      {
-        headers: { Authorization: `Bearer ${uploaderA.rawKey}` },
-      },
-    );
 
-    expect(filteredResponse.status).toBe(200);
-    const filteredBody = await filteredResponse.json();
-    expect(filteredBody.data).toHaveLength(1);
-    expect(filteredBody.data[0].title).toBe("English Book");
-    expect(filteredBody.data[0].uploader).toEqual({
-      id: uploaderA.apiKeyId,
-      label: uploaderA.label,
-    });
-
+    // The organized library is shared, so B sees every uploader in the facets —
+    // identified by an opaque reference, not by a user id.
     const facetsResponse = await app.request("/api/library/facets", {
-      headers: { Authorization: `Bearer ${uploaderA.rawKey}` },
+      headers: { Authorization: `Bearer ${uploaderB.rawKey}` },
     });
 
     expect(facetsResponse.status).toBe(200);
@@ -228,10 +275,93 @@ describe("GET /api/library", () => {
     expect(facetsBody.languages).toEqual(expect.arrayContaining(["en", "fr"]));
     expect(facetsBody.uploaders).toEqual(
       expect.arrayContaining([
-        { id: uploaderA.apiKeyId, label: uploaderA.label },
-        { id: uploaderB.apiKeyId, label: uploaderB.label },
+        { id: refFor(uploaderA.userId), label: uploaderA.label },
+        { id: refFor(uploaderB.userId), label: uploaderB.label },
       ]),
     );
+
+    const facetRef = facetsBody.uploaders.find(
+      (u: { label: string }) => u.label === uploaderA.label,
+    ).id;
+
+    // Round-tripping a facet reference through ?uploaderId still filters.
+    const filteredResponse = await app.request(`/api/library?language=en&uploaderId=${facetRef}`, {
+      headers: { Authorization: `Bearer ${uploaderB.rawKey}` },
+    });
+
+    expect(filteredResponse.status).toBe(200);
+    const filteredBody = await filteredResponse.json();
+    expect(filteredBody.data).toHaveLength(1);
+    expect(filteredBody.data[0].title).toBe("English Book");
+    expect(filteredBody.data[0].uploader).toEqual({
+      id: refFor(uploaderA.userId),
+      label: uploaderA.label,
+    });
+  });
+
+  it("never hands a non-admin another user's raw user id, on any read surface", async () => {
+    const uploaderA = await seedApiKey("Raw Id Uploader A");
+    const uploaderB = await seedApiKey("Raw Id Reader B");
+
+    const [book] = await db
+      .insert(schema.books)
+      .values({
+        status: "organized",
+        title: "Shared Catalog Book",
+        author: "Shared Author",
+        createdBy: uploaderA.userId,
+      })
+      .returning({ id: schema.books.id });
+
+    const { app } = createTestApp();
+    const auth = { headers: { Authorization: `Bearer ${uploaderB.rawKey}` } };
+
+    // list, sync, detail and facets must all agree: label yes, user id no.
+    for (const path of [
+      "/api/library",
+      "/api/library/sync",
+      `/api/library/${book.id}`,
+      "/api/library/facets",
+    ]) {
+      const response = await app.request(path, auth);
+      expect(response.status).toBe(200);
+      const raw = await response.text();
+      // Fails against the pre-fix code, which echoed users.id as uploader.id
+      // on all four endpoints.
+      expect(raw).not.toContain(uploaderA.userId);
+      expect(raw).toContain(uploaderA.label);
+    }
+  });
+
+  it("ignores a raw user id passed as uploaderId instead of filtering by it", async () => {
+    const uploaderA = await seedApiKey("Replay Uploader A");
+    const uploaderB = await seedApiKey("Replay Reader B");
+
+    await db.insert(schema.books).values([
+      {
+        status: "organized",
+        title: "Replay Target Book",
+        author: "Replay Author",
+        createdBy: uploaderA.userId,
+      },
+      {
+        status: "organized",
+        title: "Replay Other Book",
+        author: "Replay Author",
+        createdBy: uploaderB.userId,
+      },
+    ]);
+
+    const { app } = createTestApp();
+    const response = await app.request(`/api/library?uploaderId=${uploaderA.userId}`, {
+      headers: { Authorization: `Bearer ${uploaderB.rawKey}` },
+    });
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    // Pre-fix this returned exactly A's books, which is the enumeration step.
+    expect(body.data).toHaveLength(0);
+    expect(body.pagination.total).toBe(0);
   });
 });
 
@@ -243,7 +373,7 @@ describe("GET /api/library/sync", () => {
   });
 
   it("returns each organised book with the per-book progress aggregate", async () => {
-    const { apiKeyId, rawKey } = await seedApiKey();
+    const { userId, rawKey } = await seedApiKey();
     const [book] = await db
       .insert(schema.books)
       .values({
@@ -251,7 +381,7 @@ describe("GET /api/library/sync", () => {
         title: "Synced Book",
         author: "Sync Author",
         description: "A book for the sync test.",
-        createdBy: apiKeyId,
+        createdBy: userId,
       })
       .returning({ id: schema.books.id });
     await db.insert(schema.bookFiles).values({
@@ -265,7 +395,7 @@ describe("GET /api/library/sync", () => {
     // One progress row at 42% from "kobo".
     await db.insert(schema.readingProgress).values({
       bookId: book.id,
-      apiKeyId,
+      userId,
       document: "hash-1",
       device: "kobo",
       progress: "page=42",
@@ -295,15 +425,60 @@ describe("GET /api/library/sync", () => {
     expect(typeof synced.progress.lastTimestamp).toBe("number");
   });
 
+  it("does not expose another user's reading progress", async () => {
+    const caller = await seedApiKey("Sync Caller");
+    const other = await seedApiKey("Sync Other");
+    const [book] = await db
+      .insert(schema.books)
+      .values({
+        status: "organized",
+        title: "Other User's Book",
+        author: "Private Reader",
+        createdBy: other.userId,
+      })
+      .returning({ id: schema.books.id });
+
+    await db.insert(schema.readingProgress).values({
+      bookId: book.id,
+      userId: other.userId,
+      document: "other-user-document",
+      device: "private-device",
+      progress: "page=87",
+      percentage: "0.8700",
+      timestamp: BigInt(Math.floor(Date.now() / 1000)),
+    });
+
+    const { app } = createTestApp();
+    const response = await app.request("/api/library/sync", {
+      headers: { Authorization: `Bearer ${caller.rawKey}` },
+    });
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    const synced = body.data.find((item: { id: string }) => item.id === book.id);
+    expect(synced).toBeDefined();
+    expect(synced.progress).toEqual({
+      percentage: null,
+      status: "unread",
+      lastDevice: null,
+      lastTimestamp: null,
+      startedAt: null,
+      finishedAt: null,
+      pausedAt: null,
+      manuallySet: false,
+      externallySet: false,
+    });
+  });
+
   it("reports progress as `unread` with null fields for books with no progress rows", async () => {
-    const { apiKeyId, rawKey } = await seedApiKey();
+    const { userId, rawKey } = await seedApiKey();
     const [book] = await db
       .insert(schema.books)
       .values({
         status: "organized",
         title: "Untouched Book",
         author: "Quiet Author",
-        createdBy: apiKeyId,
+        createdBy: userId,
       })
       .returning({ id: schema.books.id });
 
@@ -328,21 +503,21 @@ describe("GET /api/library/sync", () => {
   });
 
   it("includes startedAt and finishedAt from reading_aggregate", async () => {
-    const { apiKeyId, rawKey } = await seedApiKey();
+    const { userId, rawKey } = await seedApiKey();
     const [book] = await db
       .insert(schema.books)
       .values({
         status: "organized",
         title: "Lifecycle Book",
         author: "Lifecycle Author",
-        createdBy: apiKeyId,
+        createdBy: userId,
       })
       .returning({ id: schema.books.id });
 
     const startedAt = new Date("2026-04-01T12:00:00.000Z");
     const finishedAt = new Date("2026-04-15T18:30:00.000Z");
     await db.insert(schema.readingAggregate).values({
-      apiKeyId,
+      userId,
       bookId: book.id,
       startedAt,
       finishedAt,
@@ -360,11 +535,12 @@ describe("GET /api/library/sync", () => {
   });
 
   it("filters by ?since to books whose updatedAt is more recent", async () => {
-    const { rawKey } = await seedApiKey();
+    const { rawKey, userId } = await seedApiKey();
 
     // Insert an old book, then take a timestamp, then insert a new book.
     await db.insert(schema.books).values({
       status: "organized",
+      createdBy: userId,
       title: "Old Sync Book",
       author: "Old Author",
     });
@@ -376,6 +552,7 @@ describe("GET /api/library/sync", () => {
       .insert(schema.books)
       .values({
         status: "organized",
+        createdBy: userId,
         title: "New Sync Book",
         author: "New Author",
       })
@@ -407,22 +584,22 @@ describe("GET /api/library/sync", () => {
 });
 
 describe("Manual reading status override", () => {
-  async function seedBook(apiKeyId: string, title = "Status Book") {
+  async function seedBook(userId: string, title = "Status Book") {
     const [book] = await db
       .insert(schema.books)
       .values({
         status: "organized",
         title,
         author: "Status Author",
-        createdBy: apiKeyId,
+        createdBy: userId,
       })
       .returning({ id: schema.books.id });
     return book.id;
   }
 
   it("PATCH sets a manual override and GET reflects it", async () => {
-    const { apiKeyId, rawKey } = await seedApiKey("Status PATCH");
-    const bookId = await seedBook(apiKeyId);
+    const { userId, rawKey } = await seedApiKey("Status PATCH");
+    const bookId = await seedBook(userId);
 
     const { app } = createTestApp();
     const patch = await app.request(`/api/library/${bookId}/reading-status`, {
@@ -450,8 +627,8 @@ describe("Manual reading status override", () => {
   });
 
   it("PATCH rejects future dates", async () => {
-    const { apiKeyId, rawKey } = await seedApiKey("Status Future");
-    const bookId = await seedBook(apiKeyId);
+    const { userId, rawKey } = await seedApiKey("Status Future");
+    const bookId = await seedBook(userId);
 
     const { app } = createTestApp();
     const future = new Date(Date.now() + 86400_000).toISOString();
@@ -464,8 +641,8 @@ describe("Manual reading status override", () => {
   });
 
   it("PATCH rejects finishedAt before startedAt", async () => {
-    const { apiKeyId, rawKey } = await seedApiKey("Status Inverted");
-    const bookId = await seedBook(apiKeyId);
+    const { userId, rawKey } = await seedApiKey("Status Inverted");
+    const bookId = await seedBook(userId);
 
     const { app } = createTestApp();
     const res = await app.request(`/api/library/${bookId}/reading-status`, {
@@ -481,8 +658,8 @@ describe("Manual reading status override", () => {
   });
 
   it("DELETE clears the manual override and GET reverts to computed status", async () => {
-    const { apiKeyId, rawKey } = await seedApiKey("Status Clear");
-    const bookId = await seedBook(apiKeyId);
+    const { userId, rawKey } = await seedApiKey("Status Clear");
+    const bookId = await seedBook(userId);
 
     const { app } = createTestApp();
     // Apply a sticky override.
@@ -511,8 +688,8 @@ describe("Manual reading status override", () => {
   });
 
   it("PATCH unread clears all manual dates", async () => {
-    const { apiKeyId, rawKey } = await seedApiKey("Status Unread");
-    const bookId = await seedBook(apiKeyId);
+    const { userId, rawKey } = await seedApiKey("Status Unread");
+    const bookId = await seedBook(userId);
 
     const { app } = createTestApp();
     await app.request(`/api/library/${bookId}/reading-status`, {
@@ -542,14 +719,14 @@ describe("Manual reading status override", () => {
 });
 
 describe("PATCH /api/library/:id re-organize on metadata edits", () => {
-  async function seedOrganizedBook(apiKeyId: string) {
+  async function seedOrganizedBook(userId: string) {
     const [book] = await db
       .insert(schema.books)
       .values({
         status: "organized",
         title: "Original Title",
         author: "Original Author",
-        createdBy: apiKeyId,
+        createdBy: userId,
       })
       .returning({ id: schema.books.id });
 
@@ -578,8 +755,8 @@ describe("PATCH /api/library/:id re-organize on metadata edits", () => {
   }
 
   it("re-organizes when an embedded field (title) changes, without forcing a cover re-download", async () => {
-    const { apiKeyId, rawKey } = await seedApiKey();
-    const bookId = await seedOrganizedBook(apiKeyId);
+    const { userId, rawKey } = await seedApiKey();
+    const bookId = await seedOrganizedBook(userId);
     const { app, organizeJobs } = createOrganizeRecordingApp();
 
     const res = await patch(app, rawKey, bookId, { title: "Updated Title" });
@@ -589,8 +766,8 @@ describe("PATCH /api/library/:id re-organize on metadata edits", () => {
   });
 
   it("forces a cover re-download when coverUrl changes", async () => {
-    const { apiKeyId, rawKey } = await seedApiKey();
-    const bookId = await seedOrganizedBook(apiKeyId);
+    const { userId, rawKey } = await seedApiKey();
+    const bookId = await seedOrganizedBook(userId);
     const { app, organizeJobs } = createOrganizeRecordingApp();
 
     const res = await patch(app, rawKey, bookId, {
@@ -602,8 +779,8 @@ describe("PATCH /api/library/:id re-organize on metadata edits", () => {
   });
 
   it("does NOT re-organize when only non-embedded fields (tags) change", async () => {
-    const { apiKeyId, rawKey } = await seedApiKey();
-    const bookId = await seedOrganizedBook(apiKeyId);
+    const { userId, rawKey } = await seedApiKey();
+    const bookId = await seedOrganizedBook(userId);
     const { app, organizeJobs } = createOrganizeRecordingApp();
 
     const res = await patch(app, rawKey, bookId, { tags: ["favourite"] });

@@ -1,6 +1,10 @@
 import { sql } from "drizzle-orm";
 import { books, readingAggregate, readingProgress, readingProgressHistory } from "#db";
 import type { Db } from "#db";
+// Relative, not "#db/rows": a package-private subpath resolves against the
+// IMPORTING package, and apps/web typechecks this file transitively through the
+// RPC client's exported types (see the same note in lib/auth.ts).
+import { rowsOf } from "../db/rows.js";
 
 // ── Types & Constants ────────────────────────────────────────────
 
@@ -64,17 +68,14 @@ export function computeReadingStatus(
 
 export async function getReadingStatusCounts(
   db: Db,
-  apiKeyId?: string,
+  userId?: string,
 ): Promise<Record<ReadingStatus, number>> {
-  const rpFilter = apiKeyId ? sql`AND rp.api_key_id = ${apiKeyId}` : sql``;
-  const rphFilter = apiKeyId ? sql`AND rph.api_key_id = ${apiKeyId}` : sql``;
+  const rpFilter = userId ? sql`AND rp.user_id = ${userId}` : sql``;
+  const rphFilter = userId ? sql`AND rph.user_id = ${userId}` : sql``;
 
-  const aggregateFilter = apiKeyId ? sql`AND ra.api_key_id = ${apiKeyId}` : sql``;
+  const aggregateFilter = userId ? sql`AND ra.user_id = ${userId}` : sql``;
 
-  const result = await db.execute<{
-    reading_status: ReadingStatus;
-    count: string;
-  }>(sql`
+  const result = await db.execute(sql`
     WITH book_progress AS (
       SELECT
         b.id AS book_id,
@@ -127,7 +128,7 @@ export async function getReadingStatusCounts(
     paused: 0,
   };
 
-  for (const row of result as unknown as { reading_status: ReadingStatus; count: string }[]) {
+  for (const row of rowsOf<{ reading_status: ReadingStatus; count: string }>(result)) {
     counts[row.reading_status] = Number(row.count);
   }
 
@@ -143,7 +144,7 @@ export async function getBooksByReadingStatus(
     sort?: "title" | "author" | "percentage" | "lastRead";
     order?: "asc" | "desc";
     search?: string;
-    apiKeyId?: string;
+    userId?: string;
   } = {},
 ): Promise<{ books: BookWithProgress[]; total: number }> {
   const page = options.page ?? 1;
@@ -169,26 +170,12 @@ export async function getBooksByReadingStatus(
     ? sql`, ts_rank(b.search_vector, plainto_tsquery('english', ${options.search})) AS search_rank`
     : sql``;
 
-  const rpFilter = options.apiKeyId ? sql`AND rp.api_key_id = ${options.apiKeyId}` : sql``;
-  const rphFilter = options.apiKeyId ? sql`AND rph.api_key_id = ${options.apiKeyId}` : sql``;
-  const deviceFilter = options.apiKeyId ? sql`AND rp.api_key_id = ${options.apiKeyId}` : sql``;
-  const aggregateFilter = options.apiKeyId ? sql`AND ra.api_key_id = ${options.apiKeyId}` : sql``;
+  const rpFilter = options.userId ? sql`AND rp.user_id = ${options.userId}` : sql``;
+  const rphFilter = options.userId ? sql`AND rph.user_id = ${options.userId}` : sql``;
+  const deviceFilter = options.userId ? sql`AND rp.user_id = ${options.userId}` : sql``;
+  const aggregateFilter = options.userId ? sql`AND ra.user_id = ${options.userId}` : sql``;
 
-  const result = await db.execute<{
-    book_id: string;
-    title: string | null;
-    author: string | null;
-    cover_path: string | null;
-    isbn13: string | null;
-    isbn10: string | null;
-    genres: string[];
-    page_count: number | null;
-    max_percentage: string | null;
-    device: string | null;
-    last_activity: string | null;
-    reading_status: ReadingStatus;
-    total_count: string;
-  }>(sql`
+  const result = await db.execute(sql`
     WITH book_progress AS (
       SELECT
         b.id AS book_id,
@@ -272,7 +259,7 @@ export async function getBooksByReadingStatus(
     OFFSET ${offset}
   `);
 
-  const rows = result as unknown as {
+  const rows = rowsOf<{
     book_id: string;
     title: string | null;
     author: string | null;
@@ -286,7 +273,7 @@ export async function getBooksByReadingStatus(
     last_activity: string | null;
     reading_status: ReadingStatus;
     total_count: string;
-  }[];
+  }>(result);
 
   const total = rows.length > 0 ? Number(rows[0]!.total_count) : 0;
 

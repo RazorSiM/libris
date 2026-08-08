@@ -1,6 +1,6 @@
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
-import { deflateRawSync, inflateRawSync } from "node:zlib";
+import { crc32 as zlibCrc32, deflateRawSync, inflateRaw } from "node:zlib";
 
 // ZIP format constants
 export const EOCD_SIG = 0x06054b50;
@@ -8,6 +8,34 @@ export const CD_SIG = 0x02014b50;
 export const LOCAL_HEADER_SIG = 0x04034b50;
 export const EOCD_MIN_SIZE = 22;
 export const EOCD_MAX_COMMENT = 65535;
+export const MAX_ZIP_ENTRY_BYTES = 16 * 1024 * 1024;
+export const MAX_ZIP_ARCHIVE_BYTES = 64 * 1024 * 1024;
+/**
+ * Hard cap on central-directory records. A real EPUB has hundreds; 10,000 is
+ * generous. Without it a ~90 MB upload can declare millions of zero-payload
+ * entries: every byte budget here is computed from `uncompressedSize`, so an
+ * entry declaring size 0 costs nothing against them while still costing ~90
+ * bytes of heap in the entry array plus one open/read/close round trip in
+ * readAllZipEntries.
+ *
+ * Measured on Node 24 with 2M 47-byte records: 89.6 MB for the directory
+ * buffer, 181.5 MB of heap for the entry array, 391 MB peak RSS — enough to
+ * OOM-kill a 512 MB container along with the in-process HTTP server.
+ */
+export const MAX_ZIP_ENTRIES = 10_000;
+/**
+ * Hard cap on the central-directory buffer itself, which is read in one
+ * allocation before any per-entry limit can apply. 10,000 records with
+ * maximum-length names stay far below this.
+ */
+export const MAX_CENTRAL_DIRECTORY_BYTES = 4 * 1024 * 1024;
+
+export class ZipLimitError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ZipLimitError";
+  }
+}
 
 export interface ZipEntry {
   fileName: string;
@@ -57,12 +85,25 @@ export function findEocd(buf: Buffer): number {
   return -1;
 }
 
+/**
+ * Parse ZIP central-directory records.
+ *
+ * Throws {@link ZipLimitError} once {@link MAX_ZIP_ENTRIES} records have been
+ * read, so every caller — readEpubOpf, readAllZipEntries,
+ * extractEpubCoverImage, extractEpubTextSample — inherits the cap.
+ */
 export function parseCentralDirectory(buf: Buffer, cdSize: number): ZipEntry[] {
   const entries: ZipEntry[] = [];
   let pos = 0;
 
   while (pos + 46 <= cdSize && pos + 46 <= buf.length) {
     if (buf.readUInt32LE(pos) !== CD_SIG) break;
+
+    if (entries.length >= MAX_ZIP_ENTRIES) {
+      throw new ZipLimitError(
+        `ZIP central directory declares more than ${MAX_ZIP_ENTRIES} entries`,
+      );
+    }
 
     const compression = buf.readUInt16LE(pos + 10);
     const compressedSize = buf.readUInt32LE(pos + 20);
@@ -71,6 +112,11 @@ export function parseCentralDirectory(buf: Buffer, cdSize: number): ZipEntry[] {
     const extraLength = buf.readUInt16LE(pos + 30);
     const commentLength = buf.readUInt16LE(pos + 32);
     const localHeaderOffset = buf.readUInt32LE(pos + 42);
+
+    // No legitimate archive has an unnamed entry; a 46-byte record with no name
+    // is the cheapest possible way to inflate the entry count. Treat it as the
+    // end of the directory.
+    if (fileNameLength === 0) break;
 
     const fileNameStart = pos + 46;
     if (fileNameStart + fileNameLength > buf.length) break;
@@ -91,7 +137,40 @@ export function parseCentralDirectory(buf: Buffer, cdSize: number): ZipEntry[] {
   return entries;
 }
 
-export async function readZipEntry(filePath: string, entry: ZipEntry): Promise<Buffer | null> {
+/**
+ * Read the central directory off disk and parse it, bounding both the buffer
+ * size and the entry count before either can be attacker-controlled.
+ */
+export async function readCentralDirectory(
+  filePath: string,
+  cdOffset: number,
+  cdSize: number,
+): Promise<ZipEntry[]> {
+  if (cdSize > MAX_CENTRAL_DIRECTORY_BYTES) {
+    throw new ZipLimitError(
+      `ZIP central directory exceeds the ${MAX_CENTRAL_DIRECTORY_BYTES}-byte limit`,
+    );
+  }
+  const cdBuf = await readRange(filePath, cdOffset, cdSize);
+  return parseCentralDirectory(cdBuf, cdSize);
+}
+
+interface ReadZipEntryOptions {
+  maxOutputBytes?: number;
+  label?: string;
+}
+
+export async function readZipEntry(
+  filePath: string,
+  entry: ZipEntry,
+  options: ReadZipEntryOptions = {},
+): Promise<Buffer | null> {
+  const maxOutputBytes = options.maxOutputBytes ?? MAX_ZIP_ENTRY_BYTES;
+  const label = options.label ?? `ZIP entry ${JSON.stringify(entry.fileName)}`;
+  if (entry.uncompressedSize > maxOutputBytes) {
+    throw new ZipLimitError(`${label} exceeds the ${maxOutputBytes}-byte uncompressed size limit`);
+  }
+
   // Read local file header to get the actual data offset (extra field may differ from CD)
   const headerSize = 30 + 512; // 30 fixed + generous room for filename + extra
   const headerBuf = await readRange(filePath, entry.localHeaderOffset, headerSize);
@@ -107,11 +186,27 @@ export async function readZipEntry(filePath: string, entry: ZipEntry): Promise<B
 
   const dataBuf = await readRange(filePath, dataOffset, readSize);
 
-  if (entry.compression === 0) return dataBuf;
+  if (entry.compression === 0) {
+    if (dataBuf.length > maxOutputBytes) {
+      throw new ZipLimitError(`${label} exceeds the ${maxOutputBytes}-byte output limit`);
+    }
+    return dataBuf;
+  }
   if (entry.compression === 8) {
     try {
-      return inflateRawSync(dataBuf);
-    } catch {
+      return await new Promise<Buffer>((resolve, reject) => {
+        inflateRaw(dataBuf, { maxOutputLength: maxOutputBytes }, (error, result) => {
+          if (error) reject(error);
+          else resolve(result);
+        });
+      });
+    } catch (error: unknown) {
+      if (
+        (error as NodeJS.ErrnoException).code === "ERR_BUFFER_TOO_LARGE" ||
+        String(error).includes("maxOutputLength")
+      ) {
+        throw new ZipLimitError(`${label} exceeds the ${maxOutputBytes}-byte output limit`);
+      }
       return null;
     }
   }
@@ -122,7 +217,10 @@ export async function readZipEntry(filePath: string, entry: ZipEntry): Promise<B
 
 export async function readAllZipEntries(
   filePath: string,
+  options: { maxEntryBytes?: number; maxTotalBytes?: number } = {},
 ): Promise<{ entries: ZipEntry[]; rawEntries: Map<string, Buffer> }> {
+  const maxEntryBytes = options.maxEntryBytes ?? MAX_ZIP_ENTRY_BYTES;
+  const maxTotalBytes = options.maxTotalBytes ?? MAX_ZIP_ARCHIVE_BYTES;
   const fileInfo = await stat(filePath);
   const fileSize = Number(fileInfo.size);
   if (fileSize < EOCD_MIN_SIZE) {
@@ -141,13 +239,30 @@ export async function readAllZipEntries(
   const cdSize = tailBuf.readUInt32LE(eocdPos + 12);
   const cdOffset = tailBuf.readUInt32LE(eocdPos + 16);
 
-  const cdBuf = await readRange(filePath, cdOffset, cdSize);
-  const entries = parseCentralDirectory(cdBuf, cdSize);
+  const entries = await readCentralDirectory(filePath, cdOffset, cdSize);
+
+  let declaredTotal = 0;
+  for (const entry of entries) {
+    if (entry.uncompressedSize > maxEntryBytes) {
+      throw new ZipLimitError(
+        `ZIP entry ${JSON.stringify(entry.fileName)} exceeds the ${maxEntryBytes}-byte uncompressed size limit`,
+      );
+    }
+    declaredTotal += entry.uncompressedSize;
+    if (declaredTotal > maxTotalBytes) {
+      throw new ZipLimitError(`ZIP archive exceeds the ${maxTotalBytes}-byte output budget`);
+    }
+  }
 
   const rawEntries = new Map<string, Buffer>();
+  let actualTotal = 0;
   for (const entry of entries) {
-    const data = await readZipEntry(filePath, entry);
+    const data = await readZipEntry(filePath, entry, { maxOutputBytes: maxEntryBytes });
     if (data) {
+      actualTotal += data.length;
+      if (actualTotal > maxTotalBytes) {
+        throw new ZipLimitError(`ZIP archive exceeds the ${maxTotalBytes}-byte output budget`);
+      }
       rawEntries.set(entry.fileName, data);
     }
   }
@@ -158,14 +273,7 @@ export async function readAllZipEntries(
 // --- CRC-32 ---
 
 export function crc32(buf: Buffer): number {
-  let crc = 0xffffffff;
-  for (let i = 0; i < buf.length; i++) {
-    crc ^= buf[i]!;
-    for (let j = 0; j < 8; j++) {
-      crc = crc & 1 ? (crc >>> 1) ^ 0xedb88320 : crc >>> 1;
-    }
-  }
-  return (crc ^ 0xffffffff) >>> 0;
+  return zlibCrc32(buf);
 }
 
 // --- ZIP builder ---
@@ -192,7 +300,7 @@ export function buildZip(entries: ZipBuildEntry[]): Buffer {
 
     // mimetype must be STORE per EPUB spec; others default to compress
     const isMimetype = entry.name === "mimetype";
-    const shouldCompress = isMimetype ? false : (entry.compress ?? false);
+    const shouldCompress = isMimetype ? false : (entry.compress ?? true);
     const compressed = shouldCompress ? deflateRawSync(uncompressed) : uncompressed;
     const compression = shouldCompress ? 8 : 0;
     const crcVal = crc32(uncompressed);

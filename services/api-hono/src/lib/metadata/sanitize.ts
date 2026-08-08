@@ -13,7 +13,7 @@ export function stripHtml(html: string): string {
     .replace(/&#39;/g, "'")
     .replace(/&nbsp;/g, " ");
 
-  return decoded
+  return stripXmlInvalidCharacters(decoded)
     .replace(/<br\s*\/?>/gi, "\n")
     .replace(/<\/p>/gi, "\n")
     .replace(/<[^>]+>/g, "")
@@ -76,3 +76,4 @@ export function isValidIsbn(isbn: string): boolean {
   }
   return false;
 }
+import { stripXmlInvalidCharacters } from "../../shared/opds-xml.js";

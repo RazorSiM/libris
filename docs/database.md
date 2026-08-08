@@ -19,31 +19,17 @@ Values: `unread`, `reading`, `finished`, `paused`
 
 | Table | Description |
 | ----- | ----------- |
-| `api_keys` | API key records — the identity table (hashed key, label, is_admin, timestamps) |
 | `books` | Main book records with status, metadata, and the full-text search vector |
 | `book_files` | Physical file storage per book (format, checksums, content hashes, paths) |
 | `book_metadata_candidates` | Metadata candidates per book and source (file, hardcover) shown during review |
 | `reading_progress` | Current KoReader/KoSync reading position per document and device |
 | `reading_progress_history` | Append-only history of reading-progress snapshots |
 | `reading_aggregate` | Per-(user, book) reading lifecycle: effective status plus started/finished/paused dates and any manual override |
-| `service_credentials` | Per-user credentials for OPDS, KoSync, and Hardcover (bcrypt or sealed token) |
+| `service_credentials` | Per-user Hardcover API token (sealed, reversible). `username` is a label, not an identity — it is not unique across users |
+| `kosync_credentials` | Per-user KoSync login: the username KOReader sends plus a sha256 of the secret it puts on the wire |
 | `app_settings` | Global key/value application settings (e.g. Hardcover metadata/sync toggles) |
-| `upload_registry` | Checksum → uploader (api_key) ownership mapping consumed by the book-detected worker |
+| `upload_registry` | Checksum → uploader (user) ownership mapping consumed by the book-detected worker |
 | `hardcover_sync_log` | Per-(user, book) Hardcover sync tracking and last status |
-
-### `api_keys`
-
-| Column | Type | Nullable | Default | Notes |
-| ------ | ---- | -------- | ------- | ----- |
-| `id` | uuid | No | random() | PK |
-| `key_prefix` | text | No | — |  |
-| `key_hash` | text | No | — |  |
-| `label` | text | No | — |  |
-| `is_admin` | boolean | No | false |  |
-| `created_at` | timestamptz | No | now() |  |
-| `last_used_at` | timestamptz | Yes | — |  |
-
-**Indexes:** `api_keys_key_prefix_idx`
 
 ### `books`
 
@@ -68,7 +54,7 @@ Values: `unread`, `reading`, `finished`, `paused`
 | `tags` | text[] | No | [] |  |
 | `hardcover_book_id` | integer | Yes | — |  |
 | `hardcover_edition_id` | integer | Yes | — |  |
-| `created_by` | uuid | Yes | — | FK → `apiKeys.id` (ON DELETE set null) |
+| `created_by` | text | No | — | FK → `users.id` (ON DELETE restrict) |
 | `possible_duplicate_of` | uuid | Yes | — |  |
 | `approved_at` | timestamptz | Yes | — |  |
 | `created_at` | timestamptz | No | now() |  |
@@ -116,7 +102,7 @@ Values: `unread`, `reading`, `finished`, `paused`
 | ------ | ---- | -------- | ------- | ----- |
 | `id` | uuid | No | random() | PK |
 | `book_id` | uuid | Yes | — | FK → `books.id` (ON DELETE set null) |
-| `api_key_id` | uuid | No | — | FK → `apiKeys.id` (ON DELETE cascade) |
+| `user_id` | text | No | — | FK → `users.id` (ON DELETE cascade) |
 | `document` | text | No | — |  |
 | `device` | text | No | — |  |
 | `device_id` | text | Yes | — |  |
@@ -126,7 +112,7 @@ Values: `unread`, `reading`, `finished`, `paused`
 | `raw_payload` | jsonb | Yes | — |  |
 | `updated_at` | timestamptz | No | now() |  |
 
-**Indexes:** `reading_progress_device_idx`, `reading_progress_book_id_idx`, `reading_progress_api_key_id_idx`
+**Indexes:** `reading_progress_device_idx`, `reading_progress_book_id_idx`, `reading_progress_user_id_idx`
 
 ### `reading_progress_history`
 
@@ -134,7 +120,7 @@ Values: `unread`, `reading`, `finished`, `paused`
 | ------ | ---- | -------- | ------- | ----- |
 | `id` | uuid | No | random() | PK |
 | `book_id` | uuid | Yes | — | FK → `books.id` (ON DELETE set null) |
-| `api_key_id` | uuid | Yes | — | FK → `apiKeys.id` (ON DELETE set null) |
+| `user_id` | text | Yes | — | FK → `users.id` (ON DELETE set null) |
 | `document` | text | No | — |  |
 | `device` | text | No | — |  |
 | `progress` | text | No | — |  |
@@ -142,14 +128,14 @@ Values: `unread`, `reading`, `finished`, `paused`
 | `timestamp` | bigint | No | 0 |  |
 | `created_at` | timestamptz | No | now() |  |
 
-**Indexes:** `reading_progress_history_document_created_at_idx`, `reading_progress_history_created_at_idx`, `reading_progress_history_book_id_idx`, `reading_progress_history_api_key_id_idx`
+**Indexes:** `reading_progress_history_document_created_at_idx`, `reading_progress_history_created_at_idx`, `reading_progress_history_book_id_idx`, `reading_progress_history_user_id_idx`
 
 ### `reading_aggregate`
 
 | Column | Type | Nullable | Default | Notes |
 | ------ | ---- | -------- | ------- | ----- |
 | `id` | uuid | No | random() | PK |
-| `api_key_id` | uuid | No | — | FK → `apiKeys.id` (ON DELETE cascade) |
+| `user_id` | text | No | — | FK → `users.id` (ON DELETE cascade) |
 | `book_id` | uuid | Yes | — | FK → `books.id` (ON DELETE set null) |
 | `started_at` | timestamptz | Yes | — |  |
 | `finished_at` | timestamptz | Yes | — |  |
@@ -162,7 +148,7 @@ Values: `unread`, `reading`, `finished`, `paused`
 | `external_status_synced_at` | timestamptz | Yes | — |  |
 | `updated_at` | timestamptz | No | now() |  |
 
-**Indexes:** `reading_aggregate_book_id_idx`, `reading_aggregate_api_key_id_idx`
+**Indexes:** `reading_aggregate_book_id_idx`, `reading_aggregate_user_id_idx`
 
 ### `service_credentials`
 
@@ -170,13 +156,26 @@ Values: `unread`, `reading`, `finished`, `paused`
 | ------ | ---- | -------- | ------- | ----- |
 | `id` | uuid | No | random() | PK |
 | `service` | text | No | — |  |
-| `api_key_id` | uuid | No | — | FK → `apiKeys.id` (ON DELETE cascade) |
+| `user_id` | text | No | — | FK → `users.id` (ON DELETE cascade) |
 | `username` | text | No | — |  |
 | `password_hash` | text | No | — |  |
 | `created_at` | timestamptz | No | now() |  |
 | `updated_at` | timestamptz | No | now() |  |
 
-**Indexes:** `service_credentials_api_key_id_idx`, `service_credentials_service_username_uniq` (unique)
+**Indexes:** `service_credentials_user_id_idx`
+
+### `kosync_credentials`
+
+| Column | Type | Nullable | Default | Notes |
+| ------ | ---- | -------- | ------- | ----- |
+| `id` | uuid | No | random() | PK |
+| `user_id` | text | No | — | FK → `users.id` (ON DELETE cascade) |
+| `username` | text | No | — |  |
+| `secret_hash` | text | No | — |  |
+| `created_at` | timestamptz | No | now() |  |
+| `updated_at` | timestamptz | No | now() |  |
+
+**Indexes:** `kosync_credentials_username_uniq` (unique), `kosync_credentials_user_id_uniq` (unique)
 
 ### `app_settings`
 
@@ -192,7 +191,7 @@ Values: `unread`, `reading`, `finished`, `paused`
 | ------ | ---- | -------- | ------- | ----- |
 | `id` | uuid | No | random() | PK |
 | `checksum` | text | No | — |  |
-| `api_key_id` | uuid | No | — | FK → `apiKeys.id` (ON DELETE cascade) |
+| `user_id` | text | No | — | FK → `users.id` (ON DELETE cascade) |
 | `filename` | text | No | — |  |
 | `created_at` | timestamptz | No | now() |  |
 
@@ -202,7 +201,7 @@ Values: `unread`, `reading`, `finished`, `paused`
 | ------ | ---- | -------- | ------- | ----- |
 | `id` | uuid | No | random() | PK |
 | `book_id` | uuid | No | — | FK → `books.id` (ON DELETE cascade) |
-| `api_key_id` | uuid | No | — | FK → `apiKeys.id` (ON DELETE cascade) |
+| `user_id` | text | No | — | FK → `users.id` (ON DELETE cascade) |
 | `hardcover_user_book_id` | integer | Yes | — |  |
 | `hardcover_read_id` | integer | Yes | — |  |
 | `last_status` | text | Yes | — |  |
@@ -212,31 +211,33 @@ Values: `unread`, `reading`, `finished`, `paused`
 | `created_at` | timestamptz | No | now() |  |
 | `updated_at` | timestamptz | No | now() |  |
 
-**Indexes:** `hardcover_sync_log_status_idx`, `hardcover_sync_log_last_synced_at_idx`, `hardcover_sync_log_api_key_id_idx`
+**Indexes:** `hardcover_sync_log_status_idx`, `hardcover_sync_log_last_synced_at_idx`, `hardcover_sync_log_user_id_idx`
 
 ## Notes
 
 - `books.language` holds a canonical lowercase ISO 639-1 code (e.g. `en`, `fr`); arbitrary input is normalized by `services/api-hono/src/lib/languages.ts`.
 - `book_files.format`, `book_metadata_candidates.source`, `service_credentials.service`, and `hardcover_sync_log.last_status` are free-text columns (not Postgres enums) even though they hold format/source/status-like values.
 - `books.search_vector` is excluded from all API responses — the API selects the `bookColumns` projection, which omits it.
-- `reading_progress`, `reading_progress_history`, and `reading_aggregate` use `ON DELETE SET NULL` on `book_id` so reading history survives a book deletion, while their `api_key_id` cascades (or is set null for history).
+- `reading_progress`, `reading_progress_history`, and `reading_aggregate` use `ON DELETE SET NULL` on `book_id` so reading history survives a book deletion, while their `user_id` cascades (or is set null for history).
+- Better Auth owns `users`, `sessions`, `accounts`, `verifications` and `api_keys` — they are declared in `services/api-hono/src/db/auth-schema.ts` and are not listed above.
 - The trigram indexes (`*_trgm_idx`) require the `pg_trgm` extension; the full-text `*_search_vector_idx` is a GIN index over the generated `tsvector`.
 
 ## Relationships
 
 ```mermaid
 erDiagram
-    apiKeys ||--o{ books : "has many"
+    users ||--o{ books : "has many"
     books ||--o{ book_files : "has many"
     books ||--o{ book_metadata_candidates : "has many"
     books ||--o{ reading_progress : "has many"
-    apiKeys ||--o{ reading_progress : "has many"
+    users ||--o{ reading_progress : "has many"
     books ||--o{ reading_progress_history : "has many"
-    apiKeys ||--o{ reading_progress_history : "has many"
-    apiKeys ||--o{ reading_aggregate : "has many"
+    users ||--o{ reading_progress_history : "has many"
+    users ||--o{ reading_aggregate : "has many"
     books ||--o{ reading_aggregate : "has many"
-    apiKeys ||--o{ service_credentials : "has many"
-    apiKeys ||--o{ upload_registry : "has many"
+    users ||--o{ service_credentials : "has many"
+    users ||--o{ kosync_credentials : "has many"
+    users ||--o{ upload_registry : "has many"
     books ||--o{ hardcover_sync_log : "has many"
-    apiKeys ||--o{ hardcover_sync_log : "has many"
+    users ||--o{ hardcover_sync_log : "has many"
 ```

@@ -1,13 +1,13 @@
 import type { PGlite } from "@electric-sql/pglite";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vite-plus/test";
 import type { Db } from "../db/index.js";
-import { apiKeys, books, readingAggregate, readingProgress } from "../db/schema";
-import { createTestDb, type TestDb } from "../db/test-utils";
+import { books, readingAggregate, readingProgress, users } from "../db/schema";
+import { createTestDb, seedUser, type TestDb } from "../db/test-utils";
 import { upsertReadingAggregate } from "./reading-aggregate";
 
 let pglite: PGlite;
 let db: TestDb;
-let apiKeyId: string;
+let userId: string;
 let bookId: string;
 const document = "doc-hash-1";
 
@@ -16,27 +16,24 @@ const document = "doc-hash-1";
 // can be invoked unchanged.
 const asDb = (): Db => db as unknown as Db;
 
-async function seedKeyAndBook(): Promise<{ apiKeyId: string; bookId: string }> {
-  const [key] = await db
-    .insert(apiKeys)
-    .values({ keyPrefix: "test", keyHash: `kh-${Math.random()}`, label: "test" })
-    .returning({ id: apiKeys.id });
+async function seedUserAndBook(): Promise<{ userId: string; bookId: string }> {
+  const owner = await seedUser(db);
   const [book] = await db
     .insert(books)
-    .values({ status: "organized", title: "Test", author: "T" })
+    .values({ status: "organized", title: "Test", author: "T", createdBy: owner })
     .returning({ id: books.id });
-  return { apiKeyId: key!.id, bookId: book!.id };
+  return { userId: owner, bookId: book!.id };
 }
 
 async function pushProgress(
-  apiKeyId: string,
+  userId: string,
   bookId: string,
   device: string,
   percentage: number,
   timestamp: bigint,
 ): Promise<void> {
   await db.insert(readingProgress).values({
-    apiKeyId,
+    userId,
     bookId,
     document,
     device,
@@ -61,16 +58,16 @@ afterEach(async () => {
   await db.delete(readingAggregate);
   await db.delete(readingProgress);
   await db.delete(books);
-  await db.delete(apiKeys);
+  await db.delete(users);
 });
 
 describe("upsertReadingAggregate", () => {
   it("seeds startedAt from the earliest non-zero progress row", async () => {
-    ({ apiKeyId, bookId } = await seedKeyAndBook());
-    await pushProgress(apiKeyId, bookId, "phone", 0.1, 1000n);
-    await pushProgress(apiKeyId, bookId, "kindle", 0.2, 2000n);
+    ({ userId, bookId } = await seedUserAndBook());
+    await pushProgress(userId, bookId, "phone", 0.1, 1000n);
+    await pushProgress(userId, bookId, "kindle", 0.2, 2000n);
 
-    await upsertReadingAggregate(asDb(), apiKeyId, bookId, document);
+    await upsertReadingAggregate(asDb(), userId, bookId, document);
 
     const [row] = await db.select().from(readingAggregate);
     expect(row).toBeDefined();
@@ -79,47 +76,47 @@ describe("upsertReadingAggregate", () => {
   });
 
   it("seeds finishedAt only when percentage crosses FINISHED_THRESHOLD", async () => {
-    ({ apiKeyId, bookId } = await seedKeyAndBook());
-    await pushProgress(apiKeyId, bookId, "phone", 0.5, 1000n);
+    ({ userId, bookId } = await seedUserAndBook());
+    await pushProgress(userId, bookId, "phone", 0.5, 1000n);
 
-    await upsertReadingAggregate(asDb(), apiKeyId, bookId, document);
+    await upsertReadingAggregate(asDb(), userId, bookId, document);
     let [row] = await db.select().from(readingAggregate);
     expect(row!.finishedAt).toBeNull();
 
-    await pushProgress(apiKeyId, bookId, "kindle", 0.99, 5000n);
-    await upsertReadingAggregate(asDb(), apiKeyId, bookId, document);
+    await pushProgress(userId, bookId, "kindle", 0.99, 5000n);
+    await upsertReadingAggregate(asDb(), userId, bookId, document);
     [row] = await db.select().from(readingAggregate);
     expect(row!.finishedAt).toEqual(new Date(5000_000));
   });
 
   it("does not overwrite an existing startedAt or finishedAt", async () => {
-    ({ apiKeyId, bookId } = await seedKeyAndBook());
-    await pushProgress(apiKeyId, bookId, "phone", 0.99, 1000n);
-    await upsertReadingAggregate(asDb(), apiKeyId, bookId, document);
+    ({ userId, bookId } = await seedUserAndBook());
+    await pushProgress(userId, bookId, "phone", 0.99, 1000n);
+    await upsertReadingAggregate(asDb(), userId, bookId, document);
 
     // Subsequent rereads — newer timestamps but values should be preserved.
-    await pushProgress(apiKeyId, bookId, "kindle", 0.5, 9000n);
-    await upsertReadingAggregate(asDb(), apiKeyId, bookId, document);
+    await pushProgress(userId, bookId, "kindle", 0.5, 9000n);
+    await upsertReadingAggregate(asDb(), userId, bookId, document);
     const [row] = await db.select().from(readingAggregate);
     expect(row!.startedAt).toEqual(new Date(1000_000));
     expect(row!.finishedAt).toEqual(new Date(1000_000));
   });
 
   it("is a no-op when no row has percentage > 0", async () => {
-    ({ apiKeyId, bookId } = await seedKeyAndBook());
-    await pushProgress(apiKeyId, bookId, "phone", 0, 1000n);
+    ({ userId, bookId } = await seedUserAndBook());
+    await pushProgress(userId, bookId, "phone", 0, 1000n);
 
-    await upsertReadingAggregate(asDb(), apiKeyId, bookId, document);
+    await upsertReadingAggregate(asDb(), userId, bookId, document);
     const rows = await db.select().from(readingAggregate);
     expect(rows).toHaveLength(0);
   });
 
   it("preserves manual override fields when kosync upserts new progress", async () => {
-    ({ apiKeyId, bookId } = await seedKeyAndBook());
+    ({ userId, bookId } = await seedUserAndBook());
     // Seed a manual override directly.
     const manualSet = new Date("2026-04-01T00:00:00Z");
     await db.insert(readingAggregate).values({
-      apiKeyId,
+      userId,
       bookId,
       manualStatus: "finished",
       manualStartedAt: new Date("2026-01-01T00:00:00Z"),
@@ -129,8 +126,8 @@ describe("upsertReadingAggregate", () => {
     });
 
     // Now simulate a kosync write driving the aggregate.
-    await pushProgress(apiKeyId, bookId, "phone", 0.5, 5000n);
-    await upsertReadingAggregate(asDb(), apiKeyId, bookId, document);
+    await pushProgress(userId, bookId, "phone", 0.5, 5000n);
+    await upsertReadingAggregate(asDb(), userId, bookId, document);
 
     const [row] = await db.select().from(readingAggregate);
     // Auto fields populated by kosync.
@@ -142,15 +139,15 @@ describe("upsertReadingAggregate", () => {
     expect(row!.manualSetAt).toEqual(manualSet);
   });
 
-  it("scopes by (apiKeyId, document) — does not see other users' progress", async () => {
-    ({ apiKeyId, bookId } = await seedKeyAndBook());
-    const other = await seedKeyAndBook();
-    await pushProgress(other.apiKeyId, other.bookId, "phone", 0.99, 100n);
-    await pushProgress(apiKeyId, bookId, "phone", 0.5, 5000n);
+  it("scopes by (userId, document) — does not see other users' progress", async () => {
+    ({ userId, bookId } = await seedUserAndBook());
+    const other = await seedUserAndBook();
+    await pushProgress(other.userId, other.bookId, "phone", 0.99, 100n);
+    await pushProgress(userId, bookId, "phone", 0.5, 5000n);
 
-    await upsertReadingAggregate(asDb(), apiKeyId, bookId, document);
+    await upsertReadingAggregate(asDb(), userId, bookId, document);
 
-    const ours = (await db.select().from(readingAggregate)).filter((r) => r.apiKeyId === apiKeyId);
+    const ours = (await db.select().from(readingAggregate)).filter((r) => r.userId === userId);
     expect(ours).toHaveLength(1);
     expect(ours[0]!.startedAt).toEqual(new Date(5000_000));
     expect(ours[0]!.finishedAt).toBeNull();

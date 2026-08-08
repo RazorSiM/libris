@@ -16,7 +16,7 @@ import {
   invalidateServerCache,
   seedOrganizedBook,
   seedBookFile,
-  getAdminKeyId,
+  getAdminUserId,
   waitForAllQueuesIdle,
 } from "./helpers";
 
@@ -26,12 +26,12 @@ import {
 async function seedProgress(contentHash: string, device: string, percentage: number, daysAgo = 0) {
   const sql = getSql();
   const ts = Math.floor((Date.now() - daysAgo * 86400000) / 1000);
-  const apiKeyId = await getAdminKeyId();
+  const ownerId = getAdminUserId();
   try {
     await sql`
-      INSERT INTO reading_progress (api_key_id, document, device, progress, percentage, timestamp)
-      VALUES (${apiKeyId}, ${contentHash}, ${device}, ${"pos"}, ${percentage.toFixed(4)}, ${ts})
-      ON CONFLICT (api_key_id, document, device) DO UPDATE SET percentage = ${percentage.toFixed(4)}, timestamp = ${ts}, updated_at = NOW()
+      INSERT INTO reading_progress (user_id, document, device, progress, percentage, timestamp)
+      VALUES (${ownerId}, ${contentHash}, ${device}, ${"pos"}, ${percentage.toFixed(4)}, ${ts})
+      ON CONFLICT (user_id, document, device) DO UPDATE SET percentage = ${percentage.toFixed(4)}, timestamp = ${ts}, updated_at = NOW()
     `;
   } finally {
     await sql.end();

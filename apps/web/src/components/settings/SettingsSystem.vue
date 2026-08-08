@@ -15,7 +15,9 @@ function healthStatusColor(status: string) {
 
 const totalJobs = computed(() => {
   if (!jobData.value?.queues) return null;
-  const totals = { waiting: 0, active: 0, completed: 0, failed: 0, delayed: 0, paused: 0 };
+  // `pausedQueues` counts queues, not jobs: a paused queue leaves its jobs in
+  // `waiting`, so there is no separate pool of paused jobs to total up.
+  const totals = { waiting: 0, active: 0, completed: 0, failed: 0, delayed: 0, pausedQueues: 0 };
   for (const counts of Object.values(
     jobData.value.queues as Record<
       string,
@@ -25,7 +27,7 @@ const totalJobs = computed(() => {
         completed: number;
         failed: number;
         delayed: number;
-        paused: number;
+        isPaused: boolean;
       }
     >,
   )) {
@@ -34,7 +36,7 @@ const totalJobs = computed(() => {
     totals.completed += counts.completed;
     totals.failed += counts.failed;
     totals.delayed += counts.delayed;
-    totals.paused += counts.paused;
+    if (counts.isPaused) totals.pausedQueues += 1;
   }
   return totals;
 });
@@ -143,8 +145,8 @@ const totalJobs = computed(() => {
             <div class="text-xs text-muted">Delayed</div>
           </div>
           <div class="rounded-md border border-default p-2">
-            <div class="text-lg font-semibold text-muted">{{ totalJobs.paused }}</div>
-            <div class="text-xs text-muted">Paused</div>
+            <div class="text-lg font-semibold text-muted">{{ totalJobs.pausedQueues }}</div>
+            <div class="text-xs text-muted">Paused queues</div>
           </div>
         </div>
 
@@ -173,9 +175,7 @@ const totalJobs = computed(() => {
             <span
               >Delayed: <strong class="text-warning">{{ counts.delayed }}</strong></span
             >
-            <span
-              >Paused: <strong>{{ counts.paused }}</strong></span
-            >
+            <span v-if="counts.isPaused" class="text-warning"><strong>Paused</strong></span>
           </div>
         </div>
 

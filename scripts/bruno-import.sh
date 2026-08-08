@@ -82,6 +82,19 @@ bru import openapi \
   --collection-name "$COLLECTION_NAME" \
   --group-by tags
 
+# The OpenAPI spec intentionally describes application responses rather than a
+# global security scheme: browser routes use Better Auth cookies, while Bruno,
+# curl, and automation use app passwords. Give the generated collection the
+# latter as its default so every imported request that says `auth: inherit`
+# sends the same Authorization header as those non-browser clients.
+cat >> "$BRUNO_DIR/opencollection.yml" << 'AUTHEOF'
+
+request:
+  auth:
+    type: bearer
+    token: "{{apiKey}}"
+AUTHEOF
+
 rm -f "$spec_file"
 
 # Remove internal/test endpoints
@@ -94,14 +107,23 @@ if [ -n "$env_backup" ] && [ -d "$env_backup" ]; then
   cp -r "$env_backup/"* "$BRUNO_DIR/environments/" 2>/dev/null || true
   rm -rf "$env_backup"
   echo "Restored environment files"
-else
-  cat > "$BRUNO_DIR/environments/Local.bru" << 'ENVEOF'
-vars {
-  baseUrl: http://localhost:3000
-}
+fi
+
+# OpenCollection environments use YAML. Older generated collections used the
+# legacy .bru format, which the CLI does not load for an OpenCollection.
+if [ ! -f "$BRUNO_DIR/environments/Local.yml" ]; then
+  cat > "$BRUNO_DIR/environments/Local.yml" << 'ENVEOF'
+name: Local
+variables:
+  - name: baseUrl
+    value: http://localhost:3000
+  - name: apiKey
+    value: ""
 ENVEOF
   echo "Created default Local environment"
 fi
+
+rm -f "$BRUNO_DIR/environments/Local.bru"
 
 echo ""
 echo "Bruno collection generated at: $BRUNO_DIR"

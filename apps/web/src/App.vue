@@ -2,12 +2,15 @@
 import { computed } from "vue";
 import { useHead } from "@unhead/vue";
 import { useColorMode } from "@vueuse/core";
+import AuthLayout from "./layouts/auth.vue";
 import DefaultLayout from "./layouts/default.vue";
 
 const colorMode = useColorMode();
+const route = useRoute();
 useTheme();
 
 const color = computed(() => (colorMode.value === "dark" ? "#1b1718" : "white"));
+const layout = computed(() => (route.meta.layout === false ? AuthLayout : DefaultLayout));
 
 useHead({
   title: "Libris",
@@ -22,8 +25,8 @@ useHead({
 
 <template>
   <UApp>
-    <DefaultLayout>
+    <component :is="layout">
       <RouterView />
-    </DefaultLayout>
+    </component>
   </UApp>
 </template>

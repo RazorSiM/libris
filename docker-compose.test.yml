@@ -13,13 +13,17 @@ services:
       POSTGRES_DB: libris_test
       POSTGRES_USER: libris_test
       POSTGRES_PASSWORD: libris_test
+      # Off /var/lib/postgresql/data on purpose: that path is a declared VOLUME
+      # in the postgres image, and podman then rejects the tmpfs below as a
+      # "duplicate mount destination". Any path outside the image's volumes works.
+      PGDATA: /pgdata
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U libris_test -d libris_test"]
       interval: 2s
       timeout: 5s
       retries: 10
     tmpfs:
-      - /var/lib/postgresql/data
+      - /pgdata
 
   redis:
     image: redis:7
@@ -42,7 +46,9 @@ services:
   # `n` before installing. CI gets the same result a different way — its
   # playwright container runs setup-vp with node-version-file.
   playwright:
-    image: mcr.microsoft.com/playwright:v1.60.0-noble
+    # Keep in step with the catalog's @playwright/test — a mismatched client
+    # fails at launch with "Executable doesn't exist at /ms-playwright/...".
+    image: mcr.microsoft.com/playwright:v1.62.1-noble
     profiles: ["e2e"]
     working_dir: /repo
     environment:
@@ -53,12 +59,24 @@ services:
       POSTGRES_DB: libris_test
       REDIS_HOST: redis
       REDIS_PORT: "6379"
+      NODE_ENV: development
+      LIBRIS_COOKIE_SECURE: "0"
       LIBRIS_INBOX_PATH: /repo/tmp/test-inbox
       LIBRIS_LIBRARY_PATH: /repo/tmp/test-library
-      API_SECRET_KEY: e2e-test-secret-key-minimum-32-chars!
-      COOKIE_DOMAIN: ""
+      # Throwaway, but generated with `openssl rand -hex 32`: the API rejects
+      # published placeholders and low-diversity secrets at startup, and
+      # middleware/auth.ts refuses a TEST_ROUTE_TOKEN under 32 bytes by 401ing
+      # every /__test/ call rather than failing loudly.
+      API_SECRET_KEY: 1e368ee3513dd6e7807d83fdcca3e0a2dc06e66d70ab903298c5130740ca9669
+      TEST_ROUTE_TOKEN: 2264bacc352498319d641fb2bc92228c83cda488e1bc8676e87623dfc8cd1455
+      BETTER_AUTH_SECRET: f46f4321bb1c145197e08b5f773973faa4f70b0aefcdd9a3d09736e62b37a462
       MIGRATIONS_PATH: /repo/services/api-hono/migrations
       E2E_DOCKER: "1"
+      # Turns off Better Auth's rate limiting (see lib/auth.ts) and enables the
+      # /__test/* support routes. Without it the setup project's sign-in is the
+      # third in a few seconds and gets throttled, which the UI can only report
+      # as a failed login.
+      E2E_TEST: "1"
       # Image bundles browsers at /ms-playwright; don't inherit a host override.
       PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
       # Install `n`-managed Node and global npm bins into a cached volume rather

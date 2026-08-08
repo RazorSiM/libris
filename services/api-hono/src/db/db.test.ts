@@ -1,17 +1,37 @@
 import type { PGlite } from "@electric-sql/pglite";
-import { eq } from "drizzle-orm";
+import { eq, ne } from "drizzle-orm";
 import { migrate } from "drizzle-orm/pglite/migrator";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vite-plus/test";
 import * as schema from "./schema";
-import { createTestDb, type TestDb } from "./test-utils";
+import { createTestDb, readMigrationDirs, type TestDb } from "./test-utils";
 
 let pglite: PGlite;
 let db: TestDb;
+
+/**
+ * Since the Better Auth cutover every owned row hangs off a user, and
+ * books.created_by is NOT NULL. This one user owns all the fixtures; tests that
+ * need a second owner call insertUser().
+ *
+ * It is created once and never deleted — books RESTRICT on their owner, so
+ * tearing users down between tests would just fight the cleanup order.
+ */
+const OWNER_ID = "usr_fixture_owner";
+
+/** A user to own fixtures. Better Auth generates text ids, so any string works. */
+async function insertUser(id: string): Promise<string> {
+  await db
+    .insert(schema.users)
+    .values({ id, name: id, email: `${id}@example.test`, role: "user" })
+    .onConflictDoNothing();
+  return id;
+}
 
 beforeAll(async () => {
   const testDb = await createTestDb();
   pglite = testDb.pglite;
   db = testDb.db;
+  await insertUser(OWNER_ID);
 });
 
 afterAll(async () => {
@@ -28,6 +48,8 @@ afterEach(async () => {
   await db.delete(schema.apiKeys);
   await db.delete(schema.serviceCredentials);
   await db.delete(schema.books);
+  // Books RESTRICT on their owner, so users go last — and OWNER_ID stays.
+  await db.delete(schema.users).where(ne(schema.users.id, OWNER_ID));
 });
 
 // ---------------------------------------------------------------------------
@@ -36,9 +58,109 @@ afterEach(async () => {
 
 describe("migrations", () => {
   it("runs all migrations on a fresh database", async () => {
-    // The beforeAll already ran migrations. Verify the migration journal table exists.
-    const result = await pglite.query(`SELECT count(*) as cnt FROM drizzle.__drizzle_migrations`);
-    expect(Number((result.rows[0] as Record<string, unknown>).cnt)).toBeGreaterThanOrEqual(1);
+    // `>= 1` was vacuous: beforeAll had already run them, so the
+    // journal could not have been empty. The journal must hold exactly one row
+    // per migration directory on disk, which is what "all of them ran" means.
+    const result = await pglite.query<{ cnt: string }>(
+      `SELECT count(*) as cnt FROM drizzle.__drizzle_migrations`,
+    );
+    expect(Number(result.rows[0]!.cnt)).toBe(readMigrationDirs().length);
+  });
+
+  // The drift check is deliberately TWO tests.
+  //
+  // Asking drizzle-kit the question is slow; comparing its answer against
+  // "nothing" is instant, and is the actual assertion. As one test the two
+  // shared a failure line, so a run that was merely too slow reported as
+  //
+  //   migrations > leaves no drift ... Test timed out in 30000ms
+  //
+  // which sends the reader hunting a schema/migration mismatch that does not
+  // exist. That is a worse cost than the flake itself.
+  //
+  // Split, a slow run can only be reported against the PROBE, under a name that
+  // makes no claim about the schema, with an onTestFailed note saying so out
+  // loud. The drift assertion below goes red if and only if drizzle-kit really
+  // answered with work left to do; if it never answered, that test SKIPS.
+  //
+  // Note on why the timeout is Vitest's and not a Promise.race deadline of our
+  // own: `pushSchema` runs as one uninterrupted synchronous block (PGlite is
+  // WASM on this thread, and the diffing is plain CPU work). A setTimeout armed
+  // before it cannot fire until it returns — measured: a 1ms timer stayed
+  // unfired across the whole call. Only the runner's own timeout, which is
+  // enforced from outside the block, can end it. So the budget below is passed
+  // to `it()` and nothing races it.
+
+  /**
+   * How long drizzle-kit gets to answer.
+   *
+   * The work is I/O- and CPU-bound on a subprocess-sized workload rather than
+   * anything this suite controls, so the right budget is generous rather than
+   * tight: Vitest's 30s default was enough on an idle machine and not enough on
+   * a loaded one, which is the whole reason this budget is configurable.
+   * Overridable so the timeout path can be exercised on demand
+   * (`LIBRIS_DRIFT_PROBE_TIMEOUT_MS=1`).
+   */
+  const DRIFT_PROBE_TIMEOUT_MS = Number(process.env.LIBRIS_DRIFT_PROBE_TIMEOUT_MS ?? 180_000);
+
+  /**
+   * The statements drizzle-kit says are still outstanding, or `null` if it never
+   * got to say. `null` is not "no drift" and must never be asserted against.
+   */
+  let pendingSchemaStatements: string[] | null = null;
+
+  it(
+    "asks drizzle-kit what still separates the migrated database from schema.ts",
+    async (ctx) => {
+      // Fires on any failure of this test, Vitest's own timeout included, which
+      // is the case that used to be unreadable. stderr rather than console.warn
+      // for the same reason announceSkip() uses it: the reporter cannot attach
+      // console output to a test that was killed.
+      ctx.onTestFailed(() => {
+        process.stderr.write(
+          `\n[NOT DRIFT] The drift probe failed before drizzle-kit answered, so NO comparison ` +
+            `between the migrations and schema.ts was performed. This failure is not evidence ` +
+            `that they disagree, and "leaves no drift ..." below is skipped rather than red for ` +
+            `that reason. If the error above is a timeout, the budget is ` +
+            `${DRIFT_PROBE_TIMEOUT_MS}ms (LIBRIS_DRIFT_PROBE_TIMEOUT_MS) and a loaded machine is ` +
+            `the usual cause -- re-run this file on its own before suspecting the schema.\n\n`,
+        );
+      });
+
+      const { pushSchema } = await import("drizzle-kit/api-postgres");
+
+      // pushSchema prompts when it hits an ambiguous rename. Pretending not to
+      // be a terminal turns that into a thrown error rather than a hung run.
+      const wasTTY = process.stdout.isTTY;
+      process.stdout.isTTY = false;
+      try {
+        const { sqlStatements } = await pushSchema(schema, db as never);
+        pendingSchemaStatements = sqlStatements;
+      } finally {
+        process.stdout.isTTY = wasTTY;
+      }
+    },
+    DRIFT_PROBE_TIMEOUT_MS,
+  );
+
+  it("leaves no drift between the migrations and schema.ts", (ctx) => {
+    // Nothing left to do means the migrations and schema.ts agree.
+    //
+    // This matters most for hand-written migrations — the Better Auth cutover
+    // is one, because its DDL has to interleave with a data backfill that
+    // drizzle-kit cannot generate. Without this check, a mismatch between the
+    // SQL and the schema would only surface as a confusing runtime error.
+    if (pendingSchemaStatements === null) {
+      // Skipped rather than failed, on purpose: the probe above is already red,
+      // and reporting THIS name red as well is exactly the misdiagnosis the
+      // two-test split exists to remove. The run is still red overall.
+      ctx.skip(
+        "drizzle-kit never answered -- see the failure on the probe above. A comparison that " +
+          "did not run is not a drift finding.",
+      );
+      return;
+    }
+    expect(pendingSchemaStatements).toEqual([]);
   });
 
   it("creates the book_status enum type", async () => {
@@ -68,7 +190,7 @@ describe("migrations", () => {
     expect(indexes).toContain("book_files_book_id_idx");
     expect(indexes).toContain("book_files_checksum_idx");
     expect(indexes).toContain("book_metadata_candidates_book_id_idx");
-    expect(indexes).toContain("api_keys_key_prefix_idx");
+    expect(indexes).toContain("api_keys_reference_id_idx");
     expect(indexes).toContain("books_status_created_at_idx");
     expect(indexes).toContain("books_isbn13_idx");
     expect(indexes).toContain("reading_progress_book_id_idx");
@@ -80,6 +202,8 @@ describe("migrations", () => {
     expect(indexes).not.toContain("hardcover_sync_log_book_id_idx");
     expect(indexes).not.toContain("books_status_idx");
     expect(indexes).not.toContain("reading_progress_history_doc_idx");
+    // Replaced by api_keys_key_uniq in the Better Auth cutover.
+    expect(indexes).not.toContain("api_keys_key_prefix_idx");
   });
 
   it("creates unique constraints", async () => {
@@ -87,9 +211,54 @@ describe("migrations", () => {
       `SELECT conname FROM pg_constraint WHERE contype = 'u' ORDER BY conname`,
     );
     const constraints = result.rows.map((r: any) => r.conname);
-    expect(constraints).toContain("api_keys_key_hash_key");
     expect(constraints).toContain("book_candidates_book_source_uniq");
     expect(constraints).toContain("reading_progress_user_document_device_uniq");
+  });
+
+  it("keeps the drizzle-kit snapshot chain single-leafed", async () => {
+    // drizzle-kit stores each migration's ancestry in snapshot.json's `prevIds`.
+    // A snapshot nobody names as a parent is a "leaf". More than one leaf means
+    // the history has branched, and plain `drizzle-kit generate` refuses to run
+    // ("Non-commutative migrations detected") until the branch is resolved --
+    // which is how a branched history was found here. Passing
+    // --ignore-conflicts hides the branch rather than fixing it, so this test is
+    // the thing that has to notice.
+    const { readFileSync, readdirSync } = await import("node:fs");
+    const nodePath = await import("node:path");
+    const nodeUrl = await import("node:url");
+    const dir = nodePath.dirname(nodeUrl.fileURLToPath(import.meta.url));
+    const migrationsDir = nodePath.resolve(dir, "../../migrations");
+
+    const folders = readdirSync(migrationsDir, { withFileTypes: true })
+      .filter((e) => e.isDirectory())
+      .map((e) => e.name)
+      .sort();
+
+    const snapshots = folders.map((name) => ({
+      name,
+      ...(JSON.parse(readFileSync(nodePath.join(migrationsDir, name, "snapshot.json"), "utf8")) as {
+        id: string;
+        prevIds: string[];
+      }),
+    }));
+
+    const ids = new Set(snapshots.map((s) => s.id));
+    const referencedAsParent = new Set(snapshots.flatMap((s) => s.prevIds));
+    const leaves = snapshots.filter((s) => !referencedAsParent.has(s.id)).map((s) => s.name);
+
+    // Exactly one tip, and it is the newest migration by folder name -- which is
+    // also the snapshot drizzle-kit diffs against when generating the next one.
+    expect(leaves).toEqual([folders[folders.length - 1]]);
+
+    // Only the very first migration may descend from the origin UUID; every
+    // other prevId must name a snapshot that actually exists in this folder.
+    const ORIGIN = "00000000-0000-0000-0000-000000000000";
+    const ancestry = snapshots.map((s, i) => ({
+      name: s.name,
+      resolves:
+        s.prevIds.length === 1 && (i === 0 ? s.prevIds[0] === ORIGIN : ids.has(s.prevIds[0])),
+    }));
+    expect(ancestry.filter((a) => !a.resolves)).toEqual([]);
   });
 
   it("re-running migrations is idempotent", async () => {
@@ -101,21 +270,40 @@ describe("migrations", () => {
     const dir = nodePath.dirname(nodeUrl.fileURLToPath(import.meta.url));
     await migrate(fresh.db, { migrationsFolder: nodePath.resolve(dir, "../../migrations") });
 
-    const result = await fresh.pglite.query(
+    // `>= 1` made this a test that migrate() did not throw.
+    // Idempotent means the journal did not GROW: a second run that re-applied
+    // everything would double the row count, which is exactly the failure the
+    // branched-snapshot bug produced on deploy.
+    const result = await fresh.pglite.query<{ cnt: string }>(
       `SELECT count(*) as cnt FROM drizzle.__drizzle_migrations`,
     );
-    expect(Number((result.rows[0] as Record<string, unknown>).cnt)).toBeGreaterThanOrEqual(1);
+    expect(Number(result.rows[0]!.cnt)).toBe(readMigrationDirs().length);
     await fresh.pglite.close();
   });
 });
 
 // ---------------------------------------------------------------------------
-// CRUD query tests (using PGlite)
+// Schema/DDL tests (using PGlite)
 // ---------------------------------------------------------------------------
 
-describe("books CRUD", () => {
+/**
+ * SCHEMA-level tests.
+ *
+ * The five blocks below drive Drizzle and PostgreSQL directly — no `src/` route,
+ * service or worker runs in any of them, so no application change can turn one
+ * red. That is legitimate for what they DO pin: the DDL the migrations produce
+ * (constraints, defaults, foreign keys, cascades). It is not coverage of
+ * anything above the database, and they were named "books CRUD" / "apiKeys
+ * CRUD" as if it were. Renamed so a close-reason cannot cite them for behaviour
+ * they never exercised.
+ *
+ * The one test in this file that guards the schema against real drift is
+ * "leaves no drift between the migrations and schema.ts" above.
+ */
+
+describe("SCHEMA: books table", () => {
   it("inserts a book with defaults", async () => {
-    const [book] = await db.insert(schema.books).values({}).returning();
+    const [book] = await db.insert(schema.books).values({ createdBy: OWNER_ID }).returning();
 
     expect(book.id).toBeDefined();
     expect(book.status).toBe("inbox");
@@ -129,6 +317,7 @@ describe("books CRUD", () => {
     const [book] = await db
       .insert(schema.books)
       .values({
+        createdBy: OWNER_ID,
         title: "The Great Gatsby",
         author: "F. Scott Fitzgerald",
         isbn13: "9780743273565",
@@ -151,7 +340,13 @@ describe("books CRUD", () => {
   });
 
   it("updates a book", async () => {
-    const [book] = await db.insert(schema.books).values({ title: "Old" }).returning();
+    const [book] = await db
+      .insert(schema.books)
+      .values({
+        createdBy: OWNER_ID,
+        title: "Old",
+      })
+      .returning();
     const [updated] = await db
       .update(schema.books)
       .set({ title: "New", status: "organized" })
@@ -163,7 +358,7 @@ describe("books CRUD", () => {
   });
 
   it("deletes a book", async () => {
-    const [book] = await db.insert(schema.books).values({}).returning();
+    const [book] = await db.insert(schema.books).values({ createdBy: OWNER_ID }).returning();
     await db.delete(schema.books).where(eq(schema.books.id, book.id));
 
     const result = await db.query.books.findFirst({
@@ -173,7 +368,13 @@ describe("books CRUD", () => {
   });
 
   it("queries with relational API", async () => {
-    const [book] = await db.insert(schema.books).values({ title: "Rel Test" }).returning();
+    const [book] = await db
+      .insert(schema.books)
+      .values({
+        createdBy: OWNER_ID,
+        title: "Rel Test",
+      })
+      .returning();
     await db.insert(schema.bookFiles).values({
       bookId: book.id,
       format: "epub",
@@ -188,7 +389,13 @@ describe("books CRUD", () => {
   });
 
   it("loads book files via relation", async () => {
-    const [book] = await db.insert(schema.books).values({ title: "With Files" }).returning();
+    const [book] = await db
+      .insert(schema.books)
+      .values({
+        createdBy: OWNER_ID,
+        title: "With Files",
+      })
+      .returning();
     await db.insert(schema.bookFiles).values([
       { bookId: book.id, format: "epub", originalName: "file.epub" },
       { bookId: book.id, format: "pdf", originalName: "file.pdf" },
@@ -203,7 +410,13 @@ describe("books CRUD", () => {
   });
 
   it("loads metadata candidates via relation", async () => {
-    const [book] = await db.insert(schema.books).values({ title: "With Candidates" }).returning();
+    const [book] = await db
+      .insert(schema.books)
+      .values({
+        createdBy: OWNER_ID,
+        title: "With Candidates",
+      })
+      .returning();
     await db.insert(schema.bookMetadataCandidates).values([
       { bookId: book.id, source: "openlibrary" },
       { bookId: book.id, source: "google" },
@@ -221,9 +434,9 @@ describe("books CRUD", () => {
   });
 });
 
-describe("bookFiles CRUD", () => {
+describe("SCHEMA: book_files table", () => {
   it("inserts a file linked to a book", async () => {
-    const [book] = await db.insert(schema.books).values({}).returning();
+    const [book] = await db.insert(schema.books).values({ createdBy: OWNER_ID }).returning();
     const [file] = await db
       .insert(schema.bookFiles)
       .values({
@@ -242,7 +455,7 @@ describe("bookFiles CRUD", () => {
   });
 
   it("cascades delete when parent book is deleted", async () => {
-    const [book] = await db.insert(schema.books).values({}).returning();
+    const [book] = await db.insert(schema.books).values({ createdBy: OWNER_ID }).returning();
     await db.insert(schema.bookFiles).values({
       bookId: book.id,
       format: "epub",
@@ -269,9 +482,9 @@ describe("bookFiles CRUD", () => {
   });
 });
 
-describe("bookMetadataCandidates CRUD", () => {
+describe("SCHEMA: book_candidates table", () => {
   it("inserts metadata candidate with jsonb", async () => {
-    const [book] = await db.insert(schema.books).values({}).returning();
+    const [book] = await db.insert(schema.books).values({ createdBy: OWNER_ID }).returning();
     const [candidate] = await db
       .insert(schema.bookMetadataCandidates)
       .values({
@@ -289,7 +502,7 @@ describe("bookMetadataCandidates CRUD", () => {
   });
 
   it("enforces unique constraint on (bookId, source)", async () => {
-    const [book] = await db.insert(schema.books).values({}).returning();
+    const [book] = await db.insert(schema.books).values({ createdBy: OWNER_ID }).returning();
     await db.insert(schema.bookMetadataCandidates).values({
       bookId: book.id,
       source: "openlibrary",
@@ -304,8 +517,8 @@ describe("bookMetadataCandidates CRUD", () => {
   });
 
   it("allows same source for different books", async () => {
-    const [book1] = await db.insert(schema.books).values({}).returning();
-    const [book2] = await db.insert(schema.books).values({}).returning();
+    const [book1] = await db.insert(schema.books).values({ createdBy: OWNER_ID }).returning();
+    const [book2] = await db.insert(schema.books).values({ createdBy: OWNER_ID }).returning();
 
     await db.insert(schema.bookMetadataCandidates).values({
       bookId: book1.id,
@@ -321,7 +534,7 @@ describe("bookMetadataCandidates CRUD", () => {
   });
 
   it("cascades delete when parent book is deleted", async () => {
-    const [book] = await db.insert(schema.books).values({}).returning();
+    const [book] = await db.insert(schema.books).values({ createdBy: OWNER_ID }).returning();
     await db.insert(schema.bookMetadataCandidates).values({
       bookId: book.id,
       source: "google",
@@ -337,16 +550,9 @@ describe("bookMetadataCandidates CRUD", () => {
   });
 });
 
-describe("readingProgress CRUD", () => {
+describe("SCHEMA: reading_progress table", () => {
   it("inserts reading progress", async () => {
-    const [testKey] = await db
-      .insert(schema.apiKeys)
-      .values({
-        keyPrefix: "bk_",
-        keyHash: "insert-progress-test-hash",
-        label: "Insert Progress Test Key",
-      })
-      .returning();
+    const owner = await insertUser("usr_insert_progress_test_hash");
 
     const [progress] = await db
       .insert(schema.readingProgress)
@@ -358,7 +564,7 @@ describe("readingProgress CRUD", () => {
         percentage: "0.4200",
         timestamp: 1234567890n,
         rawPayload: { page: 42 },
-        apiKeyId: testKey.id,
+        userId: owner,
       })
       .returning();
 
@@ -367,21 +573,14 @@ describe("readingProgress CRUD", () => {
     expect(progress.timestamp).toBe(1234567890n);
   });
 
-  it("enforces unique constraint on (apiKeyId, document, device)", async () => {
-    const [testKey] = await db
-      .insert(schema.apiKeys)
-      .values({
-        keyPrefix: "bk_",
-        keyHash: "unique-constraint-test-hash",
-        label: "Constraint Test Key",
-      })
-      .returning();
+  it("enforces unique constraint on (userId, document, device)", async () => {
+    const owner = await insertUser("usr_unique_constraint_test_hash");
 
     await db.insert(schema.readingProgress).values({
       document: "book.epub",
       device: "Kindle",
       progress: "10%",
-      apiKeyId: testKey.id,
+      userId: owner,
     });
 
     await expect(
@@ -389,32 +588,25 @@ describe("readingProgress CRUD", () => {
         document: "book.epub",
         device: "Kindle",
         progress: "20%",
-        apiKeyId: testKey.id,
+        userId: owner,
       }),
     ).rejects.toThrow();
   });
 
   it("allows same document on different devices", async () => {
-    const [testKey] = await db
-      .insert(schema.apiKeys)
-      .values({
-        keyPrefix: "bk_",
-        keyHash: "diff-devices-test-hash",
-        label: "Diff Devices Test Key",
-      })
-      .returning();
+    const owner = await insertUser("usr_diff_devices_test_hash");
 
     await db.insert(schema.readingProgress).values({
       document: "shared.epub",
       device: "Kindle",
       progress: "10%",
-      apiKeyId: testKey.id,
+      userId: owner,
     });
     await db.insert(schema.readingProgress).values({
       document: "shared.epub",
       device: "iPad",
       progress: "20%",
-      apiKeyId: testKey.id,
+      userId: owner,
     });
 
     const all = await db
@@ -425,33 +617,25 @@ describe("readingProgress CRUD", () => {
   });
 
   it("stores nullable book_id on reading progress", async () => {
-    const [testKey] = await db
-      .insert(schema.apiKeys)
-      .values({
-        keyPrefix: "bk_",
-        keyHash: "nullable-book-test-hash",
-        label: "Nullable Book Test Key",
-      })
-      .returning();
+    const owner = await insertUser("usr_nullable_book_test_hash");
 
     const [progress] = await db
       .insert(schema.readingProgress)
-      .values({ document: "hash.epub", device: "KoReader", progress: "5%", apiKeyId: testKey.id })
+      .values({ document: "hash.epub", device: "KoReader", progress: "5%", userId: owner })
       .returning();
     expect(progress.bookId).toBeNull();
   });
 
   it("links reading progress to a book via book_id", async () => {
-    const [testKey] = await db
-      .insert(schema.apiKeys)
+    const owner = await insertUser("usr_linked_book_test_hash");
+
+    const [book] = await db
+      .insert(schema.books)
       .values({
-        keyPrefix: "bk_",
-        keyHash: "linked-book-test-hash",
-        label: "Linked Book Test Key",
+        createdBy: OWNER_ID,
+        title: "Linked Book",
       })
       .returning();
-
-    const [book] = await db.insert(schema.books).values({ title: "Linked Book" }).returning();
     const [progress] = await db
       .insert(schema.readingProgress)
       .values({
@@ -459,29 +643,28 @@ describe("readingProgress CRUD", () => {
         document: "linked.epub",
         device: "KoReader",
         progress: "20%",
-        apiKeyId: testKey.id,
+        userId: owner,
       })
       .returning();
     expect(progress.bookId).toBe(book.id);
   });
 
   it("sets book_id to null when book is deleted", async () => {
-    const [testKey] = await db
-      .insert(schema.apiKeys)
+    const owner = await insertUser("usr_book_delete_null_test_hash");
+
+    const [book] = await db
+      .insert(schema.books)
       .values({
-        keyPrefix: "bk_",
-        keyHash: "book-delete-null-test-hash",
-        label: "Book Delete Null Test Key",
+        createdBy: OWNER_ID,
+        title: "To Delete",
       })
       .returning();
-
-    const [book] = await db.insert(schema.books).values({ title: "To Delete" }).returning();
     await db.insert(schema.readingProgress).values({
       bookId: book.id,
       document: "orphan.epub",
       device: "KoReader",
       progress: "50%",
-      apiKeyId: testKey.id,
+      userId: owner,
     });
 
     await db.delete(schema.books).where(eq(schema.books.id, book.id));
@@ -494,56 +677,100 @@ describe("readingProgress CRUD", () => {
   });
 });
 
-describe("apiKeys CRUD", () => {
-  it("inserts an API key", async () => {
+// App passwords. Since the Better Auth cutover an api key is a credential
+// belonging to a user, not an identity of its own — the plugin owns this table,
+// so these tests cover the shape and constraints rather than any Libris logic.
+describe("SCHEMA: api_keys table", () => {
+  it("inserts an app password with the plugin's defaults", async () => {
     const [key] = await db
       .insert(schema.apiKeys)
       .values({
-        keyPrefix: "bk_",
-        keyHash: "sha256_unique_hash_1",
-        label: "Test Key",
+        id: "key_insert",
+        referenceId: OWNER_ID,
+        key: "hashed_secret_1",
+        name: "Kobo Clara",
+        start: "libris_ab",
       })
       .returning();
 
-    expect(key.keyPrefix).toBe("bk_");
-    expect(key.label).toBe("Test Key");
+    expect(key.referenceId).toBe(OWNER_ID);
+    expect(key.name).toBe("Kobo Clara");
+    expect(key.configId).toBe("default");
+    expect(key.enabled).toBe(true);
+    expect(key.rateLimitEnabled).toBe(true);
+    expect(key.rateLimitMax).toBe(10);
+    expect(key.rateLimitTimeWindow).toBe(86_400_000);
+    expect(key.requestCount).toBe(0);
     expect(key.createdAt).toBeInstanceOf(Date);
-    expect(key.lastUsedAt).toBeNull();
+    expect(key.expiresAt).toBeNull();
   });
 
-  it("enforces unique keyHash", async () => {
+  it("rejects a duplicate key hash", async () => {
     await db.insert(schema.apiKeys).values({
-      keyPrefix: "bk_",
-      keyHash: "duplicate_hash",
-      label: "Key 1",
+      id: "key_dup_a",
+      referenceId: OWNER_ID,
+      key: "duplicate_hash",
     });
 
     await expect(
       db.insert(schema.apiKeys).values({
-        keyPrefix: "bk_",
-        keyHash: "duplicate_hash",
-        label: "Key 2",
+        id: "key_dup_b",
+        referenceId: OWNER_ID,
+        key: "duplicate_hash",
       }),
     ).rejects.toThrow();
   });
 
-  it("updates lastUsedAt", async () => {
+  it("rejects a key that belongs to nobody", async () => {
+    await expect(
+      db.insert(schema.apiKeys).values({
+        id: "key_orphan",
+        referenceId: "usr_does_not_exist",
+        key: "orphan_hash",
+      }),
+    ).rejects.toThrow();
+  });
+
+  it("records usage on lastRequest", async () => {
     const [key] = await db
       .insert(schema.apiKeys)
-      .values({
-        keyPrefix: "bk_",
-        keyHash: "hash_for_update",
-        label: "Update Test",
-      })
+      .values({ id: "key_used", referenceId: OWNER_ID, key: "hash_for_update" })
       .returning();
+    expect(key.lastRequest).toBeNull();
 
     const now = new Date();
     const [updated] = await db
       .update(schema.apiKeys)
-      .set({ lastUsedAt: now })
+      .set({ lastRequest: now, requestCount: 1 })
       .where(eq(schema.apiKeys.id, key.id))
       .returning();
 
-    expect(updated.lastUsedAt).toEqual(now);
+    expect(updated.lastRequest).toEqual(now);
+    expect(updated.requestCount).toBe(1);
+  });
+
+  it("revoking a user's app password leaves their reading history alone", async () => {
+    // The reason the epic exists: api_keys used to BE the user table, so
+    // deleting a key cascaded into reading_progress.
+    const owner = await insertUser("usr_revoke");
+    await db.insert(schema.apiKeys).values({
+      id: "key_revoke",
+      referenceId: owner,
+      key: "revoke_hash",
+    });
+    await db.insert(schema.readingProgress).values({
+      document: "kept.epub",
+      device: "KoReader",
+      progress: "30%",
+      userId: owner,
+    });
+
+    await db.delete(schema.apiKeys).where(eq(schema.apiKeys.id, "key_revoke"));
+
+    const kept = await db
+      .select()
+      .from(schema.readingProgress)
+      .where(eq(schema.readingProgress.document, "kept.epub"));
+    expect(kept).toHaveLength(1);
   });
 });

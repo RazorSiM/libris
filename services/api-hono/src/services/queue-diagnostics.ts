@@ -1,6 +1,7 @@
 import Redis from "ioredis";
 import type { Job, Queue } from "bullmq";
 import { QUEUE_NAMES } from "../lib/queue/constants.js";
+import type { Queues } from "../context.js";
 import { parseRedisUrl } from "../env.js";
 import { getAllQueues, getQueues } from "./queue.js";
 
@@ -10,7 +11,15 @@ export type QueueCounts = {
   completed: number;
   failed: number;
   delayed: number;
-  paused: number;
+  /**
+   * Whether the queue itself is paused — not a job count.
+   *
+   * BullMQ 5 parked a paused queue's jobs in a separate `paused` list, so
+   * `getJobCounts("paused")` doubled as the paused flag. BullMQ 6 removed that
+   * list: pausing only sets a `paused` field on the queue's meta hash and the
+   * jobs stay in `wait`. The count is gone, so the flag has to be read directly.
+   */
+  isPaused: boolean;
 };
 
 export type FailedJob = {
@@ -24,7 +33,7 @@ export type FailedJob = {
   maxAttempts: number;
 };
 
-const COUNT_STATUSES = ["waiting", "active", "completed", "failed", "delayed", "paused"] as const;
+const COUNT_STATUSES = ["waiting", "active", "completed", "failed", "delayed"] as const;
 
 export function getPipelineQueues(): Queue[] {
   const { close: _, ...queues } = getQueues();
@@ -37,11 +46,52 @@ export function getRegisteredQueues(): Queue[] {
   return getPipelineQueues();
 }
 
+/**
+ * Book ids with a pipeline job in flight (active, waiting or delayed).
+ *
+ * Queue counts are install-wide and cannot be attributed to a person, which is
+ * how a non-admin's dashboard ended up reporting how many books *other* people
+ * were having processed. Job ids can be attributed: intersect
+ * these with `books.created_by` and the count becomes the caller's own.
+ *
+ * `bookDetected` is deliberately not scanned — its payload is a file path, and
+ * the book row it will create does not exist yet, so there is no owner to
+ * check. Anything a caller could see in that window is a file they have not
+ * uploaded through the API.
+ *
+ * Takes the context `Queues` (rather than {@link getPipelineQueues}) so route
+ * tests can inject them.
+ */
+export async function collectInFlightBookIds(queues: Queues): Promise<string[]> {
+  const bookIds = new Set<string>();
+
+  await Promise.all(
+    [queues.bookParseFile, queues.bookFetchMetadata, queues.bookOrganize].map(async (queue) => {
+      // BullMQ Queue objects expose getJobs at runtime; the minimal Queues
+      // interface only declares `add`, so we cast here.
+      const getJobs = (queue as unknown as Record<string, unknown>).getJobs as
+        | ((states: string[]) => Promise<{ data?: { bookId?: string } }[]>)
+        | undefined;
+      if (!getJobs) return;
+
+      const jobs = await getJobs.call(queue, ["active", "waiting", "delayed"]);
+      for (const job of jobs) {
+        if (job.data?.bookId) bookIds.add(job.data.bookId);
+      }
+    }),
+  );
+
+  return [...bookIds];
+}
+
 export async function collectQueueCounts(queues: Queue[]): Promise<Record<string, QueueCounts>> {
   const entries = await Promise.all(
     queues.map(async (queue) => {
-      const counts = await queue.getJobCounts(...COUNT_STATUSES);
-      return [queue.name, counts as QueueCounts] as const;
+      const [counts, isPaused] = await Promise.all([
+        queue.getJobCounts(...COUNT_STATUSES),
+        queue.isPaused(),
+      ]);
+      return [queue.name, { ...(counts as Omit<QueueCounts, "isPaused">), isPaused }] as const;
     }),
   );
 

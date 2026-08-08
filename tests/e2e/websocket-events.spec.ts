@@ -9,9 +9,27 @@
  * unlike the standard `authedPage` fixture.
  */
 
-import type { Page } from "@playwright/test";
+import type { Browser, Page, WebSocket as PlaywrightWebSocket } from "@playwright/test";
 import { test, expect } from "./fixtures";
-import { API_BASE, seedBook, deleteAllBooks, invalidateServerCache } from "./helpers";
+import {
+  API_BASE,
+  testRouteHeaders,
+  seedBook,
+  createDisposableAccount,
+  deleteAllBooks,
+  invalidateServerCache,
+  getRegularUserId,
+  disposeAccounts,
+  sessionHeaders,
+} from "./helpers";
+import { signInThroughUi, signOutThroughUi } from "./helpers/sign-in.js";
+
+/**
+ * The identity-switch test makes an admin ("ws-alice"). Leaving it behind would
+ * make this file a source of the same second-admin pollution account.spec.ts
+ * was — see auth.spec.ts's "the last admin cannot be demoted out of existence".
+ */
+test.afterAll(disposeAccounts);
 
 /**
  * Fire a server event through the test-only event bus endpoint.
@@ -24,10 +42,74 @@ async function emitEvent(event: {
 }): Promise<void> {
   const res = await fetch(`${API_BASE}/__test/emit-event`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { ...testRouteHeaders(), "Content-Type": "application/json" },
     body: JSON.stringify(event),
   });
   if (!res.ok) throw new Error(`Failed to emit event: ${res.status}`);
+}
+
+async function seedBookForUser(createdBy: string, title: string): Promise<string> {
+  const res = await fetch(`${API_BASE}/__test/seed-books`, {
+    method: "POST",
+    headers: { ...testRouteHeaders(), "Content-Type": "application/json" },
+    body: JSON.stringify({
+      createdBy,
+      books: [{ title, author: "WebSocket owner test", status: "inbox" }],
+    }),
+  });
+  if (!res.ok) throw new Error(`Failed to seed user book: ${res.status}`);
+  const body = (await res.json()) as { inserted: Array<{ id: string }> };
+  return body.inserted[0]!.id;
+}
+
+/** Ban an account the way the Users tab does — through the admin's session. */
+async function banUser(userId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/auth/admin/ban-user`, {
+    method: "POST",
+    headers: { ...sessionHeaders(), "Content-Type": "application/json", origin: API_BASE },
+    body: JSON.stringify({ userId }),
+  });
+  if (!res.ok) throw new Error(`Could not ban ${userId}: ${res.status} ${await res.text()}`);
+}
+
+async function openManualWebSocket(page: Page): Promise<void> {
+  await page.evaluate(async () => {
+    await new Promise<void>((resolve, reject) => {
+      const ws = new WebSocket("ws://localhost:3000/api/events");
+      const timeout = setTimeout(() => reject(new Error("WebSocket did not connect")), 10_000);
+      ws.addEventListener("message", (event) => {
+        if (JSON.parse(event.data as string).type !== "connected") return;
+        clearTimeout(timeout);
+        (window as Window & { __testEventsSocket?: WebSocket }).__testEventsSocket = ws;
+        resolve();
+      });
+      ws.addEventListener("error", () => reject(new Error("WebSocket connection failed")));
+    });
+  });
+}
+
+async function listenForBookEvent(page: Page, bookId: string): Promise<void> {
+  await page.evaluate((expectedBookId) => {
+    const ws = (window as Window & { __testEventsSocket?: WebSocket }).__testEventsSocket;
+    if (!ws) throw new Error("Test WebSocket was not opened");
+    const windowWithEvents = window as Window & { __testEventBookIds?: string[] };
+    windowWithEvents.__testEventBookIds ??= [];
+    ws.addEventListener("message", (event) => {
+      if (JSON.parse(event.data as string).bookId === expectedBookId) {
+        windowWithEvents.__testEventBookIds!.push(expectedBookId);
+      }
+    });
+  }, bookId);
+}
+
+async function receivedBookEvent(page: Page, bookId: string): Promise<boolean> {
+  return await page.evaluate(
+    (expectedBookId) =>
+      (window as Window & { __testEventBookIds?: string[] }).__testEventBookIds?.includes(
+        expectedBookId,
+      ) ?? false,
+    bookId,
+  );
 }
 
 /**
@@ -58,6 +140,51 @@ async function navigateToPage(page: Page, linkName: string, urlPattern: string):
   await page.waitForURL(urlPattern);
 }
 
+/**
+ * A signed-out browser with the realtime bus left switched on.
+ *
+ * The standard fixtures set __LIBRIS_DISABLE_SERVER_EVENTS__ so networkidle
+ * waits can settle; a spec about the socket obviously cannot.
+ */
+async function freshLiveContext(browser: Browser) {
+  return await browser.newContext({
+    baseURL: `http://localhost:${process.env.CI ? 3000 : 3100}`,
+    storageState: { cookies: [], origins: [] },
+  });
+}
+
+/**
+ * Watch the app's OWN socket rather than opening one.
+ *
+ * openManualWebSocket() creates a second connection with its own upgrade, which
+ * would pass whatever the app's socket was doing — and the app's socket is the
+ * thing under test.
+ */
+function recordSocketFrames(page: Page) {
+  const record = { sockets: 0, payloads: [] as string[] };
+  page.on("websocket", (ws) => {
+    if (!ws.url().endsWith("/api/events")) return;
+    record.sockets += 1;
+    ws.on("framereceived", (frame) => record.payloads.push(String(frame.payload)));
+  });
+  return record;
+}
+
+/**
+ * Same idea, but keeping a handle on each socket so a spec can ask whether the
+ * FIRST one — the one the server is supposed to have severed — is closed, rather
+ * than inferring it from a count that a reconnect also moves.
+ */
+function trackEventSockets(page: Page) {
+  const record = { sockets: [] as PlaywrightWebSocket[], payloads: [] as string[] };
+  page.on("websocket", (ws) => {
+    if (!ws.url().endsWith("/api/events")) return;
+    record.sockets.push(ws);
+    ws.on("framereceived", (frame) => record.payloads.push(String(frame.payload)));
+  });
+  return record;
+}
+
 test.describe("WebSocket Real-time Events", () => {
   test.beforeEach(async () => {
     await deleteAllBooks();
@@ -70,6 +197,31 @@ test.describe("WebSocket Real-time Events", () => {
     // Page should be functional with WebSocket connected
     await expect(page.getByTestId("empty-inbox")).toBeVisible();
   });
+
+  test(
+    "a regular user receives events only for their own books",
+    { tag: "@smoke" },
+    async ({ userPage: page }) => {
+      const adminBook = await seedBook("inbox", { title: "Admin-only WebSocket Book" });
+      const userBook = await seedBookForUser(getRegularUserId(), "User-only WebSocket Book");
+
+      await openManualWebSocket(page);
+      try {
+        await listenForBookEvent(page, adminBook.id);
+        await emitEvent({ type: "book:detected", bookId: adminBook.id });
+        await page.waitForTimeout(1_000);
+        expect(await receivedBookEvent(page, adminBook.id)).toBe(false);
+
+        await listenForBookEvent(page, userBook);
+        await emitEvent({ type: "book:detected", bookId: userBook });
+        await expect.poll(() => receivedBookEvent(page, userBook)).toBe(true);
+      } finally {
+        await page.evaluate(() => {
+          (window as Window & { __testEventsSocket?: WebSocket }).__testEventsSocket?.close();
+        });
+      }
+    },
+  );
 
   test("Inbox list auto-refreshes on book:detected event", async ({ livePage: page }) => {
     await reloadWithWebSocket(page);
@@ -117,23 +269,152 @@ test.describe("WebSocket Real-time Events", () => {
     expect(websocketUrls.filter((url) => url.endsWith("/api/events"))).toHaveLength(1);
   });
 
-  test("Settings page reacts to job events", async ({ livePage: page }) => {
+  test(
+    "the socket follows the signed-in user across a sign-out and sign-in",
+    { tag: "@smoke" },
+    async ({ browser }) => {
+      // The server binds the subscription's user id and admin flag AT UPGRADE
+      // TIME and never re-checks them. Sign-out and sign-in are both SPA
+      // navigations, so nothing used to reset the socket: an admin signing out
+      // of a shared browser left the next person holding HER admin-scoped
+      // subscription. They saw every book event on the install — other users'
+      // ids, types and payloads — and none of their own, so their inbox badge
+      // and job status silently stopped updating.
+      const alice = await createDisposableAccount("ws-alice", "admin");
+      const bob = await createDisposableAccount("ws-bob");
+      const aliceBook = await seedBookForUser(alice.id, "Alice-owned WebSocket Book");
+      const bobBook = await seedBookForUser(bob.id, "Bob-owned WebSocket Book");
+
+      const context = await freshLiveContext(browser);
+      const page = await context.newPage();
+      const frames = recordSocketFrames(page);
+
+      await page.goto("/login");
+      // Nothing to subscribe to while signed out, and dialling here is a
+      // reconnect loop against a 401.
+      await page.waitForTimeout(1_000);
+      expect(frames.sockets).toBe(0);
+
+      await signInThroughUi(page, alice.email, alice.password);
+      await expect.poll(() => frames.sockets, { timeout: 15_000 }).toBe(1);
+
+      await signOutThroughUi(page);
+      await signInThroughUi(page, bob.email, bob.password);
+      // A NEW socket, carrying Bob's cookie.
+      await expect.poll(() => frames.sockets, { timeout: 15_000 }).toBeGreaterThan(1);
+      await expect.poll(() => frames.payloads.some((f) => f.includes('"connected"'))).toBe(true);
+
+      frames.payloads.length = 0;
+
+      await emitEvent({ type: "book:detected", bookId: bobBook });
+      await expect
+        .poll(() => frames.payloads.some((f) => f.includes(bobBook)), { timeout: 15_000 })
+        .toBe(true);
+
+      await emitEvent({ type: "book:detected", bookId: aliceBook });
+      await page.waitForTimeout(2_000);
+      expect(frames.payloads.some((f) => f.includes(aliceBook))).toBe(false);
+
+      await context.close();
+    },
+  );
+
+  test(
+    "banning a user severs the event socket they already had open",
+    { tag: "@smoke" },
+    async ({ browser }) => {
+      // The socket-revocation work had eleven integration tests and no
+      // browser-level one, so nothing checked the property end to end: that the
+      // socket a REAL client opened — upgraded with a real cookie, through the
+      // app's own connection code — is closed when the account behind it is
+      // banned, and delivers nothing afterwards.
+      //
+      // A WebSocket authenticates once, at upgrade, and then lives as long as
+      // the tab. Before the fix, banning an account left its already-open
+      // subscription streaming that person's book, job and pipeline events for
+      // as long as the browser stayed on the page, while every HTTP route had
+      // already started 401ing them.
+      //
+      // Asserted against the SERVER's guarantee (socket closed, no further
+      // frames), never against what the page then shows: how the client reacts
+      // to the 4401 is a separate concern and a separate spec.
+      test.slow();
+
+      const victim = await createDisposableAccount("ws-banned");
+      const victimBook = await seedBookForUser(victim.id, "Banned-user WebSocket Book");
+
+      const context = await freshLiveContext(browser);
+      const page = await context.newPage();
+      const live = trackEventSockets(page);
+
+      await signInThroughUi(page, victim.email, victim.password);
+      await expect.poll(() => live.sockets.length, { timeout: 15_000 }).toBe(1);
+      const socket = live.sockets[0]!;
+      await expect
+        .poll(() => live.payloads.some((f) => f.includes('"connected"')), { timeout: 15_000 })
+        .toBe(true);
+
+      // The socket is genuinely live and scoped to this account. Without this
+      // the closure assertion below would also be satisfied by a socket that
+      // never worked in the first place.
+      await emitEvent({ type: "book:detected", bookId: victimBook });
+      await expect
+        .poll(() => live.payloads.some((f) => f.includes(victimBook)), { timeout: 15_000 })
+        .toBe(true);
+
+      await banUser(victim.id);
+
+      // 1. The transport is torn down, from the server side, without the tab
+      //    doing anything: no navigation, no request, no reload.
+      await expect.poll(() => socket.isClosed(), { timeout: 20_000 }).toBe(true);
+
+      // 2. And it is not just closed, it is unsubscribed. `ws.close()` is a
+      //    handshake, and the client reconnects on a schedule, so "closed" only
+      //    means something if the next fan-out reaches nothing — neither the
+      //    severed socket during its closing window, nor any socket the client
+      //    manages to re-dial with the revoked cookie.
+      live.payloads.length = 0;
+      await emitEvent({ type: "book:detected", bookId: victimBook });
+      await page.waitForTimeout(3_000);
+      expect(live.payloads.filter((f) => f.includes(victimBook))).toEqual([]);
+
+      await context.close();
+    },
+  );
+
+  test("Settings page refetches its status on a job:failed event", async ({ livePage: page }) => {
+    // This used to assert `getByText("Settings")` is visible — the exact
+    // assertion it had already made BEFORE emitting the event, so it could not
+    // detect whether the event did anything at all.
+    //
+    // What the event is actually wired to (pages/settings.vue): the
+    // `job:failed` handler invalidates the `["settings", "status"]` query, and
+    // Pinia Colada refetches it because the page is mounted and using it. So
+    // the observable consequence is a fresh GET /api/settings/status — which is
+    // what the failed-jobs list and the queue counters are rendered from. Unwire
+    // the handler and this times out.
     await reloadWithWebSocket(page);
     await navigateToPage(page, "Settings", "**/settings");
-
-    // 2. Wait for settings page to load
     await expect(page.getByText("Settings").first()).toBeVisible();
 
-    // 3. Fire a job:failed event
+    // Let the page's own initial fetch settle first, so the response awaited
+    // below can only be the one the event caused.
+    await page.waitForLoadState("networkidle");
+
+    const refetched = page.waitForResponse(
+      (res) =>
+        res.url().includes("/api/settings/status") &&
+        res.request().method() === "GET" &&
+        res.status() === 200,
+      { timeout: 15_000 },
+    );
+
     await emitEvent({
       type: "job:failed",
       payload: { queue: "book-detected", error: "Test error", jobId: "test-123" },
     });
 
-    // 4. The settings status section should refresh (query invalidation)
-    // We verify the WS event pipeline reaches the settings page by confirming
-    // the page stays functional and doesn't crash from the event
-    await expect(page.getByText("Settings").first()).toBeVisible();
+    expect((await refetched).ok()).toBe(true);
   });
 
   test("Settings navigation does not emit Vue lifecycle warnings", async ({ livePage: page }) => {

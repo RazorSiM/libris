@@ -3,7 +3,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { deflateRawSync } from "node:zlib";
 import { afterAll, beforeAll, describe, expect, it } from "vite-plus/test";
-import { extractEpubCoverImage, extractEpubMetadata, extractEpubTextSample } from "./epub";
+import {
+  extractEpubCoverImage,
+  extractEpubMetadata,
+  extractEpubTextSample,
+  parseOpf,
+} from "./epub";
 
 // --- Minimal ZIP builder helpers ---
 
@@ -163,7 +168,206 @@ async function writeEpub(name: string, data: Buffer): Promise<string> {
   return filePath;
 }
 
+// The OPF scanners were quadratic — twice over, since the first fix swapped one
+// backtracking pattern for another. Every input below is small enough to sail
+// through validateEpubUpload and the OPF byte budget; before the fix each one
+// cost seconds to minutes of blocked event loop. Measured before -> after on
+// this machine:
+//
+//   2 MB "<dc:title " OPF        207222 ms -> 37.0 ms
+//   200 KB "<dc:title " OPF        3081 ms ->  4.2 ms
+//   200 KB "<dc:identifier " OPF   8534 ms ->  3.6 ms
+//   144 KB "<item " manifest       2516 ms ->  4.8 ms
+//   180 KB "<itemref " spine       2867 ms ->  3.9 ms
+//
+// A single 1000 ms budget leaves >25x headroom over the slowest post-fix case
+// and is >2.5x below the fastest pre-fix case, so it can neither flake nor go
+// green against a reintroduced quadratic scan.
+describe("OPF parsing is linear, not quadratic", () => {
+  const TIME_BUDGET_MS = 1000;
+
+  function timed<T>(fn: () => T): [T, number] {
+    const startedAt = performance.now();
+    const value = fn();
+    return [value, performance.now() - startedAt];
+  }
+
+  it("parses a 2 MB OPF of repeated dc:title tokens in well under a second", () => {
+    // The exact adversarial input from the bead.
+    const [meta, elapsed] = timed(() => parseOpf("<dc:title ".repeat(200_000)));
+    expect(meta.title).toBeUndefined();
+    expect(elapsed).toBeLessThan(TIME_BUDGET_MS);
+  });
+
+  async function timedAsync<T>(fn: () => Promise<T>): Promise<[T, number]> {
+    const startedAt = performance.now();
+    const value = await fn();
+    return [value, performance.now() - startedAt];
+  }
+
+  it.each([
+    ["dc:title flood", "<dc:title ".repeat(20_000)],
+    ["dc:title flood with tag ends", "<dc:title >".repeat(20_000)],
+    ["dc:identifier + opf:scheme flood", "<dc:identifier ".repeat(20_000)],
+    ["calibre meta flood", "<meta ".repeat(20_000)],
+    ["unclosed dc:subject with a run of angle brackets", `<dc:subject>${"<".repeat(60_000)}`],
+  ])("parses a %s in well under a second", (_label, xml) => {
+    const [, elapsed] = timed(() => parseOpf(xml));
+    expect(elapsed).toBeLessThan(TIME_BUDGET_MS);
+  });
+
+  it("extracts metadata from a tiny EPUB carrying a pathological OPF", async () => {
+    // ~240 KB of adversarial OPF that deflates into a ~1 KB EPUB, with real
+    // metadata at the end so we also prove the scan still reaches it.
+    const opf =
+      `<package><metadata>${"<dc:title ".repeat(8_000)}${"<item ".repeat(8_000)}` +
+      `${"<dc:identifier ".repeat(8_000)}<dc:title>Real Title</dc:title>` +
+      `<dc:creator>Real Author</dc:creator></metadata></package>`;
+    expect(opf.length).toBeLessThan(256 * 1024);
+
+    const epub = buildZip([
+      { name: "mimetype", data: Buffer.from("application/epub+zip") },
+      {
+        name: "META-INF/container.xml",
+        data: Buffer.from(makeContainerXml("OEBPS/content.opf")),
+        compress: true,
+      },
+      { name: "OEBPS/content.opf", data: Buffer.from(opf), compress: true },
+    ]);
+    // The whole exploit fits in a couple of kilobytes on the wire.
+    expect(epub.length).toBeLessThan(5 * 1024);
+
+    const path = await writeEpub("pathological-opf.epub", epub);
+    const startedAt = performance.now();
+    const meta = await extractEpubMetadata(path);
+    const elapsed = performance.now() - startedAt;
+
+    expect(meta.title).toBe("Real Title");
+    expect(meta.author).toBe("Real Author");
+    expect(elapsed).toBeLessThan(TIME_BUDGET_MS);
+  });
+
+  // The manifest and spine scanners are unreachable from parseOpf, so each is
+  // driven through the entry point that actually calls it. The shape matters:
+  // `X[^>]+Y` only blows up on a long run containing no ">" at all, because
+  // `[^>]+` can never scan past one. A flood terminated by a real ">" matches
+  // on the first attempt and is linear — a time bound on that input is vacuous.
+
+  it("scans a manifest flood of unterminated <item tags in well under a second", async () => {
+    // extractCoverHref's EPUB3 branch ran /<item[^>]+>/gi. No entry in the
+    // flood can match, so every one of the 24,000 starts rescans to end of
+    // string. Against the old code this EPUB took 2516 ms to yield no cover.
+    const opf = `<package><manifest>${"<item ".repeat(24_000)}`;
+
+    const path = await writeEpub(
+      "pathological-manifest.epub",
+      buildZip([
+        { name: "mimetype", data: Buffer.from("application/epub+zip") },
+        {
+          name: "META-INF/container.xml",
+          data: Buffer.from(makeContainerXml("OEBPS/content.opf")),
+          compress: true,
+        },
+        { name: "OEBPS/content.opf", data: Buffer.from(opf), compress: true },
+      ]),
+    );
+
+    const [cover, elapsed] = await timedAsync(() => extractEpubCoverImage(path));
+
+    expect(cover).toBeNull();
+    expect(elapsed).toBeLessThan(TIME_BUDGET_MS);
+  });
+
+  it("samples text from a spine buried under an <itemref flood", async () => {
+    // parseSpineHrefs ran /<itemref\b[^>]*\bidref="([^"]+)"[^>]*>/gi. The real
+    // itemref comes first, so the spine still resolves and we can assert the
+    // sample is unchanged; against the old code this EPUB took 2867 ms.
+    const opf =
+      `<package><metadata><dc:title>Spine Bomb</dc:title></metadata>` +
+      `<manifest><item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/></manifest>` +
+      `<spine><itemref idref="c1"/>${"<itemref ".repeat(20_000)}</spine></package>`;
+    const chapter = `<html><body><p>${"The quick brown fox jumps over the lazy dog. ".repeat(20)}</p></body></html>`;
+
+    const path = await writeEpub(
+      "pathological-spine.epub",
+      buildZip([
+        { name: "mimetype", data: Buffer.from("application/epub+zip") },
+        {
+          name: "META-INF/container.xml",
+          data: Buffer.from(makeContainerXml("OEBPS/content.opf")),
+          compress: true,
+        },
+        { name: "OEBPS/content.opf", data: Buffer.from(opf), compress: true },
+        { name: "OEBPS/c1.xhtml", data: Buffer.from(chapter), compress: true },
+      ]),
+    );
+
+    const [sample, elapsed] = await timedAsync(() => extractEpubTextSample(path));
+
+    expect(sample).toContain("The quick brown fox");
+    expect(elapsed).toBeLessThan(TIME_BUDGET_MS);
+  });
+});
+
+describe("OPF parsing correctness around case folding", () => {
+  // U+0130 lowercases to two UTF-16 code units. The old getAll() searched
+  // xml.toLowerCase() for the closing tag but sliced the original string with
+  // the offset it found, so every dc: field after such a character gained a
+  // stray "<".
+  it("extracts dc: fields following a character whose lowercase form is longer", () => {
+    const meta = parseOpf(
+      `<metadata><dc:publisher>İstanbul Press</dc:publisher>` +
+        `<dc:title>Real Title</dc:title><dc:creator>Jane Doe</dc:creator>` +
+        `<dc:subject>Fiction</dc:subject></metadata>`,
+    );
+
+    expect(meta.publisher).toBe("İstanbul Press");
+    expect(meta.title).toBe("Real Title");
+    expect(meta.author).toBe("Jane Doe");
+    expect(meta.genres).toEqual(["Fiction"]);
+  });
+
+  it("matches mixed-case and attribute-bearing dc: tags", () => {
+    const meta = parseOpf(
+      `<metadata><DC:Title id="t1">Cased Title</DC:TITLE>` +
+        `<dc:creator  opf:role="aut" >Spaced Author</dc:creator></metadata>`,
+    );
+
+    expect(meta.title).toBe("Cased Title");
+    expect(meta.author).toBe("Spaced Author");
+  });
+
+  it("does not treat a longer tag name as the tag it prefixes", () => {
+    const meta = parseOpf(
+      `<metadata><dc:titlefoo>Not A Title</dc:titlefoo>` +
+        `<dc:title>Actual Title</dc:title></metadata>`,
+    );
+
+    expect(meta.title).toBe("Actual Title");
+  });
+
+  it("ignores a self-closing dc: element instead of swallowing the next one", () => {
+    const meta = parseOpf(
+      `<metadata><dc:title/><dc:creator>Only Author</dc:creator>` +
+        `<dc:title>Later Title</dc:title></metadata>`,
+    );
+
+    expect(meta.title).toBe("Later Title");
+    expect(meta.author).toBe("Only Author");
+  });
+});
+
 describe("extractEpubMetadata", () => {
+  it("rejects an OPF beyond the parser input budget without scanning it", async () => {
+    const oversizedOpf = `<package><metadata>${"<dc:title>".repeat(250_000)}</metadata></package>`;
+    const epub = buildEpub(oversizedOpf);
+    const path = await writeEpub("oversized-opf.epub", epub);
+    const startedAt = performance.now();
+
+    await expect(extractEpubMetadata(path)).rejects.toThrow(/OPF.*limit/i);
+    expect(performance.now() - startedAt).toBeLessThan(100);
+  });
+
   describe("valid EPUBs", () => {
     it("extracts full metadata from a well-formed EPUB", async () => {
       const opf = makeOpf({
@@ -308,15 +512,18 @@ describe("extractEpubMetadata", () => {
     });
 
     it("returns empty metadata for random binary data", async () => {
+      // Deterministic rather than Math.random(): a test whose
+      // input changes every run cannot be re-examined when it does fail.
       const garbage = Buffer.alloc(4096);
       for (let i = 0; i < garbage.length; i++) {
-        garbage[i] = Math.floor(Math.random() * 256);
+        garbage[i] = (i * 37 + 11) % 256;
       }
       const path = await writeEpub("garbage.epub", garbage);
       const meta = await extractEpubMetadata(path);
 
-      // Should not throw, returns empty or partial metadata
-      expect(meta).toBeDefined();
+      // `toBeDefined()` was the whole assertion, and this
+      // function returns an object on every path -- it could not fail.
+      expect(meta).toEqual({});
     });
 
     it("returns empty metadata when EOCD signature is corrupted", async () => {
@@ -331,8 +538,10 @@ describe("extractEpubMetadata", () => {
       const path = await writeEpub("bad-eocd.epub", corrupted);
       const meta = await extractEpubMetadata(path);
 
-      // Fallback extraction may still find metadata from local headers
-      expect(meta).toBeDefined();
+      // Was `toBeDefined()`, which an always-object return can never fail.
+      // The local-header fallback recovers the OPF even with the EOCD
+      // destroyed, so that recovery is what gets pinned.
+      expect(meta.title).toBe("Good Book");
     });
 
     it("handles missing container.xml gracefully", async () => {
@@ -397,8 +606,8 @@ describe("extractEpubMetadata", () => {
       const path = await writeEpub("bad-cd.epub", corrupted);
       const meta = await extractEpubMetadata(path);
 
-      // Should not throw; may return empty or fallback metadata
-      expect(meta).toBeDefined();
+      // Was `toBeDefined()`. The fallback still finds the OPF.
+      expect(meta.title).toBe("Bad CD");
     });
 
     it("handles DEFLATE decompression failure gracefully", async () => {
@@ -434,8 +643,9 @@ describe("extractEpubMetadata", () => {
       const path = await writeEpub("bad-deflate.epub", corrupted);
       const meta = await extractEpubMetadata(path);
 
-      // Should not throw
-      expect(meta).toBeDefined();
+      // Was `toBeDefined()`. The OPF is readable through the
+      // fallback path even though its DEFLATE stream is not.
+      expect(meta.title).toBe("Bad Deflate");
     });
 
     it("returns empty metadata for non-existent file", async () => {
@@ -1135,9 +1345,10 @@ describe("extractEpubMetadata", () => {
       const path = await writeEpub("fallback.epub", corrupted);
       const meta = await extractEpubMetadata(path);
 
-      // Fallback scans local headers for .opf files (uncompressed only)
-      // If the OPF was stored uncompressed, it should find metadata
-      expect(meta).toBeDefined();
+      // Was `toBeDefined()` under a comment saying "if the OPF was stored
+      // uncompressed, it should find metadata" -- which asserted none of
+      // that. This is the assertion the comment described.
+      expect(meta.title).toBe("Fallback Book");
     });
   });
 });

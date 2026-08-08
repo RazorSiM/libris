@@ -33,6 +33,12 @@ tmp/
 node_modules/
 dist/
 
+# The SPA bundle, copied here so Hono serves the API and the frontend from one
+# port. CI and the E2E harnesses create it with `cp -r apps/web/dist public`,
+# so it is build output that happens to sit at the repo root — untracked and
+# one `git add -A` away from being committed by accident.
+/public/
+
 # pnpm content-addressable store (CI places it inside the workspace)
 .pnpm-store/
 
@@ -45,5 +51,5 @@ docs/.vitepress/cache/
 # Generated at build time — run `pnpm run build:spec` to regenerate
 services/api-hono/openapi.json
 
-# Bruno API collection — generated from OpenAPI spec via `pnpm run bruno:import`
+# Bruno API collection — generated from OpenAPI via `vp run bruno:import`
 bruno/

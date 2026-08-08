@@ -1,6 +1,21 @@
+/**
+ * Access control between two people.
+ *
+ * A person and their credentials are different objects: an account comes from
+ * the admin plugin, and app passwords are things that account holds. App
+ * passwords are also scoped — refused on admin routes, /api/auth/*,
+ * /api/app-passwords and /api/credentials, whoever owns them.
+ *
+ * That decides which credential each test below uses, and it is not cosmetic: a
+ * role assertion made with a Bearer key would pass even if the role check were
+ * deleted, because the key is refused before the role is ever read. Role tests
+ * use SESSIONS. Tests about the ordinary library surface use keys, because that
+ * is what an e-reader holds.
+ */
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vite-plus/test";
-import { createTestApp, createFetchHelper } from "./setup.js";
+import { bootstrapAdmin, createAccount, createTestApp, createFetchHelper } from "./setup.js";
 import type { Db } from "../src/db/client.js";
+import type { AppServices } from "../src/bootstrap.js";
 import { and, eq } from "drizzle-orm";
 import { books, readingProgress } from "../src/db/schema.js";
 
@@ -8,16 +23,19 @@ import { books, readingProgress } from "../src/db/schema.js";
 
 let $fetchRaw: ReturnType<typeof createFetchHelper>;
 let testDb: Db;
+let services: AppServices;
 
 // ── Per-test state ───────────────────────────────────────────────
 
-/** Admin API key (first key created via /setup, always isAdmin=true) */
+/** The admin: their user id, an app password, and a browser session. */
 let adminKey: string;
-let adminKeyId: string;
+let adminUserId: string;
+let adminCookie: string;
 
-/** Non-admin API key (created by admin via POST /api/auth/keys) */
+/** A second, non-admin person. */
 let userKey: string;
-let userKeyId: string;
+let userUserId: string;
+let userCookie: string;
 
 function adminAuth() {
   return { authorization: `Bearer ${adminKey}` };
@@ -27,42 +45,43 @@ function userAuth() {
   return { authorization: `Bearer ${userKey}` };
 }
 
+function adminSession() {
+  return { cookie: adminCookie };
+}
+
+function userSession() {
+  return { cookie: userCookie };
+}
+
 // ── App lifecycle: create once ─────────────────────────────────────
 
 beforeAll(async () => {
   const testApp = await createTestApp();
   $fetchRaw = createFetchHelper(testApp.app);
   testDb = testApp.db;
+  services = testApp.services;
 });
 
 // ── Per-test lifecycle ─────────────────────────────────────────────
 
 beforeEach(async () => {
-  // Wipe all tables + caches
-  await $fetchRaw("/__test/cleanup", { method: "POST" });
+  // includeAuth: several tests below count how many credentials a person holds,
+  // which only means anything from an empty install.
+  await $fetchRaw("/__test/cleanup", { method: "POST", body: { includeAuth: true } });
 
-  // Create admin key (first key is always admin)
-  const { data: setupData, status: setupStatus } = await $fetchRaw("/api/auth/setup", {
-    method: "POST",
-    body: { label: "admin-key" },
-  });
-  expect(setupStatus).toBe(201);
-  adminKey = setupData.key;
-  adminKeyId = setupData.id;
+  const admin = await bootstrapAdmin(services, $fetchRaw);
+  adminUserId = admin.userId;
+  adminKey = admin.rawKey;
+  adminCookie = admin.cookie;
 
-  // Admin creates a non-admin key
-  const { data: userKeyData, status: userKeyStatus } = await $fetchRaw("/api/auth/keys", {
-    method: "POST",
-    body: { label: "user-key" },
-    headers: adminAuth(),
-  });
-  expect(userKeyStatus).toBe(201);
-  userKey = userKeyData.key;
-  userKeyId = userKeyData.id;
+  const member = await createAccount(services, { email: "member@example.test", role: "user" });
+  userUserId = member.userId;
+  userKey = member.rawKey;
+  userCookie = member.cookie;
 });
 
 afterEach(async () => {
-  await $fetchRaw("/__test/cleanup", { method: "POST" });
+  await $fetchRaw("/__test/cleanup", { method: "POST", body: { includeAuth: true } });
 });
 
 // ═══════════════════════════════════════════════════════════════════
@@ -70,82 +89,80 @@ afterEach(async () => {
 // ═══════════════════════════════════════════════════════════════════
 
 describe("admin vs non-admin access control", () => {
-  it("non-admin gets 403 on POST /api/auth/keys (create key)", async () => {
-    const { status } = await $fetchRaw("/api/auth/keys", {
-      method: "POST",
-      body: { label: "attempted-key" },
-      headers: userAuth(),
-    });
-    expect(status).toBe(403);
-  });
-
-  it("non-admin gets 403 on DELETE /api/auth/keys/:id", async () => {
-    const { status } = await $fetchRaw(`/api/auth/keys/${adminKeyId}`, {
-      method: "DELETE",
-      headers: userAuth(),
-    });
-    expect(status).toBe(403);
-  });
-
   it("non-admin gets 403 on PATCH /api/settings", async () => {
     const { status } = await $fetchRaw("/api/settings", {
       method: "PATCH",
       body: { hardcoverSyncEnabled: false },
-      headers: userAuth(),
+      headers: userSession(),
     });
     expect(status).toBe(403);
   });
 
   it("non-admin gets 403 on admin-only job management routes", async () => {
     const { status } = await $fetchRaw("/api/jobs/status", {
-      headers: userAuth(),
+      headers: userSession(),
     });
     expect(status).toBe(403);
-  });
-
-  it("admin can access POST /api/auth/keys", async () => {
-    const { status } = await $fetchRaw("/api/auth/keys", {
-      method: "POST",
-      body: { label: "third-key" },
-      headers: adminAuth(),
-    });
-    expect(status).toBe(201);
   });
 
   it("admin can access PATCH /api/settings", async () => {
     const { status } = await $fetchRaw("/api/settings", {
       method: "PATCH",
       body: { hardcoverSyncEnabled: false },
-      headers: adminAuth(),
+      headers: adminSession(),
     });
     expect(status).toBe(200);
   });
 
   it("admin can access job management routes", async () => {
     const { status } = await $fetchRaw("/api/jobs/status", {
-      headers: adminAuth(),
+      headers: adminSession(),
     });
     expect(status).toBe(200);
   });
 
-  it("non-admin can list keys but only sees their own", async () => {
-    const { data, status } = await $fetchRaw("/api/auth/keys", {
-      headers: userAuth(),
+  it("minting a credential is not an admin power any more", async () => {
+    // Issuing yourself a credential for your own e-reader needs no privilege.
+    // Refusing it would mean a household member cannot connect a reader without
+    // an admin doing it for them.
+    const { status } = await $fetchRaw("/api/app-passwords", {
+      method: "POST",
+      body: { name: "their-own-reader" },
+      headers: userSession(),
     });
-    expect(status).toBe(200);
-    expect(data.keys).toHaveLength(1);
-    expect(data.keys[0].id).toBe(userKeyId);
+    expect(status).toBe(201);
   });
 
-  it("admin can list all keys", async () => {
-    const { data, status } = await $fetchRaw("/api/auth/keys", {
-      headers: adminAuth(),
+  it("creating a PERSON still is", async () => {
+    // The privilege did not disappear, it moved to the act it always belonged
+    // to. Self-registration is disabled outright, so this is the only route in.
+    await expect(
+      services.auth.api.createUser({
+        body: {
+          email: "gatecrasher@example.test",
+          password: "gatecrasher-password",
+          name: "Gatecrasher",
+          role: "user",
+        },
+        headers: new Headers(userSession()),
+      }),
+    ).rejects.toThrow();
+  });
+
+  it("nobody sees anyone else's credentials, admin included", async () => {
+    // An admin manages accounts, not the credentials those accounts hold — they
+    // can no more read a member's app passwords than read their password.
+    const { data: userList, status } = await $fetchRaw("/api/app-passwords", {
+      headers: userSession(),
     });
     expect(status).toBe(200);
-    expect(data.keys.length).toBeGreaterThanOrEqual(2);
-    const ids = data.keys.map((k: { id: string }) => k.id);
-    expect(ids).toContain(adminKeyId);
-    expect(ids).toContain(userKeyId);
+    expect(userList.keys).toHaveLength(1);
+
+    const { data: adminList } = await $fetchRaw("/api/app-passwords", {
+      headers: adminSession(),
+    });
+    expect(adminList.keys).toHaveLength(1);
+    expect(adminList.keys[0].id).not.toBe(userList.keys[0].id);
   });
 });
 
@@ -156,7 +173,6 @@ describe("admin vs non-admin access control", () => {
 describe("book ownership (requireBookOwnership)", () => {
   let adminBookId: string;
   let userBookId: string;
-  let unownedBookId: string;
 
   beforeEach(async () => {
     // Insert a book owned by admin
@@ -166,7 +182,7 @@ describe("book ownership (requireBookOwnership)", () => {
         title: "Admin Book",
         author: "Admin Author",
         status: "review",
-        createdBy: adminKeyId,
+        createdBy: adminUserId,
       })
       .returning({ id: books.id });
     adminBookId = adminBook!.id;
@@ -178,22 +194,10 @@ describe("book ownership (requireBookOwnership)", () => {
         title: "User Book",
         author: "User Author",
         status: "review",
-        createdBy: userKeyId,
+        createdBy: userUserId,
       })
       .returning({ id: books.id });
     userBookId = userBook!.id;
-
-    // Insert an unowned book (createdBy = null)
-    const [unownedBook] = await testDb
-      .insert(books)
-      .values({
-        title: "Unowned Book",
-        author: "Unknown",
-        status: "review",
-        createdBy: null,
-      })
-      .returning({ id: books.id });
-    unownedBookId = unownedBook!.id;
   });
 
   it("admin can delete any book (even ones they did not create)", async () => {
@@ -222,21 +226,14 @@ describe("book ownership (requireBookOwnership)", () => {
     expect(status).toBe(403);
   });
 
-  it("unowned books (createdBy=null) are admin-only", async () => {
-    // Non-admin should get 403
-    const { status: userStatus } = await $fetchRaw(`/api/books/${unownedBookId}`, {
-      method: "DELETE",
-      headers: userAuth(),
-    });
-    expect(userStatus).toBe(403);
-
-    // Admin should succeed
-    const { status: adminStatus } = await $fetchRaw(`/api/books/${unownedBookId}`, {
-      method: "DELETE",
-      headers: adminAuth(),
-      responseType: "text",
-    });
-    expect(adminStatus).toBe(204);
+  it("cannot create an unowned book at all", async () => {
+    // created_by is NOT NULL, so there is no unowned-book case for
+    // authorization to handle. The database is what enforces it.
+    await expect(
+      testDb
+        .insert(books)
+        .values({ title: "Unowned Book", author: "Unknown", status: "review" } as never),
+    ).rejects.toThrow();
   });
 
   it("admin can approve any book", async () => {
@@ -292,75 +289,75 @@ describe("book ownership (requireBookOwnership)", () => {
 // 3. API key management
 // ═══════════════════════════════════════════════════════════════════
 
-describe("API key management", () => {
-  it("admin creates key with 201", async () => {
-    const { data, status } = await $fetchRaw("/api/auth/keys", {
+/**
+ * The credential lifecycle, end to end: issue it, use it, revoke it, and watch
+ * it stop working on the very next request.
+ *
+ * There is no "cannot delete your last credential" guard, deliberately — a
+ * credential is disposable. The thing that must not be deleted is the last
+ * ADMIN, which the admin plugin enforces and tests/e2e/auth.spec.ts covers.
+ */
+describe("app password lifecycle", () => {
+  it("issue, use, revoke, and it is dead immediately", async () => {
+    const { data: issued, status } = await $fetchRaw("/api/app-passwords", {
       method: "POST",
-      body: { label: "new-user" },
-      headers: adminAuth(),
+      body: { name: "lifecycle" },
+      headers: userSession(),
     });
     expect(status).toBe(201);
-    expect(data).toMatchObject({
-      id: expect.any(String),
-      key: expect.any(String),
-      label: "new-user",
+    expect(issued).toMatchObject({ id: expect.any(String), key: expect.any(String) });
+
+    const { status: before } = await $fetchRaw("/api/inbox", {
+      headers: { authorization: `Bearer ${issued.key}` },
     });
+    expect(before).toBe(200);
+
+    const { status: revoked } = await $fetchRaw(`/api/app-passwords/${issued.id}`, {
+      method: "DELETE",
+      headers: userSession(),
+    });
+    expect(revoked).toBe(204);
+
+    // No cache anywhere in the auth path, so "immediately" is literal — the old
+    // middleware would have kept honouring this for up to five minutes.
+    const { status: after } = await $fetchRaw("/api/inbox", {
+      headers: { authorization: `Bearer ${issued.key}` },
+    });
+    expect(after).toBe(401);
   });
 
-  it("non-admin cannot create key (403)", async () => {
-    const { status } = await $fetchRaw("/api/auth/keys", {
+  it("the plaintext is returned once and never again", async () => {
+    const { data: issued } = await $fetchRaw("/api/app-passwords", {
       method: "POST",
-      body: { label: "sneaky-key" },
-      headers: userAuth(),
+      body: { name: "write-once" },
+      headers: userSession(),
     });
-    expect(status).toBe(403);
+    expect(issued.key).toEqual(expect.any(String));
+
+    const { data: listed } = await $fetchRaw("/api/app-passwords", { headers: userSession() });
+    for (const entry of listed.keys) {
+      expect(entry).not.toHaveProperty("key");
+    }
   });
 
-  it("cannot delete the last remaining API key", async () => {
-    // Delete the user key first (so only admin key remains)
-    const { status: deleteUserStatus } = await $fetchRaw(`/api/auth/keys/${userKeyId}`, {
-      method: "DELETE",
-      headers: adminAuth(),
-    });
-    expect(deleteUserStatus).toBe(200);
-
-    // Now try to delete admin key (it's the last one and also the active key)
-    const { status } = await $fetchRaw(`/api/auth/keys/${adminKeyId}`, {
-      method: "DELETE",
-      headers: adminAuth(),
-    });
-    // Should be 409: either "last key" or "active key" protection
-    expect(status).toBe(409);
-  });
-
-  it("deleted key returns 401 on next request", async () => {
-    // Create a third key so we have 3 total
-    const { data: thirdKeyData } = await $fetchRaw("/api/auth/keys", {
+  it("an admin cannot revoke a member's credential — it is simply not found", async () => {
+    const { data: theirs } = await $fetchRaw("/api/app-passwords", {
       method: "POST",
-      body: { label: "third-key" },
-      headers: adminAuth(),
+      body: { name: "members-reader" },
+      headers: userSession(),
     });
-    const thirdKey = thirdKeyData.key;
-    const thirdKeyId = thirdKeyData.id;
 
-    // Verify the third key works
-    const { status: beforeStatus } = await $fetchRaw("/api/inbox", {
-      headers: { authorization: `Bearer ${thirdKey}` },
-    });
-    expect(beforeStatus).toBe(200);
-
-    // Admin deletes the third key
-    const { status: deleteStatus } = await $fetchRaw(`/api/auth/keys/${thirdKeyId}`, {
+    const { status } = await $fetchRaw(`/api/app-passwords/${theirs.id}`, {
       method: "DELETE",
-      headers: adminAuth(),
+      headers: adminSession(),
     });
-    expect(deleteStatus).toBe(200);
+    expect(status).toBe(404);
 
-    // The deleted key should now return 401
-    const { status: afterStatus } = await $fetchRaw("/api/inbox", {
-      headers: { authorization: `Bearer ${thirdKey}` },
+    // And it still works, so the 404 really was a refusal and not a silent success.
+    const { status: stillWorks } = await $fetchRaw("/api/inbox", {
+      headers: { authorization: `Bearer ${theirs.key}` },
     });
-    expect(afterStatus).toBe(401);
+    expect(stillWorks).toBe(200);
   });
 });
 
@@ -368,90 +365,97 @@ describe("API key management", () => {
 // 4. Credential isolation
 // ═══════════════════════════════════════════════════════════════════
 
+/**
+ * Sessions throughout: /api/credentials refuses app passwords,
+ * so a Bearer key would 403 before any isolation logic ran.
+ *
+ * "opds" is also no longer one of these. OPDS readers hold an app password now,
+ * so the service enum is kosync and hardcover only — the tests that used to
+ * drive /api/credentials/opds were rewritten onto kosync rather than deleted,
+ * because the isolation they check is still worth checking.
+ */
 describe("credential isolation", () => {
-  it("user A sets OPDS credentials, user B cannot see them", async () => {
-    // Admin sets OPDS credentials
-    const { status: putStatus } = await $fetchRaw("/api/credentials/opds", {
+  it("user A sets credentials, user B cannot see them", async () => {
+    const { status: putStatus } = await $fetchRaw("/api/credentials/kosync", {
       method: "PUT",
-      body: { username: "admin-opds", password: "admin-pass" },
-      headers: adminAuth(),
+      body: { username: "admin-kosync", password: "admin-pass-strong" },
+      headers: adminSession(),
     });
     expect(putStatus).toBe(200);
 
     // Admin can see their own credentials
-    const { data: adminCreds, status: adminGetStatus } = await $fetchRaw("/api/credentials/opds", {
-      headers: adminAuth(),
-    });
+    const { data: adminCreds, status: adminGetStatus } = await $fetchRaw(
+      "/api/credentials/kosync",
+      { headers: adminSession() },
+    );
     expect(adminGetStatus).toBe(200);
     expect(adminCreds.configured).toBe(true);
-    expect(adminCreds.username).toBe("admin-opds");
+    expect(adminCreds.username).toBe("admin-kosync");
 
     // Non-admin user cannot see admin's credentials
-    const { data: userCreds, status: userGetStatus } = await $fetchRaw("/api/credentials/opds", {
-      headers: userAuth(),
+    const { data: userCreds, status: userGetStatus } = await $fetchRaw("/api/credentials/kosync", {
+      headers: userSession(),
     });
     expect(userGetStatus).toBe(200);
     expect(userCreds.configured).toBe(false);
   });
 
   it("user A and user B have independent credentials", async () => {
-    // Admin sets OPDS credentials
-    await $fetchRaw("/api/credentials/opds", {
+    await $fetchRaw("/api/credentials/kosync", {
       method: "PUT",
-      body: { username: "admin-opds", password: "admin-pass" },
-      headers: adminAuth(),
+      body: { username: "admin-kosync", password: "admin-pass-strong" },
+      headers: adminSession(),
     });
 
-    // User sets different OPDS credentials
-    await $fetchRaw("/api/credentials/opds", {
+    await $fetchRaw("/api/credentials/kosync", {
       method: "PUT",
-      body: { username: "user-opds", password: "user-pass" },
-      headers: userAuth(),
+      body: { username: "user-kosync", password: "user-pass-strong" },
+      headers: userSession(),
     });
 
     // Each user sees only their own
-    const { data: adminCreds } = await $fetchRaw("/api/credentials/opds", {
-      headers: adminAuth(),
+    const { data: adminCreds } = await $fetchRaw("/api/credentials/kosync", {
+      headers: adminSession(),
     });
     expect(adminCreds.configured).toBe(true);
-    expect(adminCreds.username).toBe("admin-opds");
+    expect(adminCreds.username).toBe("admin-kosync");
 
-    const { data: userCreds } = await $fetchRaw("/api/credentials/opds", {
-      headers: userAuth(),
+    const { data: userCreds } = await $fetchRaw("/api/credentials/kosync", {
+      headers: userSession(),
     });
     expect(userCreds.configured).toBe(true);
-    expect(userCreds.username).toBe("user-opds");
+    expect(userCreds.username).toBe("user-kosync");
   });
 
   it("deleting user A credentials does not affect user B", async () => {
     // Both users set credentials
     await $fetchRaw("/api/credentials/kosync", {
       method: "PUT",
-      body: { username: "admin-kosync", password: "admin-pass" },
-      headers: adminAuth(),
+      body: { username: "admin-kosync", password: "admin-pass-strong" },
+      headers: adminSession(),
     });
     await $fetchRaw("/api/credentials/kosync", {
       method: "PUT",
-      body: { username: "user-kosync", password: "user-pass" },
-      headers: userAuth(),
+      body: { username: "user-kosync", password: "user-pass-strong" },
+      headers: userSession(),
     });
 
     // Admin deletes their own kosync credentials
     const { status: deleteStatus } = await $fetchRaw("/api/credentials/kosync", {
       method: "DELETE",
-      headers: adminAuth(),
+      headers: adminSession(),
     });
     expect(deleteStatus).toBe(200);
 
     // Admin's credentials are gone
     const { data: adminCreds } = await $fetchRaw("/api/credentials/kosync", {
-      headers: adminAuth(),
+      headers: adminSession(),
     });
     expect(adminCreds.configured).toBe(false);
 
     // User's credentials are still intact
     const { data: userCreds } = await $fetchRaw("/api/credentials/kosync", {
-      headers: userAuth(),
+      headers: userSession(),
     });
     expect(userCreds.configured).toBe(true);
     expect(userCreds.username).toBe("user-kosync");
@@ -461,20 +465,20 @@ describe("credential isolation", () => {
     // Admin sets Hardcover credentials
     await $fetchRaw("/api/credentials/hardcover", {
       method: "PUT",
-      body: { username: "admin-hc", password: "admin-token" },
-      headers: adminAuth(),
+      body: { username: "admin-hc", password: "admin-token-long" },
+      headers: adminSession(),
     });
 
     // User tries to delete (they have no hardcover credentials)
     const { status } = await $fetchRaw("/api/credentials/hardcover", {
       method: "DELETE",
-      headers: userAuth(),
+      headers: userSession(),
     });
     expect(status).toBe(404);
 
     // Admin's credentials are still there
     const { data: adminCreds } = await $fetchRaw("/api/credentials/hardcover", {
-      headers: adminAuth(),
+      headers: adminSession(),
     });
     expect(adminCreds.configured).toBe(true);
   });
@@ -484,16 +488,28 @@ describe("credential isolation", () => {
 // 5. Reading progress isolation
 // ═══════════════════════════════════════════════════════════════════
 //
-// Note: /api/stats and /api/reading-status/counts use raw SQL that
-// returns differently under PGlite vs PostgreSQL (db.execute shape).
-// We test isolation at the DB layer and via the unique constraint
-// to verify the schema correctly partitions progress by apiKeyId.
+// These blocks used to insert both users' rows themselves, run their own
+// UPDATE, and then assert the other row was untouched. No
+// application code ran, so they held whatever the KoSync routes did — the
+// invariant was really being kept by schema.ts's per-user unique index, and
+// the tests would have stayed green with the routes' user scoping deleted.
+//
+// They drive `/kosync/syncs/progress` now: the PUT is the real upsert (whose
+// ON CONFLICT target is what partitions two readers), and every assertion
+// reads the value back out through the GET (whose WHERE clause is the other
+// half). One DB-level test survives, renamed to say plainly that it pins the
+// schema rather than the routes.
 
 describe("reading progress isolation", () => {
+  /** md5("testpass-strong") — the userkey KOReader sends after the exchange. */
+  const KOSYNC_KEY = "7b41a909c57c86088eb92f47bdd6dc67";
+  const KOSYNC_PASSWORD = "testpass-strong";
+  /** Matches the seeded file's content hash, so the upsert resolves a book id. */
+  const DOCUMENT = "shared-book-content-hash";
+
   let bookId: string;
 
   beforeEach(async () => {
-    // Create a shared book
     const [book] = await testDb
       .insert(books)
       .values({
@@ -502,122 +518,136 @@ describe("reading progress isolation", () => {
         status: "organized",
         pageCount: 300,
         genres: ["fiction"],
-        createdBy: adminKeyId,
+        createdBy: adminUserId,
       })
       .returning({ id: books.id });
     bookId = book!.id;
+
+    await $fetchRaw("/__test/seed-files", {
+      method: "POST",
+      body: {
+        files: [
+          {
+            bookId,
+            format: "epub",
+            originalName: "shared-book.epub",
+            contentHash: DOCUMENT,
+          },
+        ],
+      },
+    });
+
+    await $fetchRaw("/api/credentials/kosync", {
+      method: "PUT",
+      headers: adminSession(),
+      body: { username: "admin-kosync", password: KOSYNC_PASSWORD },
+    });
+    await $fetchRaw("/api/credentials/kosync", {
+      method: "PUT",
+      headers: userSession(),
+      body: { username: "user-kosync", password: KOSYNC_PASSWORD },
+    });
   });
 
-  it("two users can have independent reading progress on the same book", async () => {
-    // Insert reading progress for admin (80%)
-    await testDb.insert(readingProgress).values({
-      bookId,
-      apiKeyId: adminKeyId,
-      document: "shared-book.epub",
-      device: "admin-device",
-      progress: "/body/chapter[8]",
-      percentage: "0.8000",
-      timestamp: BigInt(Date.now()),
+  /** KOReader's own credential form: the non-standard x-auth-* header pair. */
+  const adminReader = () => ({ "x-auth-user": "admin-kosync", "x-auth-key": KOSYNC_KEY });
+  const userReader = () => ({ "x-auth-user": "user-kosync", "x-auth-key": KOSYNC_KEY });
+
+  function sync(
+    headers: Record<string, string>,
+    body: { device: string; progress: string; percentage: number },
+  ) {
+    return $fetchRaw("/kosync/syncs/progress", {
+      method: "PUT",
+      headers,
+      body: { document: DOCUMENT, ...body },
     });
+  }
 
-    // Insert reading progress for user (30%) - same document, different device/user
-    await testDb.insert(readingProgress).values({
-      bookId,
-      apiKeyId: userKeyId,
-      document: "shared-book.epub",
-      device: "user-device",
-      progress: "/body/chapter[3]",
-      percentage: "0.3000",
-      timestamp: BigInt(Date.now()),
-    });
+  /** Deliberately a second request: the point is what was PERSISTED. */
+  function readBack(headers: Record<string, string>) {
+    return $fetchRaw(`/kosync/syncs/progress/${DOCUMENT}`, { headers });
+  }
 
-    // Query admin's progress
-    const adminRows = await testDb
-      .select({ percentage: readingProgress.percentage })
-      .from(readingProgress)
-      .where(and(eq(readingProgress.bookId, bookId), eq(readingProgress.apiKeyId, adminKeyId)));
-    expect(adminRows).toHaveLength(1);
-    expect(Number(adminRows[0]!.percentage)).toBeCloseTo(0.8, 2);
+  it("each reader is served its own progress, not whichever row is newest", async () => {
+    expect(
+      (await sync(adminReader(), { device: "kobo", progress: "/ch[8]", percentage: 0.8 })).status,
+    ).toBe(200);
+    expect(
+      (await sync(userReader(), { device: "kindle", progress: "/ch[3]", percentage: 0.3 })).status,
+    ).toBe(200);
 
-    // Query user's progress
-    const userRows = await testDb
-      .select({ percentage: readingProgress.percentage })
-      .from(readingProgress)
-      .where(and(eq(readingProgress.bookId, bookId), eq(readingProgress.apiKeyId, userKeyId)));
-    expect(userRows).toHaveLength(1);
-    expect(Number(userRows[0]!.percentage)).toBeCloseTo(0.3, 2);
+    const admin = await readBack(adminReader());
+    expect(admin.status).toBe(200);
+    expect(admin.data.percentage).toBe(0.8);
+
+    const member = await readBack(userReader());
+    expect(member.status).toBe(200);
+    expect(member.data.percentage).toBe(0.3);
   });
 
-  it("per-user unique constraint allows same document+device for different users", async () => {
-    // Both users reading the same document on same-named device
-    await testDb.insert(readingProgress).values({
-      bookId,
-      apiKeyId: adminKeyId,
-      document: "shared-book.epub",
-      device: "shared-device",
-      progress: "/body/chapter[8]",
-      percentage: "0.8000",
-      timestamp: BigInt(Date.now()),
-    });
+  it("the same device name on two accounts is two rows, not one", async () => {
+    // Both people call their reader "kindle". Only the userId in the upsert's
+    // conflict target keeps the second sync from overwriting the first.
+    await sync(adminReader(), { device: "kindle", progress: "/ch[8]", percentage: 0.8 });
+    await sync(userReader(), { device: "kindle", progress: "/ch[3]", percentage: 0.3 });
 
-    // Should NOT violate unique constraint because apiKeyId is different
-    await testDb.insert(readingProgress).values({
-      bookId,
-      apiKeyId: userKeyId,
-      document: "shared-book.epub",
-      device: "shared-device",
-      progress: "/body/chapter[3]",
-      percentage: "0.3000",
-      timestamp: BigInt(Date.now()),
-    });
+    expect((await readBack(adminReader())).data.percentage).toBe(0.8);
+    expect((await readBack(userReader())).data.percentage).toBe(0.3);
 
-    // Both rows exist
-    const allRows = await testDb
+    const stored = await testDb
+      .select({ userId: readingProgress.userId })
+      .from(readingProgress)
+      .where(eq(readingProgress.document, DOCUMENT));
+    expect(stored.map(({ userId }) => userId).sort()).toEqual([adminUserId, userUserId].sort());
+  });
+
+  it("one reader syncing again does not move the other reader's place", async () => {
+    await sync(adminReader(), { device: "kobo", progress: "/ch[5]", percentage: 0.5 });
+    await sync(userReader(), { device: "kindle", progress: "/ch[2]", percentage: 0.2 });
+
+    // The second sync from the same device takes the ON CONFLICT branch.
+    await sync(adminReader(), { device: "kobo", progress: "/ch[10]", percentage: 0.99 });
+
+    expect((await readBack(userReader())).data.percentage).toBe(0.2);
+    expect((await readBack(adminReader())).data.percentage).toBe(0.99);
+  });
+
+  it("resolves the document to the book so progress is not orphaned", async () => {
+    await sync(adminReader(), { device: "kobo", progress: "/ch[1]", percentage: 0.1 });
+
+    const [stored] = await testDb
+      .select({ bookId: readingProgress.bookId })
+      .from(readingProgress)
+      .where(and(eq(readingProgress.document, DOCUMENT), eq(readingProgress.userId, adminUserId)));
+    expect(stored?.bookId).toBe(bookId);
+  });
+
+  it("SCHEMA: the per-user unique index is what makes those two rows possible", async () => {
+    // Not a test of any route — it pins reading_progress_user_document_device_uniq
+    // directly, because the upsert above is only correct while the constraint it
+    // names has userId in it. Named so nobody reads it as endpoint coverage.
+    const row = {
+      bookId,
+      document: DOCUMENT,
+      device: "shared-device",
+      progress: "/ch[1]",
+      percentage: "0.1000",
+      timestamp: BigInt(Date.now()),
+    };
+
+    await testDb.insert(readingProgress).values({ ...row, userId: adminUserId });
+    // Different user, same (document, device): allowed.
+    await testDb.insert(readingProgress).values({ ...row, userId: userUserId });
+    // Same user, same (document, device): refused.
+    await expect(
+      testDb.insert(readingProgress).values({ ...row, userId: adminUserId }),
+    ).rejects.toThrow();
+
+    const stored = await testDb
       .select()
       .from(readingProgress)
-      .where(eq(readingProgress.bookId, bookId));
-    expect(allRows).toHaveLength(2);
-  });
-
-  it("user A progress update does not overwrite user B progress", async () => {
-    // Insert initial progress for both users
-    await testDb.insert(readingProgress).values({
-      bookId,
-      apiKeyId: adminKeyId,
-      document: "shared-book.epub",
-      device: "admin-device",
-      progress: "/body/chapter[5]",
-      percentage: "0.5000",
-      timestamp: BigInt(Date.now()),
-    });
-    await testDb.insert(readingProgress).values({
-      bookId,
-      apiKeyId: userKeyId,
-      document: "shared-book.epub",
-      device: "user-device",
-      progress: "/body/chapter[2]",
-      percentage: "0.2000",
-      timestamp: BigInt(Date.now()),
-    });
-
-    // Admin updates their progress to 99%
-    await testDb
-      .update(readingProgress)
-      .set({ percentage: "0.9900", progress: "/body/chapter[10]" })
-      .where(and(eq(readingProgress.bookId, bookId), eq(readingProgress.apiKeyId, adminKeyId)));
-
-    // User's progress should be unchanged
-    const [userRow] = await testDb
-      .select({ percentage: readingProgress.percentage })
-      .from(readingProgress)
-      .where(and(eq(readingProgress.bookId, bookId), eq(readingProgress.apiKeyId, userKeyId)));
-    expect(Number(userRow!.percentage)).toBeCloseTo(0.2, 2);
-
-    // Admin's progress should be updated
-    const [adminRow] = await testDb
-      .select({ percentage: readingProgress.percentage })
-      .from(readingProgress)
-      .where(and(eq(readingProgress.bookId, bookId), eq(readingProgress.apiKeyId, adminKeyId)));
-    expect(Number(adminRow!.percentage)).toBeCloseTo(0.99, 2);
+      .where(eq(readingProgress.device, "shared-device"));
+    expect(stored).toHaveLength(2);
   });
 });

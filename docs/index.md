@@ -19,5 +19,5 @@ features:
   - title: KoReader Sync
     details: Sync reading progress across devices via the built-in KoSync server.
   - title: Self-Hosted
-    details: Runs entirely on your own hardware. No cloud accounts required beyond optional API keys.
+    details: Runs entirely on your own hardware. The only optional external account is Hardcover, for metadata.
 ---

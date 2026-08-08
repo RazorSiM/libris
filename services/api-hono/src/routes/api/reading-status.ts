@@ -1,7 +1,8 @@
-import { OpenAPIHono, createRoute } from "@hono/zod-openapi";
+import { createRoute } from "@hono/zod-openapi";
+import { createOpenApiRouter } from "../../shared/openapi.js";
 import type { AppVariables } from "../../context.js";
 import { getReadingStatusCounts, getBooksByReadingStatus } from "../../lib/reading-status.js";
-import { getApiKeyId } from "../../shared/auth.js";
+import { getUserId } from "../../shared/auth.js";
 import { ReadingStatusParamSchema, ReadingStatusListQuerySchema } from "../../shared/validation.js";
 import {
   ReadingStatusCountsSchema,
@@ -57,11 +58,11 @@ const listByStatusRoute = createRoute({
 
 // ── Router ───────────────────────────────────────────────────────
 
-export const readingStatusRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
+export const readingStatusRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
   .openapi(countsRoute, async (c) => {
     const db = c.get("db");
-    const apiKeyId = getApiKeyId(c);
-    const counts = await getReadingStatusCounts(db, apiKeyId);
+    const userId = getUserId(c);
+    const counts = await getReadingStatusCounts(db, userId);
     return c.json(counts);
   })
   .openapi(listByStatusRoute, async (c) => {
@@ -69,14 +70,14 @@ export const readingStatusRoutes = new OpenAPIHono<{ Variables: AppVariables }>(
     const { page, limit, sort, order, search } = c.req.valid("query");
 
     const db = c.get("db");
-    const apiKeyId = getApiKeyId(c);
+    const userId = getUserId(c);
     const result = await getBooksByReadingStatus(db, status, {
       page,
       perPage: limit,
       sort,
       order,
       search: search || undefined,
-      apiKeyId,
+      userId,
     });
 
     const totalPages = Math.ceil(result.total / limit) || 1;

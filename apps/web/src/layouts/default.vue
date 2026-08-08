@@ -1,13 +1,11 @@
 <script setup lang="ts">
 import type { NavigationMenuItem } from "@nuxt/ui";
-import { useDebounceFn } from "@vueuse/core";
 import logoHorizontal from "~/assets/logo-horizontal.svg";
 import logoIcon from "~/assets/logo-icon.svg";
 
 const open = ref(false);
-const { isAuthenticated, userLabel, isAdmin } = useAuth();
+const { userLabel, isAdmin } = useAuth();
 const { showShortcuts } = useDashboard();
-const client = useApiClient();
 const { docsUrl } = useLibrisConfig();
 
 // Sidebar data — Pinia Colada queries (enabled when authenticated)
@@ -139,43 +137,12 @@ const settingsLinks = computed<NavigationMenuItem[]>(() => [
   },
 ]);
 
-// Book search
-interface SearchResult {
-  id: string;
-  title: string | null;
-  author: string | null;
-  status: "review" | "organized";
-  coverUrl: string | null;
-}
-
-const searchTerm = ref("");
-const searchResults = ref<SearchResult[]>([]);
-const searchLoading = ref(false);
-
-const fetchResults = useDebounceFn(async (q: string) => {
-  if (!q.trim()) {
-    searchResults.value = [];
-    searchLoading.value = false;
-    return;
-  }
-  searchLoading.value = true;
-  try {
-    const res = await client.api.search.suggest.$get({ query: { q } });
-    const { data } = await res.json();
-    searchResults.value = data as SearchResult[];
-  } catch {
-    searchResults.value = [];
-  } finally {
-    searchLoading.value = false;
-  }
-}, 200);
-
-watch(searchTerm, (q) => {
-  if (q.trim()) {
-    searchLoading.value = true;
-  }
-  fetchResults(q);
-});
+// Book search — Pinia Colada query, debounced and keyed on the typed term.
+const {
+  term: searchTerm,
+  results: searchResults,
+  loading: searchLoading,
+} = useSearchSuggestQuery();
 
 const router = useRouter();
 
@@ -256,20 +223,26 @@ const groups = computed(() => {
 
         <div class="mt-auto" />
 
-        <!-- User label -->
-        <div
+        <!-- User label: also the way into the account settings, since your own
+             name is where people look for "change my password". -->
+        <ULink
           v-if="userLabel && !collapsed"
+          to="/settings?tab=account"
           data-testid="sidebar-user-label"
-          class="px-3 py-2 flex items-center gap-2 text-sm text-muted"
+          class="px-3 py-2 flex items-center gap-2 text-sm text-muted rounded-md hover:text-default hover:bg-elevated/50"
         >
           <UIcon name="i-lucide-user" class="shrink-0" />
           <span class="truncate">{{ userLabel }}</span>
           <UBadge v-if="isAdmin" variant="subtle" color="warning" size="xs">Admin</UBadge>
-        </div>
+        </ULink>
         <UTooltip v-else-if="userLabel && collapsed" :text="userLabel">
-          <div data-testid="sidebar-user-label-collapsed" class="flex justify-center py-2">
-            <UIcon name="i-lucide-user" class="text-muted" />
-          </div>
+          <ULink
+            to="/settings?tab=account"
+            data-testid="sidebar-user-label-collapsed"
+            class="flex justify-center py-2 text-muted hover:text-default"
+          >
+            <UIcon name="i-lucide-user" />
+          </ULink>
         </UTooltip>
 
         <UNavigationMenu
@@ -302,6 +275,7 @@ const groups = computed(() => {
       :loading="searchLoading"
       title="Search"
       description="Jump to a page or search your library"
+      data-testid="command-palette"
     />
 
     <slot />

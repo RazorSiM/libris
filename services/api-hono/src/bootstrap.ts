@@ -22,14 +22,20 @@ import { processHardcoverSync } from "./workers/hardcover-sync.js";
 import { processProgressHistoryCleanup } from "./workers/progress-history-cleanup.js";
 import { createCleanupOrphanedFilesProcessor } from "./workers/cleanup-orphaned-files.js";
 import { createInboxWatcher } from "./shared/inbox-watcher.js";
-import { publishEvent } from "./services/event-bus.js";
+import { publishBookEvent, publishEvent } from "./services/event-bus.js";
 import { parseRedisUrl, type Env } from "./env.js";
 import type { Queues } from "./context.js";
 import { getQueues, registerQueue } from "./services/queue.js";
 import { setWorkers } from "./services/workers.js";
 import { getDb } from "./services/db.js";
-import { getSharedRedis, closeSharedRedis } from "./services/redis.js";
+import { getSharedRedis, getRequestRedis, closeSharedRedis } from "./services/redis.js";
 import { createRedisKVStore, createMemoryKVStore, type KVStore } from "./services/kv-store.js";
+import { getCacheStorage } from "./services/cache-storage.js";
+import {
+  createMemorySecondaryStorage,
+  createRedisSecondaryStorage,
+} from "./services/auth-secondary-storage.js";
+import { createAuth, type Auth } from "./lib/auth.js";
 
 const SHUTDOWN_TIMEOUT_MS = 30_000;
 
@@ -46,6 +52,7 @@ export interface AppServices {
   queues: Queues;
   redisStorage: KVStore;
   cacheStorage: KVStore;
+  auth: Auth;
   shutdown: () => Promise<void>;
 }
 
@@ -85,16 +92,38 @@ export async function bootstrap(env: Env): Promise<AppServices> {
   // 4. Setup KV stores (memory in dev/test, Redis-backed in production)
   let redisStorage: KVStore;
   let cacheStorage: KVStore;
+  // Better Auth's session and rate-limit store. Same dev/prod split as the KV
+  // stores above, and in production it shares the one ioredis connection rather
+  // than opening another.
+  let authStorage: ReturnType<typeof createMemorySecondaryStorage>;
 
   if (isDev || isTest) {
     redisStorage = createMemoryKVStore();
-    cacheStorage = createMemoryKVStore();
+    authStorage = createMemorySecondaryStorage();
   } else {
-    const sharedRedis = getSharedRedis();
-    redisStorage = createRedisKVStore(sharedRedis, "kv");
-    cacheStorage = createRedisKVStore(sharedRedis, "cache");
-    logger.info("Redis KV stores mounted (shared connection).");
+    const requestRedis = getRequestRedis();
+    redisStorage = createRedisKVStore(requestRedis, "kv");
+    authStorage = createRedisSecondaryStorage(requestRedis, "ba");
+    logger.info("Redis request-path stores mounted (bounded connection).");
   }
+
+  // Through the singleton rather than built here, so the workers started below
+  // invalidate the SAME store the request path reads. In dev and
+  // test that store is a per-process Map, and two of them would silently
+  // disagree.
+  cacheStorage = getCacheStorage();
+
+  const auth = createAuth({
+    db,
+    secondaryStorage: authStorage,
+    env,
+    secret: env.BETTER_AUTH_SECRET,
+    // Required in production (env.ts refuses to boot without it) because the
+    // per-request fallback derives the container's plain-http origin and then
+    // rejects the browser's https Origin with 403 INVALID_ORIGIN. Empty is only
+    // reachable in dev/test, where deriving from the request is correct.
+    baseURL: env.BETTER_AUTH_URL || undefined,
+  });
 
   // 5. Create BullMQ queues (reuse the shared ioredis instance via getQueues())
   const queues = isTest
@@ -400,18 +429,18 @@ export async function bootstrap(env: Env): Promise<AppServices> {
             const result = await taskDb.execute<{ inserted: string }>(sql`
               WITH agg AS (
                 SELECT
-                  api_key_id,
+                  user_id,
                   book_id,
                   to_timestamp(MIN("timestamp") FILTER (WHERE percentage::numeric > 0)) AS started_at,
                   to_timestamp(MIN("timestamp") FILTER (WHERE percentage::numeric >= 0.95)) AS finished_at
                 FROM reading_progress_history
-                WHERE book_id IS NOT NULL AND api_key_id IS NOT NULL
-                GROUP BY api_key_id, book_id
+                WHERE book_id IS NOT NULL AND user_id IS NOT NULL
+                GROUP BY user_id, book_id
                 HAVING MIN("timestamp") FILTER (WHERE percentage::numeric > 0) IS NOT NULL
               )
-              INSERT INTO reading_aggregate (api_key_id, book_id, started_at, finished_at)
-              SELECT api_key_id, book_id, started_at, finished_at FROM agg
-              ON CONFLICT (api_key_id, book_id) DO NOTHING
+              INSERT INTO reading_aggregate (user_id, book_id, started_at, finished_at)
+              SELECT user_id, book_id, started_at, finished_at FROM agg
+              ON CONFLICT (user_id, book_id) DO NOTHING
               RETURNING id
             `);
             const rows = result as unknown as { id: string }[];
@@ -461,7 +490,8 @@ export async function bootstrap(env: Env): Promise<AppServices> {
         const eventType = queueEventMap[job.queueName];
         if (eventType) {
           const bookId = (job.data as Record<string, unknown>)?.bookId as string | undefined;
-          publishEvent({ type: eventType, bookId }).catch((e) =>
+          if (!bookId) return;
+          publishBookEvent(db, { type: eventType, bookId }).catch((e) =>
             workerLogger
               .withMetadata({ error: String(e) })
               .warn(`Failed to publish ${eventType} event`),
@@ -474,7 +504,8 @@ export async function bootstrap(env: Env): Promise<AppServices> {
             `Job ${job.id} permanently failed on ${job.queueName} after ${job.attemptsMade} attempts: ${err.message}`,
           );
           const bookId = (job.data as Record<string, unknown>)?.bookId as string | undefined;
-          publishEvent({
+          if (!bookId) return;
+          publishBookEvent(db, {
             type: "job:failed",
             bookId,
             payload: { queue: job.queueName, error: err.message, jobId: job.id },
@@ -534,5 +565,5 @@ export async function bootstrap(env: Env): Promise<AppServices> {
     logger.info("Shutdown complete.");
   };
 
-  return { db, queues, redisStorage, cacheStorage, shutdown };
+  return { db, queues, redisStorage, cacheStorage, auth, shutdown };
 }

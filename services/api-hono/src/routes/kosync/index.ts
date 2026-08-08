@@ -1,13 +1,15 @@
-import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
+import { createRoute, z } from "@hono/zod-openapi";
+import { createOpenApiRouter } from "../../shared/openapi.js";
 import { HTTPException } from "hono/http-exception";
 import { readingProgress, readingProgressHistory } from "#db";
 import { and, eq, desc } from "drizzle-orm";
 import type { AppVariables } from "../../context.js";
-import { md5, getApiKeyId } from "../../shared/auth.js";
+import { md5, getUserId } from "../../shared/auth.js";
 import { validateKosyncCredentials } from "../../shared/kosync-auth.js";
 import type { KosyncAuthResponse, KosyncProgressResponse } from "../../types/kosync.js";
 
 import { getLogger } from "../../lib/logger.js";
+import { invalidateRouteCache } from "../../services/cache.js";
 import { upsertReadingAggregate } from "../../lib/reading-aggregate.js";
 import { resolveBookIdForDocument } from "../../lib/progress-linking.js";
 
@@ -70,7 +72,7 @@ const postAuthRoute = createRoute({
   tags: ["kosync"],
   summary: "Authenticate via JSON body",
   description:
-    "Validate KoSync credentials provided as a JSON body. Returns the md5-hashed password as the userkey for subsequent sync requests.",
+    "Validate KoSync credentials provided as a JSON body. Returns the md5-hashed password as the userkey for subsequent sync requests. The rate limiter buckets attempts by the username in this body, so a body over 8 KB — which no KOReader login sends — is refused with 413 rather than let through unbucketed.",
   request: {
     body: {
       required: true,
@@ -92,6 +94,7 @@ const postAuthRoute = createRoute({
     },
     400: { description: "Invalid request body" },
     401: { description: "Invalid credentials" },
+    413: { description: "Request body too large to bucket a brute-force budget against" },
   },
 });
 
@@ -183,7 +186,7 @@ const putProgressRoute = createRoute({
 
 // ── Router ───────────────────────────────────────────────────────
 
-export const kosyncRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
+export const kosyncRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
   // GET /users/auth — KOReader sends md5(password) via x-auth-user / x-auth-key headers
   .openapi(getAuthRoute, async (c) => {
     const username = c.req.header("x-auth-user");
@@ -193,7 +196,7 @@ export const kosyncRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
     }
     const db = c.get("db");
 
-    await validateKosyncCredentials(username, password, db);
+    await validateKosyncCredentials(username, password, db, c.get("env").API_SECRET_KEY);
 
     // Return the key as userkey — KOReader stores this for subsequent sync requests
     return c.json({ authorized: "OK", userkey: password } satisfies KosyncAuthResponse);
@@ -204,18 +207,23 @@ export const kosyncRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
     const body = c.req.valid("json");
     const db = c.get("db");
 
-    await validateKosyncCredentials(body.username, body.password, db);
+    // The body form carries the PLAINTEXT password — this is the one-time
+    // exchange where a client trades it for the userkey it will send from then
+    // on. The stored secret is the md5 digest, so hash here rather than in the
+    // validator: everywhere else the value arriving is already the digest, and
+    // a validator that accepted both would restore the two-valid-secrets bug
+    // this slice removed.
+    const userkey = md5(body.password);
+    await validateKosyncCredentials(body.username, userkey, db, c.get("env").API_SECRET_KEY);
 
-    return c.json({
-      authorized: "OK",
-      userkey: md5(body.password),
-    } satisfies KosyncAuthResponse);
+    return c.json({ authorized: "OK", userkey } satisfies KosyncAuthResponse);
   })
 
   // POST /users/create — registration disabled, credentials are set via the dashboard
-  .openapi(postCreateRoute, async (c) => {
-    await c.req.json<{ username: string; password: string }>();
-
+  .openapi(postCreateRoute, () => {
+    // The body is deliberately never read. Parsing it bought nothing — the
+    // answer is the same whatever KOReader sends — and a bodyless POST made
+    // c.req.json() throw, turning a refusal into a 500.
     throw new HTTPException(409, {
       message: "Registration is disabled. Set KoSync credentials in the Libris dashboard.",
     });
@@ -225,13 +233,13 @@ export const kosyncRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
   .openapi(getProgressRoute, async (c) => {
     const { document } = c.req.valid("param");
     const db = c.get("db");
-    const apiKeyId = c.get("apiKeyId");
-    if (!apiKeyId) throw new HTTPException(401, { message: "Unauthorized" });
+    const userId = c.get("userId");
+    if (!userId) throw new HTTPException(401, { message: "Unauthorized" });
 
     const result = await db
       .select()
       .from(readingProgress)
-      .where(and(eq(readingProgress.document, document), eq(readingProgress.apiKeyId, apiKeyId)))
+      .where(and(eq(readingProgress.document, document), eq(readingProgress.userId, userId)))
       .orderBy(desc(readingProgress.timestamp))
       .limit(1);
 
@@ -254,7 +262,7 @@ export const kosyncRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
   .openapi(putProgressRoute, async (c) => {
     const body = c.req.valid("json");
     const db = c.get("db");
-    const apiKeyId = getApiKeyId(c);
+    const userId = getUserId(c);
     const now = Math.floor(Date.now() / 1000);
 
     // Resolve book_id from document hash — enables direct joins without OR condition
@@ -264,7 +272,7 @@ export const kosyncRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
       .insert(readingProgress)
       .values({
         bookId,
-        apiKeyId,
+        userId,
         document: body.document,
         progress: body.progress,
         percentage: String(body.percentage ?? 0),
@@ -274,7 +282,7 @@ export const kosyncRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
         rawPayload: body,
       })
       .onConflictDoUpdate({
-        target: [readingProgress.apiKeyId, readingProgress.document, readingProgress.device],
+        target: [readingProgress.userId, readingProgress.document, readingProgress.device],
         set: {
           bookId,
           progress: body.progress,
@@ -285,14 +293,24 @@ export const kosyncRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
           updatedAt: new Date(),
         },
       })
-      .returning();
+      // Only the fields the KoSync response carries. A bare `.returning()`
+      // drags `raw_payload` — the whole client request, as jsonb — back out of
+      // the DB on every progress push for nothing.
+      .returning({
+        document: readingProgress.document,
+        progress: readingProgress.progress,
+        percentage: readingProgress.percentage,
+        device: readingProgress.device,
+        deviceId: readingProgress.deviceId,
+        timestamp: readingProgress.timestamp,
+      });
 
     // Append to history (fire-and-forget, don't block the response)
-    void db
+    const history = db
       .insert(readingProgressHistory)
       .values({
         bookId,
-        apiKeyId,
+        userId,
         document: body.document,
         device: body.device,
         progress: body.progress,
@@ -308,13 +326,34 @@ export const kosyncRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
     // Update per-(user, book) lifecycle aggregate. Fire-and-forget so a slow
     // aggregate write never blocks the kosync response. COALESCE semantics
     // inside upsertReadingAggregate ensure existing values are never clobbered.
-    if (bookId !== null) {
-      void upsertReadingAggregate(db, apiKeyId, bookId, body.document).catch((err) =>
-        logger
-          .withMetadata({ error: String(err), bookId, document: body.document })
-          .warn("Failed to upsert reading aggregate"),
-      );
-    }
+    const aggregate =
+      bookId !== null
+        ? upsertReadingAggregate(db, userId, bookId, body.document).catch((err) =>
+            logger
+              .withMetadata({ error: String(err), bookId, document: body.document })
+              .warn("Failed to upsert reading aggregate"),
+          )
+        : Promise.resolve();
+
+    /**
+     * Drop the cached /api/stats once those writes have landed.
+     *
+     * Every number on the stats page is derived from the three rows this
+     * handler writes — booksFinished and avgDaysToFinish from the aggregate,
+     * the heatmap and velocity from the history. A reader who finished a book
+     * on their e-reader saw the old counts for the rest of the entry's 60s TTL
+     * because nothing on this path invalidated anything.
+     *
+     * Chained behind them rather than fired here: an invalidation that runs
+     * before the aggregate write would clear the entry and let the very next
+     * request re-cache the pre-write answer. Still off the response path — a
+     * KOReader sync must not wait on a cache chore, and invalidateRouteCache
+     * never rejects, so nothing here can turn a stored progress into a 500.
+     */
+    const cacheStorage = c.get("cacheStorage");
+    void Promise.all([history, aggregate]).then(() =>
+      invalidateRouteCache(cacheStorage, "/api/stats"),
+    );
 
     return c.json({
       document: result!.document,

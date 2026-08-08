@@ -55,6 +55,42 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
+    # Most of this suite runs on PGlite, which is one embedded backend on one
+    # connection. That is fine until the SUBJECT of a test is concurrency: a row
+    # lock cannot contend with itself, so the last-admin `FOR UPDATE` shipped
+    # with a test that stayed green when the lock was deleted, and the atomic
+    # Redis rate-limit increment had no behavioural test at all (libris-59m.31).
+    # These two services back the handful of suites that need real ones. They
+    # are NOT optional: those suites fail rather than skip when `CI` is set, so
+    # removing a service here surfaces as a red build, not as silent green.
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: libris_test
+          POSTGRES_USER: libris_test
+          POSTGRES_PASSWORD: libris_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U libris_test -d libris_test"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 15
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # Locally these default to docker-compose.test.yml's published ports
+      # (5433 / 6380); service containers here publish the standard ones.
+      LIBRIS_TEST_POSTGRES_URL: postgres://libris_test:libris_test@localhost:5432/libris_test
+      LIBRIS_TEST_REDIS_URL: redis://localhost:6379
     steps:
       - uses: actions/checkout@v4
         with:
@@ -133,7 +169,11 @@ jobs:
   # definition so the service/container/env setup can't drift between them.
   e2e:
     runs-on: ubuntu-latest
-    container: mcr.microsoft.com/playwright:v1.60.0-jammy
+    # Must match the `@playwright/test` version in the pnpm-workspace catalog
+    # exactly: the image ships only the browser build its own version pins, and
+    # a mismatched client fails at launch with "Executable doesn't exist at
+    # /ms-playwright/...". Nothing enforces this, so bump both together.
+    container: mcr.microsoft.com/playwright:v1.62.1-jammy
     needs: [build]
     strategy:
       fail-fast: false
@@ -160,7 +200,15 @@ jobs:
           --health-retries 10
     env:
       CI: "true"
+      # `development`, matching docker-compose.test.yml, so the two E2E
+      # harnesses take the same branches. env.ts has no default for NODE_ENV,
+      # so omitting it makes getEnv() throw at startup and the webServer times
+      # out before a single test runs. `production` is not an option here:
+      # bootstrap.ts refuses E2E_TEST=1 under it — the production config is
+      # covered by the separate e2e-prod-config job below.
+      NODE_ENV: development
       E2E_TEST: "1"
+      LIBRIS_COOKIE_SECURE: "0"
       POSTGRES_HOST: postgres
       POSTGRES_PORT: "5432"
       POSTGRES_USER: libris_test
@@ -170,9 +218,18 @@ jobs:
       REDIS_PORT: "6379"
       LIBRIS_INBOX_PATH: /tmp/e2e-inbox
       LIBRIS_LIBRARY_PATH: /tmp/e2e-library
-      API_SECRET_KEY: ci-e2e-test-secret-key-minimum-32-chars!
-      COOKIE_DOMAIN: ""
+      # Throwaway CI-only values, but generated with `openssl rand -hex 32`
+      # rather than written by hand: the API rejects published placeholders and
+      # low-diversity strings, and middleware/auth.ts refuses a
+      # TEST_ROUTE_TOKEN shorter than 32 bytes (which 401s every /__test/ call
+      # instead of failing loudly).
+      API_SECRET_KEY: 1f92b61ecd5459091252d89c56ec96119dceb2bd53b567d44990a7ba3d4b8991
+      BETTER_AUTH_SECRET: fc45735d1aba00d6426be5f40e1b9a10312974f22c867b10b6a0e6ee1f253861
+      TEST_ROUTE_TOKEN: 7cbcb1e8c2b4f21dcd64cfc0c9ac1e241e4884d8111b0de8c8fdb0fd7e70fbe6
       MIGRATIONS_PATH: ./services/api-hono/migrations
+      # Tees the API's stdout/stderr to a file the shards upload on failure.
+      # playwright.config.ts only adds the `tee` when this is set.
+      LIBRIS_API_LOG: /tmp/e2e-api.log
     steps:
       - uses: actions/checkout@v4
         with:
@@ -219,11 +276,144 @@ jobs:
           path: tests/e2e/test-results/
           retention-days: 7
 
+      # The server side of a failure. The Playwright trace shows the 401; this
+      # shows why the API sent it.
+      - name: Upload API server log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-api-log-${{ strategy.job-index }}
+          path: ${{ env.LIBRIS_API_LOG }}
+          retention-days: 7
+          if-no-files-found: warn
+
       - name: Upload HTML report
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: e2e-report-${{ strategy.job-index }}
+          path: tests/e2e/playwright-report/
+          retention-days: 7
+
+  # The production configuration branch, which the `e2e` job structurally
+  # cannot reach: bootstrap.ts refuses E2E_TEST=1 under NODE_ENV=production,
+  # and without E2E_TEST the /__test/* support routes the suite depends on are
+  # not mounted. So every ordinary shard runs the development side of every
+  # NODE_ENV branch — lib/auth.ts trustedOrigins, the Redis vs memory store
+  # split in bootstrap.ts, and the logger transport. This job runs the other
+  # side, over the sign-in / sign-out / session-revoke path only.
+  #
+  # BETTER_AUTH_URL is set here and nowhere else in this file. trustedOrigins is
+  # empty under NODE_ENV=production and Better Auth resolves its trusted origin
+  # from baseURL ONCE at startup, so with no baseURL it resolves to nothing and
+  # every cookie-bearing POST becomes a 403 INVALID_ORIGIN — which is how
+  # "production deployments cannot sign in" happened. env.ts now requires the
+  # variable in production for that reason; this job is what proves the required
+  # value is actually sufficient to sign in, sign out and revoke with.
+  e2e-prod-config:
+    runs-on: ubuntu-latest
+    # Keep in step with the catalog's @playwright/test — see the `e2e` job.
+    container: mcr.microsoft.com/playwright:v1.62.1-jammy
+    needs: [build]
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: libris_prod_test
+          POSTGRES_USER: libris_test
+          POSTGRES_PASSWORD: libris_test
+        options: >-
+          --health-cmd "pg_isready -U libris_test -d libris_prod_test"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 15
+      redis:
+        image: redis:7
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      CI: "true"
+      E2E_PROD_CONFIG: "1"
+      NODE_ENV: production
+      # No E2E_TEST and no TEST_ROUTE_TOKEN: the support routes must not exist
+      # here, and prod-config.spec.ts asserts they do not.
+      #
+      # Required under NODE_ENV=production, and it must be the origin the
+      # browser actually drives — Playwright's baseURL is this same value, since
+      # Hono serves the SPA and the API from one port.
+      BETTER_AUTH_URL: http://localhost:3000
+      # Plain HTTP in front of the browser, so the Secure attribute has to come
+      # off or Chromium discards the session cookie. This is the one production
+      # setting a real HTTPS deployment would leave at its default.
+      LIBRIS_COOKIE_SECURE: "0"
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: libris_test
+      POSTGRES_PASSWORD: libris_test
+      POSTGRES_DB: libris_prod_test
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      LIBRIS_INBOX_PATH: /tmp/e2e-prod-inbox
+      LIBRIS_LIBRARY_PATH: /tmp/e2e-prod-library
+      API_SECRET_KEY: d4a4f0525b6289795830c9ff81db3c1ecc0c607fcb4a542c1140c50a8382470e
+      BETTER_AUTH_SECRET: d3a2a9acaad54534363860456f2169271c0eb9c97e358904bf50fa0ff47d6819
+      MIGRATIONS_PATH: ./services/api-hono/migrations
+      LIBRIS_API_LOG: /tmp/e2e-prod-api.log
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: build-output-${{ github.sha }}
+
+      - name: Extract build artifact
+        run: |
+          tar -xzf build-output.tar.gz
+          rm build-output.tar.gz
+
+      - uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: .node-version
+          run-install: false
+
+      - name: Prepare test environment
+        run: |
+          mkdir -p $LIBRIS_INBOX_PATH $LIBRIS_LIBRARY_PATH
+          cp -r apps/web/dist public
+
+      - name: Run E2E production-config checks
+        run: |
+          cd tests/e2e
+          vp exec playwright test --project=prod-config
+
+      - name: Upload test results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-prod-config-test-results
+          path: tests/e2e/test-results/
+          retention-days: 7
+
+      - name: Upload API server log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-prod-config-api-log
+          path: ${{ env.LIBRIS_API_LOG }}
+          retention-days: 7
+          if-no-files-found: warn
+
+      - name: Upload HTML report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-prod-config-report
           path: tests/e2e/playwright-report/
           retention-days: 7
 

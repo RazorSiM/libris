@@ -11,7 +11,7 @@ A self-hosted book management system that ingests ebook files, enriches them wit
 - **OPDS catalog** — Serve your library to any OPDS-compatible e-reader (KOReader, Calibre, Moon+ Reader, etc.) with search, genre/author navigation, and direct downloads.
 - **KoSync** — Sync reading progress across KoReader devices. Dashboard shows currently reading books with progress bars.
 - **Reading statistics** — Track books finished, reading streaks, daily activity, and genre distribution.
-- **Multi-user auth** — Create multiple API keys with admin or standard roles. Each user gets their own session with per-user cache scoping.
+- **Multi-user auth** — Email + password accounts with admin or standard roles, created by an admin (there is no self-registration). Each person mints their own app passwords for e-readers and scripts, and keeps their own reading progress, stats, and external-service connections.
 - **Job monitoring** — View processing pipeline status, queue health, and retry failed jobs from the web UI.
 
 ## Screenshots
@@ -35,7 +35,7 @@ A self-hosted book management system that ingests ebook files, enriches them wit
 | Job Queue | BullMQ, Redis 7                                               |
 | Metadata  | Hardcover GraphQL API                                         |
 | Testing   | Playwright (E2E), Vitest (unit)                               |
-| Toolchain | pnpm, Turborepo, Vitest, oxlint/oxfmt                         |
+| Toolchain | Vite+ (`vp`), pnpm, Vitest, oxlint/oxfmt                      |
 
 ## Prerequisites
 
@@ -58,30 +58,31 @@ vp run -F @libris/api-hono dev
 vp run -F @libris/web dev
 ```
 
-Open http://localhost:3100 to run first-time setup or log in with an existing API key.
+Open http://localhost:3100. On a fresh install the page offers a **first-run setup form** — enter your name, email, and a password (at least 8 characters) to create the first admin account, which signs you straight in. After that it is an ordinary email + password sign-in, and further accounts are created by an admin from **Settings → Users**.
 
 ### Configuration
 
-The API server is configured via environment variables:
+The API server is configured via environment variables. Copy `.env.example` to `.env` to start.
 
-| Variable              | Required | Purpose                                                                |
-| --------------------- | -------- | ---------------------------------------------------------------------- |
-| `POSTGRES_HOST`       | Yes      | Postgres host (the app assembles the URL from `POSTGRES_*` split vars) |
-| `POSTGRES_PORT`       | No       | Postgres port. Default: `5432`.                                        |
-| `POSTGRES_USER`       | Yes      | Postgres user                                                          |
-| `POSTGRES_PASSWORD`   | Yes      | Postgres password                                                      |
-| `POSTGRES_DB`         | Yes      | Postgres database name                                                 |
-| `REDIS_HOST`          | Yes      | Redis host (the app assembles the URL from `REDIS_*` split vars)       |
-| `REDIS_PORT`          | No       | Redis port. Default: `6379`.                                           |
-| `REDIS_PASSWORD`      | No       | Redis password                                                         |
-| `REDIS_TLS`           | No       | Set to `1` for `rediss://` (TLS)                                       |
-| `LIBRIS_INBOX_PATH`   | Yes      | Directory to watch for new book files                                  |
-| `LIBRIS_LIBRARY_PATH` | Yes      | Directory for organized book storage                                   |
-| `API_SECRET_KEY`      | Yes      | Secret for API key operations                                          |
+| Variable              | Required      | Purpose                                                                                                                                                                                                  |
+| --------------------- | ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `NODE_ENV`            | Yes           | `development`, `production`, or `test`. Never inferred — omitting it must not silently disable a production safeguard.                                                                                   |
+| `POSTGRES_HOST`       | Yes           | Postgres host (the app assembles the URL from `POSTGRES_*` split vars)                                                                                                                                   |
+| `POSTGRES_PORT`       | No            | Postgres port. Default: `5432`.                                                                                                                                                                          |
+| `POSTGRES_USER`       | Yes           | Postgres user                                                                                                                                                                                            |
+| `POSTGRES_PASSWORD`   | Yes           | Postgres password                                                                                                                                                                                        |
+| `POSTGRES_DB`         | Yes           | Postgres database name                                                                                                                                                                                   |
+| `REDIS_HOST`          | Yes           | Redis host (the app assembles the URL from `REDIS_*` split vars)                                                                                                                                         |
+| `REDIS_PORT`          | No            | Redis port. Default: `6379`.                                                                                                                                                                             |
+| `REDIS_PASSWORD`      | No            | Redis password                                                                                                                                                                                           |
+| `REDIS_TLS`           | No            | Set to `1` for `rediss://` (TLS)                                                                                                                                                                         |
+| `LIBRIS_INBOX_PATH`   | Yes           | Directory to watch for new book files                                                                                                                                                                    |
+| `LIBRIS_LIBRARY_PATH` | Yes           | Directory for organized book storage                                                                                                                                                                     |
+| `API_SECRET_KEY`      | Yes           | Third-party token encryption key (`openssl rand -hex 32`)                                                                                                                                                |
+| `BETTER_AUTH_SECRET`  | Yes           | Signs session cookies (`openssl rand -base64 32`). No fallback — the server refuses to start without it, and published placeholders and low-diversity values are rejected.                               |
+| `BETTER_AUTH_URL`     | In production | The public origin users reach, e.g. `https://libris.example.com` — scheme and host only, no path. Required when `NODE_ENV=production`; without it every browser sign-in fails with `403 INVALID_ORIGIN`. |
 
-See [docs/environment.md](docs/environment.md) for the full reference and test-environment variables.
-
-See [docs/environment.md](docs/environment.md) for the complete reference.
+See [docs/environment.md](docs/environment.md) for the complete reference, including the test-environment variables, and [docs/deployment.md](docs/deployment.md) for production and upgrade instructions.
 
 ## Development
 

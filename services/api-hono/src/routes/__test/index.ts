@@ -1,4 +1,4 @@
-import { OpenAPIHono } from "@hono/zod-openapi";
+import { createOpenApiRouter } from "../../shared/openapi.js";
 import { HTTPException } from "hono/http-exception";
 import {
   appSettings,
@@ -11,24 +11,42 @@ import {
   uploadRegistry,
   books,
   serviceCredentials,
+  kosyncCredentials,
+  sessions,
+  accounts,
+  verifications,
+  users,
 } from "#db";
+import { asc, eq } from "drizzle-orm";
 import type { AppVariables } from "../../context.js";
-import { clearAuthCaches } from "../../middleware/auth.js";
 
 function assertTestEnv(env: { NODE_ENV: string; E2E_TEST: string }): void {
-  if (env.NODE_ENV !== "test" && env.NODE_ENV !== "development" && env.E2E_TEST !== "1") {
+  if (env.NODE_ENV !== "test" && env.E2E_TEST !== "1") {
     throw new HTTPException(404, { message: "Not found" });
   }
 }
 
-export const testRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
-  // POST /cleanup — Delete all rows in FK-safe order, clear Redis storage
+export const testRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
+  /**
+   * POST /cleanup — wipe test data.
+   *
+   * Content only by default. The E2E suite signs in once in a setup project
+   * and reuses that storageState for every spec, so wiping accounts between
+   * tests would log the whole run out — and the failure would surface three
+   * specs later as an unexplained redirect to /login.
+   *
+   * Pass { includeAuth: true } for the handful of tests that need a genuinely
+   * empty install, e.g. first-run setup.
+   */
   .post("/cleanup", async (c) => {
     const env = c.get("env");
     assertTestEnv(env);
 
     const db = c.get("db");
     const redisStorage = c.get("redisStorage");
+    const { includeAuth = false } = await c.req
+      .json<{ includeAuth?: boolean }>()
+      .catch(() => ({ includeAuth: false }));
 
     // Delete in FK-safe order (children before parents)
     await db.delete(bookMetadataCandidates);
@@ -37,16 +55,24 @@ export const testRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
     await db.delete(readingProgress);
     await db.delete(readingProgressHistory);
     await db.delete(uploadRegistry);
-    await db.delete(apiKeys);
+    // Before users: books.created_by is ON DELETE RESTRICT, so a users wipe
+    // fails while any book survives.
     await db.delete(books);
     await db.delete(serviceCredentials);
     await db.delete(appSettings);
 
-    // Clear rate-limit / session storage
-    await redisStorage.clear();
-
-    // Clear in-memory auth caches to prevent cross-test leakage
-    clearAuthCaches();
+    if (includeAuth) {
+      await db.delete(apiKeys);
+      await db.delete(kosyncCredentials);
+      await db.delete(sessions);
+      await db.delete(accounts);
+      await db.delete(verifications);
+      await db.delete(users);
+      // Better Auth keeps sessions here as well as in Postgres, so a wipe that
+      // skipped it would leave a signed-in cookie working against a database
+      // with no users in it.
+      await redisStorage.clear();
+    }
 
     return c.json({ ok: true });
   })
@@ -58,14 +84,32 @@ export const testRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
 
     const db = c.get("db");
     const body = await c.req.json<{
+      createdBy?: string;
       books: Array<{
         title?: string;
         author?: string;
         description?: string;
         genres?: string[];
         status?: "inbox" | "review" | "organized";
+        createdBy?: string;
       }>;
     }>();
+
+    // books.created_by is NOT NULL since the cutover, so seeded books need an
+    // owner. A test that cares which user owns what passes createdBy; the rest
+    // get the oldest admin, matching the ingestion worker's fallback.
+    const [defaultOwner] = await db
+      .select({ id: users.id })
+      .from(users)
+      .where(eq(users.role, "admin"))
+      .orderBy(asc(users.createdAt))
+      .limit(1);
+    const fallbackOwner = body.createdBy ?? defaultOwner?.id;
+    if (!fallbackOwner) {
+      throw new HTTPException(400, {
+        message: "No admin exists to own the seeded books; pass createdBy or seed a user first",
+      });
+    }
 
     const inserted = await db
       .insert(books)
@@ -76,6 +120,7 @@ export const testRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
           description: b.description ?? null,
           genres: b.genres ?? [],
           status: b.status ?? ("organized" as const),
+          createdBy: b.createdBy ?? fallbackOwner,
         })),
       )
       .returning({ id: books.id, title: books.title });
@@ -179,13 +224,14 @@ export const testRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
       bookId?: string;
       payload?: Record<string, unknown>;
     }>();
+    const db = c.get("db");
 
-    const { publishEvent } = await import("../../services/event-bus.js");
-    await publishEvent({
-      type: body.type,
-      bookId: body.bookId,
-      payload: body.payload,
-    });
+    const { publishBookEvent, publishEvent } = await import("../../services/event-bus.js");
+    if (body.bookId) {
+      await publishBookEvent(db, { type: body.type, bookId: body.bookId, payload: body.payload });
+    } else {
+      await publishEvent({ type: body.type, payload: body.payload });
+    }
 
     return c.json({ ok: true });
   });

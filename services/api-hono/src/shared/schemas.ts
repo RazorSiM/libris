@@ -10,9 +10,9 @@ import {
   BookSelectSchema,
   BookFileSelectSchema,
   BookMetadataCandidateSelectSchema,
-  ApiKeySelectSchema,
   BookUpdateSchema,
 } from "#db";
+import { ExternalHttpUrlSchema, validateApprovedCoverUrl } from "./cover-url.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -27,7 +27,6 @@ const wrap = <T extends z.ZodRawShape>(schema: z.ZodObject<T>) => z.object(schem
 const BookBase = wrap(BookSelectSchema).omit({ searchVector: true });
 const BookFileBase = wrap(BookFileSelectSchema);
 const CandidateBase = wrap(BookMetadataCandidateSelectSchema);
-const ApiKeyBase = wrap(ApiKeySelectSchema);
 
 // ── Book file schemas ────────────────────────────────────────────────
 
@@ -49,22 +48,40 @@ export const BookFileDetailSchema = BookFileSchema.extend({
 
 export const UploaderSummarySchema = z
   .object({
-    id: z.string().uuid(),
+    /**
+     * Opaque per-install reference for the uploader — NOT `users.id`. Stable for
+     * the life of the install, so it can be round-tripped as the `uploaderId`
+     * filter, but one-way, so it cannot be replayed against any endpoint that
+     * takes a user id. See `shared/uploader-ref.ts`.
+     */
+    id: z.string().openapi({ description: "Opaque uploader reference (not a user id)" }),
     label: z.string(),
   })
   .openapi("UploaderSummary");
 
 export const InboxDetailFileSchema = BookFileSchema.extend({
-  inboxPath: z.string().nullable().optional(),
   checksum: z.string().nullable().optional(),
 }).openapi("InboxDetailFile");
 
 // ── Book summary / detail schemas ────────────────────────────────────
 
+/**
+ * `books.created_by` as a shared-library payload may carry it.
+ *
+ * The column is NOT NULL, but the organized library is shared and the owner's
+ * raw user id is not: a non-owner gets null and reads the attribution off
+ * `uploader` instead. The UI only ever compares this against the caller's own
+ * id, so nulling it for everyone else costs nothing.
+ */
+const ScopedCreatedBySchema = z.string().nullable().openapi({
+  description: "Owner's user id. Null unless the caller owns the book or is an admin.",
+});
+
 export const BookSummarySchema = BookBase.extend({
   // Override fileSize-derived fields and add the files relation
   files: z.array(BookFileSchema),
   uploader: UploaderSummarySchema.nullable(),
+  createdBy: ScopedCreatedBySchema,
 }).openapi("BookSummary");
 
 /** Aggregate progress for a book — the MAX(percentage) row across devices. */
@@ -103,6 +120,7 @@ export const ReadingStatusOverrideBodySchema = z
 export const BookDetailSchema = BookBase.extend({
   files: z.array(BookFileDetailSchema),
   uploader: UploaderSummarySchema.nullable(),
+  createdBy: ScopedCreatedBySchema,
   progress: ProgressAggregateSchema,
 }).openapi("BookDetail");
 
@@ -209,6 +227,7 @@ export const ApproveBookBodySchema = z
   .object({
     fields: z.record(z.string().max(100), ApprovedFieldSchema),
   })
+  .superRefine(({ fields }, ctx) => validateApprovedCoverUrl(fields, ctx))
   .openapi("ApproveBookBody");
 
 // ── Library patch body (derived from DB update schema) ───────────────
@@ -230,34 +249,11 @@ export const LibraryPatchBodySchema = wrap(BookUpdateSchema)
     tags: true,
     coverUrl: true,
   })
+  .extend({ coverUrl: ExternalHttpUrlSchema.optional() })
   .openapi("LibraryPatchBody");
 
 // ── Auth schemas ─────────────────────────────────────────────────────
-
-export const ApiKeyCreatedSchema = ApiKeyBase.pick({
-  id: true,
-  label: true,
-  createdAt: true,
-})
-  .extend({
-    key: z.string().openapi({ description: "Raw API key (shown only once)" }),
-  })
-  .openapi("ApiKeyCreated");
-
-export const ApiKeyListItemSchema = ApiKeyBase.pick({
-  id: true,
-  label: true,
-  isAdmin: true,
-  createdAt: true,
-  lastUsedAt: true,
-}).openapi("ApiKeyListItem");
-
-export const ApiKeyListSchema = z
-  .object({
-    keys: z.array(ApiKeyListItemSchema),
-  })
-  .openapi("ApiKeyList");
-
+//
 export const ApiKeyDeletedSchema = z
   .object({
     deleted: z.boolean(),
@@ -355,14 +351,34 @@ export const UploadedFileSchema = z
 export const UploadErrorSchema = z
   .object({
     filename: z.string(),
-    error: z.string(),
+    error: z.string().openapi({ description: "Why the file could not be accepted" }),
   })
   .openapi("UploadError");
 
+/**
+ * A file that was deliberately not written because the library already holds
+ * those bytes. Not an error: the caller's intent — have this book in the
+ * library — is already satisfied.
+ */
+export const UploadSkippedSchema = z
+  .object({
+    filename: z.string(),
+    reason: z.string().openapi({ description: "Why the file was skipped rather than written" }),
+  })
+  .openapi("UploadSkipped");
+
 export const UploadResponseSchema = z
   .object({
-    uploaded: z.array(UploadedFileSchema),
-    errors: z.array(UploadErrorSchema),
+    uploaded: z.array(UploadedFileSchema).openapi({
+      description: "Files written to the inbox directory and queued for the watcher",
+    }),
+    skipped: z.array(UploadSkippedSchema).openapi({
+      description:
+        "Files not written because the library already holds those bytes. These are not failures — the content is already present.",
+    }),
+    errors: z.array(UploadErrorSchema).openapi({
+      description: "Files rejected: wrong format, too large, malformed, or an unsafe filename",
+    }),
   })
   .openapi("UploadResponse");
 
@@ -395,18 +411,13 @@ export const CredentialDeletedSchema = z
 
 // ── Books (approve / candidates) schemas ─────────────────────────────
 
-export const BookApprovedResponseSchema = z
-  .object({
-    id: z.string().uuid(),
-    status: z.string(),
-    title: z.string().nullable().optional(),
-    author: z.string().nullable().optional(),
-    genres: z.array(z.string()).optional(),
-    tags: z.array(z.string()).optional(),
-    createdAt: z.coerce.date().optional(),
-    updatedAt: z.coerce.date().optional(),
-  })
-  .openapi("BookApprovedResponse");
+// `BookApprovedResponse` used to live here: a hand-written seven-field summary
+// of the approved book, declared by POST /api/books/{id}/approve and fulfilled
+// by a bare `.returning()` that answered with the whole row. Nothing reconciled
+// the two, so the response leaked `search_vector` AND left the fields callers
+// genuinely read off it (isbn13, publisher, language, approvedAt) undocumented.
+// The route now declares `BookUpdatedSchema` — the same derived-from-the-table
+// shape the library edit routes use — and returns `bookColumns`.
 
 export const BookCandidatesResponseSchema = z
   .object({

@@ -1,6 +1,8 @@
 import { useMutation, useQueryCache } from "@pinia/colada";
 
-type CredentialService = "opds" | "kosync" | "hardcover";
+// No "opds": OPDS clients use app passwords now (useApiKeyMutations), not a
+// row in service_credentials.
+type CredentialService = "kosync" | "hardcover";
 
 export function usePutCredential() {
   const client = useApiClient();

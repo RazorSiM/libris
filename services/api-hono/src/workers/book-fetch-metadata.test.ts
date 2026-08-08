@@ -1,26 +1,34 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vite-plus/test";
 import type { PGlite } from "@electric-sql/pglite";
 import { eq } from "drizzle-orm";
-import { createTestDb, type TestDb } from "../db/test-utils.js";
+import { createTestDb, seedUser, type TestDb } from "../db/test-utils.js";
 import * as schema from "../db/schema.js";
 import { __setTestDb } from "../services/db.js";
 import { processBookFetchMetadata } from "./book-fetch-metadata.js";
 
-const { searchHardcover } = vi.hoisted(() => ({
+const { searchHardcover, getHardcoverTokenForUser } = vi.hoisted(() => ({
   searchHardcover: vi.fn(),
+  // The worker resolves the book owner's own token before searching; null means
+  // "this owner has not connected Hardcover", the install-wide fallback path.
+  getHardcoverTokenForUser: vi.fn(async () => null),
 }));
 
 vi.mock("../lib/metadata/index.js", () => ({
   searchHardcover,
+  getHardcoverTokenForUser,
 }));
 
 let pglite: PGlite;
 let db: TestDb;
+// books.created_by is NOT NULL since the cutover, so every seeded book needs an
+// owner even in suites that have nothing to do with ownership.
+let ownerId: string;
 
 beforeAll(async () => {
   const testDb = await createTestDb();
   pglite = testDb.pglite;
   db = testDb.db;
+  ownerId = await seedUser(db);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   __setTestDb(db as any);
 });
@@ -52,6 +60,7 @@ async function seedBookAwaitingMetadata() {
     .insert(schema.books)
     .values({
       status: "inbox",
+      createdBy: ownerId,
       title: "La vasca del Führer",
       author: "Serena Dandini",
       createdAt: new Date(),

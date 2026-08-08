@@ -1,6 +1,6 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { and, eq } from "drizzle-orm";
-import { createTestApp, createFetchHelper } from "./setup.js";
+import { bootstrapAdmin, createTestApp, createFetchHelper } from "./setup.js";
 import type { Db } from "../src/db/client.js";
 import type { Env } from "../src/env.js";
 import {
@@ -37,7 +37,7 @@ vi.mock("../src/shared/auth.js", async (orig) => ({
 }));
 
 import * as client from "../src/lib/hardcover/client.js";
-import { processHardcoverSync } from "../src/workers/hardcover-sync.js";
+import { processHardcoverSync, shouldRunGlobalMetadata } from "../src/workers/hardcover-sync.js";
 
 const testEnv: Env = {
   NODE_ENV: "test",
@@ -46,10 +46,14 @@ const testEnv: Env = {
   REDIS_URL: "redis://localhost:6379",
   LIBRIS_INBOX_PATH: "/tmp/libris-test-inbox",
   LIBRIS_LIBRARY_PATH: "/tmp/libris-test-library",
+  LIBRIS_COVER_FETCH_ALLOWLIST: [],
   API_SECRET_KEY: "test-secret-key-at-least-32-characters-long!!",
-  COOKIE_DOMAIN: "",
+  BETTER_AUTH_SECRET: "test-better-auth-secret-at-least-32-chars!!",
+  BETTER_AUTH_URL: "",
+  LIBRIS_COOKIE_SECURE: "0",
   MIGRATIONS_PATH: "./migrations",
   TRUST_PROXY_HEADERS: "0",
+  LIBRIS_TRUSTED_PROXIES: [],
   E2E_TEST: "",
   LOG_LEVEL: "info",
   LIBRIS_RATELIMIT_GENERAL_LIMIT: 600,
@@ -58,32 +62,32 @@ const testEnv: Env = {
   LIBRIS_RATELIMIT_AUTH_WINDOW_SECONDS: 60,
   LIBRIS_RATELIMIT_KEY_CREATION_LIMIT: 30,
   LIBRIS_RATELIMIT_KEY_CREATION_WINDOW_SECONDS: 3600,
+  LIBRIS_HTTP_HEADERS_TIMEOUT_MS: 10_000,
+  LIBRIS_HTTP_REQUEST_TIMEOUT_MS: 30_000,
+  LIBRIS_HTTP_IDLE_TIMEOUT_MS: 30_000,
 };
 
 let $fetchRaw: ReturnType<typeof createFetchHelper>;
 let testDb: Db;
-let apiKeyId: string;
+let services: Awaited<ReturnType<typeof createTestApp>>["services"];
+let userId: string;
 
 beforeAll(async () => {
   const testApp = await createTestApp();
   $fetchRaw = createFetchHelper(testApp.app);
   testDb = testApp.db;
+  services = testApp.services;
   const { __setTestEnv } = await import("../src/env.js");
   __setTestEnv(testEnv);
 });
 
 beforeEach(async () => {
   await $fetchRaw("/__test/cleanup", { method: "POST" });
-  const { data, status } = await $fetchRaw("/api/auth/setup", {
-    method: "POST",
-    body: { label: "integration-test-key" },
-  });
-  expect(status).toBe(201);
-  apiKeyId = data.id;
+  ({ userId } = await bootstrapAdmin(services, $fetchRaw));
 
   await testDb.insert(serviceCredentials).values({
     service: "hardcover",
-    apiKeyId,
+    userId,
     username: "Raz",
     passwordHash: "sealed-token",
   });
@@ -106,6 +110,7 @@ async function seedFinishedBook(opts: { editionId: number; pageCount: number }) 
   const [book] = await testDb
     .insert(books)
     .values({
+      createdBy: userId,
       title: "Ghostwater",
       author: "Will Wight",
       status: "organized",
@@ -117,7 +122,7 @@ async function seedFinishedBook(opts: { editionId: number; pageCount: number }) 
   const ts = Math.floor(Date.now() / 1000);
   await testDb.insert(readingProgress).values({
     bookId: book!.id,
-    apiKeyId,
+    userId,
     document: "ghostwater-doc",
     device: "komodo",
     progress: "0",
@@ -126,7 +131,7 @@ async function seedFinishedBook(opts: { editionId: number; pageCount: number }) 
   });
   await testDb.insert(readingProgressHistory).values({
     bookId: book!.id,
-    apiKeyId,
+    userId,
     document: "ghostwater-doc",
     device: "komodo",
     progress: "0",
@@ -139,12 +144,20 @@ async function seedFinishedBook(opts: { editionId: number; pageCount: number }) 
 
 const fakeJob = { updateProgress: vi.fn(), log: vi.fn() };
 
-describe("hardcover-sync edition page count handling (libris-26gy)", () => {
+describe("hardcover-sync scope", () => {
+  it("runs global metadata maintenance only for scheduled jobs", () => {
+    expect(shouldRunGlobalMetadata(true, false)).toBe(true);
+    expect(shouldRunGlobalMetadata(true, true)).toBe(false);
+    expect(shouldRunGlobalMetadata(false, false)).toBe(false);
+  });
+});
+
+describe("hardcover-sync edition page count handling", () => {
   it("syncs a read (with finished_at, no page progress) when the edition has null pages", async () => {
     const bookId = await seedFinishedBook({ editionId: 32769766, pageCount: 312 });
     vi.mocked(client.getEditionPages).mockResolvedValue({ ok: true, data: null });
 
-    await processHardcoverSync({ ...fakeJob, data: { apiKeyId } } as never);
+    await processHardcoverSync({ ...fakeJob, data: { userId } } as never);
 
     // The read was still pushed — status finished, dates set, but no page progress
     // (we never invent a page number from a different page basis).
@@ -158,12 +171,12 @@ describe("hardcover-sync edition page count handling (libris-26gy)", () => {
     const [logRow] = await testDb
       .select()
       .from(hardcoverSyncLog)
-      .where(and(eq(hardcoverSyncLog.apiKeyId, apiKeyId), eq(hardcoverSyncLog.bookId, bookId)));
+      .where(and(eq(hardcoverSyncLog.userId, userId), eq(hardcoverSyncLog.bookId, bookId)));
     expect(logRow).toBeDefined();
     expect(logRow!.lastStatus).toBe("finished");
     expect(logRow!.lastProgress).toBe("1.0000");
 
-    const remaining = await findBooksToSyncToHardcover(testDb, apiKeyId);
+    const remaining = await findBooksToSyncToHardcover(testDb, userId);
     expect(remaining).toHaveLength(0);
   });
 
@@ -171,7 +184,7 @@ describe("hardcover-sync edition page count handling (libris-26gy)", () => {
     await seedFinishedBook({ editionId: 32542955, pageCount: 999 });
     vi.mocked(client.getEditionPages).mockResolvedValue({ ok: true, data: 526 });
 
-    await processHardcoverSync({ ...fakeJob, data: { apiKeyId } } as never);
+    await processHardcoverSync({ ...fakeJob, data: { userId } } as never);
 
     expect(client.upsertUserBookRead).toHaveBeenCalledTimes(1);
     const params = vi.mocked(client.upsertUserBookRead).mock.calls[0]![1];
@@ -187,7 +200,7 @@ describe("hardcover-sync edition page count handling (libris-26gy)", () => {
       error: { type: "api_error", message: "boom" },
     });
 
-    await processHardcoverSync({ ...fakeJob, data: { apiKeyId } } as never);
+    await processHardcoverSync({ ...fakeJob, data: { userId } } as never);
 
     // No read pushed; sync-log records the status but leaves progress unsynced
     // so the book stays a candidate and retries next run.
@@ -195,10 +208,10 @@ describe("hardcover-sync edition page count handling (libris-26gy)", () => {
     const [logRow] = await testDb
       .select()
       .from(hardcoverSyncLog)
-      .where(and(eq(hardcoverSyncLog.apiKeyId, apiKeyId), eq(hardcoverSyncLog.bookId, bookId)));
+      .where(and(eq(hardcoverSyncLog.userId, userId), eq(hardcoverSyncLog.bookId, bookId)));
     expect(logRow!.lastProgress).toBeNull();
 
-    const remaining = await findBooksToSyncToHardcover(testDb, apiKeyId);
+    const remaining = await findBooksToSyncToHardcover(testDb, userId);
     expect(remaining).toHaveLength(1);
   });
 });

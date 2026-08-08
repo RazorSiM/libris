@@ -1,10 +1,12 @@
-import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
+import { createRoute, z } from "@hono/zod-openapi";
+import { createOpenApiRouter } from "../../shared/openapi.js";
 import { and, eq, or, sql, count, countDistinct, desc, sum, inArray } from "drizzle-orm";
 import { books, bookFiles, readingProgress } from "#db";
 import type { AppVariables } from "../../context.js";
-import { getApiKeyId } from "../../shared/auth.js";
+import { getUserId, isAdmin } from "../../shared/auth.js";
 import { FINISHED_THRESHOLD, PAUSED_DAYS } from "../../lib/reading-status.js";
 import {
+  collectInFlightBookIds,
   collectQueueCounts,
   getPipelineQueues,
   type QueueCounts,
@@ -18,7 +20,7 @@ const dashboardRoute = createRoute({
   tags: ["dashboard"],
   summary: "Get dashboard data",
   description:
-    "Returns currently reading books, recently added, inbox count, library stats, and pipeline status",
+    "Returns currently reading books, recently added, inbox count, library stats, and pipeline status. `currentlyReading`, `inboxCount` and `stats.processingCount` are per-user (reading progress is private, and inbox/review books are pre-approval uploads); `recentlyAdded` and the rest of `stats` describe the shared organized library, so `stats.totalFileSize` counts only organized books' files. `pipeline` holds install-wide queue counts and is therefore admin-only: it is an empty object for everyone else. Admins receive the install-wide inbox count and processing count.",
   responses: {
     200: {
       description: "Dashboard data",
@@ -45,24 +47,38 @@ const dashboardRoute = createRoute({
                 createdAt: z.string(),
               }),
             ),
-            inboxCount: z.number().int(),
+            inboxCount: z
+              .number()
+              .int()
+              .openapi({ description: "Books awaiting approval. Owner-scoped unless admin." }),
             stats: z.object({
               totalBooks: z.number().int(),
               totalAuthors: z.number().int(),
               topGenre: z.string().nullable(),
-              totalFileSize: z.number(),
-              processingCount: z.number().int(),
-            }),
-            pipeline: z.record(
-              z.string(),
-              z.object({
-                waiting: z.number().int(),
-                active: z.number().int(),
-                completed: z.number().int(),
-                failed: z.number().int(),
-                delayed: z.number().int(),
+              totalFileSize: z.number().openapi({
+                description:
+                  "Bytes held by the files of organized books. Excludes inbox and review uploads, which are private to their owner.",
               }),
-            ),
+              processingCount: z.number().int().openapi({
+                description:
+                  "Books with a pipeline job in flight. Counts only the caller's own books; install-wide for admins.",
+              }),
+            }),
+            pipeline: z
+              .record(
+                z.string(),
+                z.object({
+                  waiting: z.number().int(),
+                  active: z.number().int(),
+                  completed: z.number().int(),
+                  failed: z.number().int(),
+                  delayed: z.number().int(),
+                }),
+              )
+              .openapi({
+                description:
+                  "Per-queue job counts for the whole install. Admin-only; an empty object for every other caller.",
+              }),
           }),
         },
       },
@@ -72,11 +88,12 @@ const dashboardRoute = createRoute({
 
 // ── Router ───────────────────────────────────────────────────────
 
-export const dashboardRoutes = new OpenAPIHono<{ Variables: AppVariables }>().openapi(
+export const dashboardRoutes = createOpenApiRouter<{ Variables: AppVariables }>().openapi(
   dashboardRoute,
   async (c) => {
     const db = c.get("db");
-    const apiKeyId = getApiKeyId(c);
+    const userId = getUserId(c);
+    const callerIsAdmin = isAdmin(c);
 
     const [
       currentlyReadingRaw,
@@ -108,7 +125,7 @@ export const dashboardRoutes = new OpenAPIHono<{ Variables: AppVariables }>().op
         .innerJoin(books, eq(bookFiles.bookId, books.id))
         .where(
           and(
-            eq(readingProgress.apiKeyId, apiKeyId),
+            eq(readingProgress.userId, userId),
             sql`${books.status} = 'organized'
               AND cast(${readingProgress.percentage} as numeric) > 0
               AND cast(${readingProgress.percentage} as numeric) < ${FINISHED_THRESHOLD}
@@ -131,11 +148,20 @@ export const dashboardRoutes = new OpenAPIHono<{ Variables: AppVariables }>().op
         .orderBy(desc(books.createdAt))
         .limit(5),
 
-      // Inbox count (inbox + review status)
+      // Inbox count (inbox + review status).
+      //
+      // Inbox/review books are pre-approval uploads and are NOT shared, so this
+      // has to use the same predicate as GET /api/inbox/count — otherwise the
+      // home page reports other users' pending uploads while the sidebar badge
+      // and /inbox itself, both owner-scoped, show none of them.
       db
         .select({ count: count() })
         .from(books)
-        .where(inArray(books.status, ["inbox", "review"])),
+        .where(
+          callerIsAdmin
+            ? inArray(books.status, ["inbox", "review"])
+            : and(inArray(books.status, ["inbox", "review"]), eq(books.createdBy, userId)),
+        ),
 
       // Stats: total organized books + unique authors
       db
@@ -156,8 +182,21 @@ export const dashboardRoutes = new OpenAPIHono<{ Variables: AppVariables }>().op
         LIMIT 1
       `),
 
-      // Total file size across all book files
-      db.select({ total: sum(bookFiles.fileSize) }).from(bookFiles),
+      // Total bytes held by the shared library.
+      //
+      // Scoped to organized books for everyone, admins included.
+      // A bare sum over `book_files` included every user's inbox and review
+      // uploads, so the home page quietly published the byte volume of other
+      // people's pre-approval files. "Organized only" is also the reading that
+      // makes the surrounding object coherent: `totalBooks` and `totalAuthors`
+      // beside it already count organized rows, so bytes-per-book now means
+      // something, and organized books are the shared half of the ownership
+      // model, so nothing here is anyone's private business.
+      db
+        .select({ total: sum(bookFiles.fileSize) })
+        .from(bookFiles)
+        .innerJoin(books, eq(bookFiles.bookId, books.id))
+        .where(eq(books.status, "organized")),
     ]);
 
     // Deduplicate currently reading: keep latest progress per book
@@ -170,24 +209,43 @@ export const dashboardRoutes = new OpenAPIHono<{ Variables: AppVariables }>().op
 
     const topGenre = (topGenreResult as unknown as { genre: string }[])[0]?.genre;
 
-    // Get pipeline/queue status
-    let pipeline: Record<string, Omit<QueueCounts, "paused">> = {};
-    try {
-      const counts = await collectQueueCounts(getPipelineQueues());
-      pipeline = Object.fromEntries(
-        Object.entries(counts).map(([name, queue]) => {
-          const { paused: _, ...pipelineCounts } = queue;
-          return [name, pipelineCounts];
-        }),
-      );
-    } catch {
-      // Redis may be unavailable — return empty pipeline
-    }
-
-    // Sum up active + waiting across all queues for "processing" stat
+    // Pipeline and processing counts.
+    //
+    // Per-queue counts are a property of the install, not of a person: they
+    // say how much work is in flight and how much of it has failed, across
+    // everybody's uploads. A non-admin who reads `pipeline` learns that other
+    // people's books are being processed and roughly how many, which is the
+    // same disclosure the owner-scoped inbox count exists to prevent. So the
+    // breakdown is admin-only, and a non-admin's `processingCount` is derived
+    // the way /api/inbox/processing derives its map: from the book ids in
+    // flight, intersected with the ones they own.
+    let pipeline: Record<string, Omit<QueueCounts, "isPaused">> = {};
     let processingCount = 0;
-    for (const counts of Object.values(pipeline)) {
-      processingCount += (counts.active ?? 0) + (counts.waiting ?? 0) + (counts.delayed ?? 0);
+
+    try {
+      if (callerIsAdmin) {
+        const counts = await collectQueueCounts(getPipelineQueues());
+        pipeline = Object.fromEntries(
+          Object.entries(counts).map(([name, queue]) => {
+            const { isPaused: _, ...pipelineCounts } = queue;
+            return [name, pipelineCounts];
+          }),
+        );
+        for (const counts of Object.values(pipeline)) {
+          processingCount += (counts.active ?? 0) + (counts.waiting ?? 0) + (counts.delayed ?? 0);
+        }
+      } else {
+        const inFlight = await collectInFlightBookIds(c.get("queues"));
+        if (inFlight.length > 0) {
+          const owned = await db
+            .select({ count: count() })
+            .from(books)
+            .where(and(inArray(books.id, inFlight), eq(books.createdBy, userId)));
+          processingCount = owned[0]?.count ?? 0;
+        }
+      }
+    } catch {
+      // Redis may be unavailable — report an empty pipeline and nothing in flight
     }
 
     return c.json({

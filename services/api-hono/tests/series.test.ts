@@ -1,5 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vite-plus/test";
-import { createTestApp, createFetchHelper } from "./setup.js";
+import { bootstrapAdmin, createTestApp, createFetchHelper } from "./setup.js";
 import type { Db } from "../src/db/client.js";
 import { books } from "../src/db/schema.js";
 
@@ -7,10 +7,12 @@ import { books } from "../src/db/schema.js";
 
 let $fetchRaw: ReturnType<typeof createFetchHelper>;
 let testDb: Db;
+let services: Awaited<ReturnType<typeof createTestApp>>["services"];
 
 // ── Per-test state ─────────────────────────────────────────────
 
 let apiKey: string;
+let ownerId: string;
 
 function auth() {
   return { authorization: `Bearer ${apiKey}` };
@@ -22,6 +24,7 @@ beforeAll(async () => {
   const testApp = await createTestApp();
   $fetchRaw = createFetchHelper(testApp.app);
   testDb = testApp.db;
+  services = testApp.services;
 });
 
 // ── Per-test lifecycle: clean DB → create fresh key ──────────────
@@ -29,12 +32,7 @@ beforeAll(async () => {
 beforeEach(async () => {
   await $fetchRaw("/__test/cleanup", { method: "POST" });
 
-  const { data, status } = await $fetchRaw("/api/auth/setup", {
-    method: "POST",
-    body: { label: "integration-test-key" },
-  });
-  expect(status).toBe(201);
-  apiKey = data.key;
+  ({ rawKey: apiKey, userId: ownerId } = await bootstrapAdmin(services, $fetchRaw));
 });
 
 afterEach(async () => {
@@ -76,6 +74,7 @@ describe("GET /api/series", () => {
     await testDb.insert(books).values([
       {
         title: "Book 1",
+        createdBy: ownerId,
         author: "Author",
         series: "My Series",
         seriesIndex: 1,
@@ -84,6 +83,7 @@ describe("GET /api/series", () => {
       },
       {
         title: "Book 2",
+        createdBy: ownerId,
         author: "Author",
         series: "My Series",
         seriesIndex: 2,
@@ -105,6 +105,7 @@ describe("GET /api/series", () => {
     await testDb.insert(books).values([
       {
         title: "Volume 3",
+        createdBy: ownerId,
         series: "Series A",
         seriesIndex: 3,
         status: "organized",
@@ -112,6 +113,7 @@ describe("GET /api/series", () => {
       },
       {
         title: "Volume 1",
+        createdBy: ownerId,
         series: "Series A",
         seriesIndex: 1,
         status: "organized",
@@ -119,6 +121,7 @@ describe("GET /api/series", () => {
       },
       {
         title: "Volume 2",
+        createdBy: ownerId,
         series: "Series A",
         seriesIndex: 2,
         status: "organized",
@@ -139,6 +142,7 @@ describe("GET /api/series", () => {
     await testDb.insert(books).values([
       {
         title: "Volume with index",
+        createdBy: ownerId,
         series: "Series B",
         seriesIndex: 1,
         status: "organized",
@@ -146,6 +150,7 @@ describe("GET /api/series", () => {
       },
       {
         title: "Volume without index",
+        createdBy: ownerId,
         series: "Series B",
         seriesIndex: null,
         status: "organized",
@@ -165,6 +170,7 @@ describe("GET /api/series", () => {
     await testDb.insert(books).values([
       {
         title: "Series A Vol 2",
+        createdBy: ownerId,
         series: "Series A",
         seriesIndex: 2,
         status: "organized",
@@ -172,6 +178,7 @@ describe("GET /api/series", () => {
       },
       {
         title: "Series A Vol 1",
+        createdBy: ownerId,
         series: "Series A",
         seriesIndex: 1,
         status: "organized",
@@ -179,6 +186,7 @@ describe("GET /api/series", () => {
       },
       {
         title: "Series B Vol 1",
+        createdBy: ownerId,
         series: "Series B",
         seriesIndex: 1,
         status: "organized",
@@ -202,6 +210,7 @@ describe("GET /api/series", () => {
     await testDb.insert(books).values([
       {
         title: "Organized Book",
+        createdBy: ownerId,
         series: "Test Series",
         seriesIndex: 1,
         status: "organized",
@@ -209,6 +218,7 @@ describe("GET /api/series", () => {
       },
       {
         title: "Inbox Book",
+        createdBy: ownerId,
         series: "Test Series",
         seriesIndex: 2,
         status: "inbox",
@@ -228,6 +238,7 @@ describe("GET /api/series", () => {
     await testDb.insert(books).values([
       {
         title: "Inbox V1",
+        createdBy: ownerId,
         series: "Test Series",
         seriesIndex: 1,
         status: "inbox",
@@ -235,6 +246,7 @@ describe("GET /api/series", () => {
       },
       {
         title: "Organized V2",
+        createdBy: ownerId,
         series: "Test Series",
         seriesIndex: 2,
         status: "organized",
@@ -253,6 +265,7 @@ describe("GET /api/series", () => {
     await testDb.insert(books).values([
       {
         title: "Book 1",
+        createdBy: ownerId,
         series: "Series C",
         seriesIndex: null,
         status: "organized",
@@ -260,6 +273,7 @@ describe("GET /api/series", () => {
       },
       {
         title: "Book 2",
+        createdBy: ownerId,
         series: "Series C",
         seriesIndex: null,
         status: "organized",

@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { z } from "zod";
 import { useClipboard } from "@vueuse/core";
 
 const toast = useToast();
@@ -10,41 +9,6 @@ const baseUrl = computed(() => window.location.origin);
 function copyToClipboard(text: string) {
   copy(text);
   toast.add({ title: "Copied to clipboard", color: "success" });
-}
-
-const { opdsCredentials } = useSettingsStatusQuery();
-
-const credentialSchema = z.object({
-  username: z.string().min(1, "Username is required"),
-  password: z.string().min(1, "Password is required"),
-});
-
-const opdsCredForm = reactive({ username: "", password: "" });
-const opdsUsernameDirty = ref(false);
-const { mutateAsync: putCredential, isLoading: opdsSaving } = usePutCredential();
-
-watch(
-  () => opdsCredentials.value?.username,
-  (username) => {
-    if (opdsUsernameDirty.value) return;
-    opdsCredForm.username = username ?? "";
-  },
-  { immediate: true },
-);
-
-async function saveOpdsCredentials() {
-  try {
-    await putCredential({
-      service: "opds",
-      username: opdsCredForm.username,
-      password: opdsCredForm.password,
-    });
-    opdsCredForm.password = "";
-    toast.add({ title: "OPDS credentials saved", color: "success" });
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : "Failed to save credentials";
-    toast.add({ title: message, color: "error" });
-  }
 }
 </script>
 
@@ -80,59 +44,20 @@ async function saveOpdsCredentials() {
 
     <USeparator class="my-3" />
 
-    <div class="space-y-3">
-      <div class="text-xs text-muted">
-        <p v-if="opdsCredentials?.configured">
-          <strong>Auth:</strong> HTTP Basic — username:
-          <code class="bg-elevated/50 px-1 rounded">{{ opdsCredentials.username }}</code>
-        </p>
-        <p v-else>
-          <UIcon name="i-lucide-alert-triangle" class="text-warning inline" />
-          <strong>Auth:</strong> Not configured — set credentials below to enable OPDS access.
-        </p>
-      </div>
-
-      <UForm
-        :schema="credentialSchema"
-        :state="opdsCredForm"
-        class="rounded-md bg-elevated/50 p-3 space-y-2"
-        @submit="saveOpdsCredentials"
-      >
-        <h4 class="text-xs font-medium">OPDS Credentials</h4>
-        <p class="text-xs text-muted">
-          Set a username and password for OPDS clients (KOReader, Calibre, etc).
-        </p>
-        <div class="flex flex-col sm:flex-row gap-2">
-          <UFormField name="username" class="flex-1">
-            <UInput
-              v-model="opdsCredForm.username"
-              data-testid="opds-username-input"
-              placeholder="Username"
-              size="sm"
-              class="w-full"
-              @update:model-value="opdsUsernameDirty = true"
-            />
-          </UFormField>
-          <UFormField name="password" class="flex-1">
-            <UInput
-              v-model="opdsCredForm.password"
-              data-testid="opds-password-input"
-              type="password"
-              placeholder="Password"
-              size="sm"
-              class="w-full"
-            />
-          </UFormField>
-          <UButton
-            type="submit"
-            label="Save"
-            size="sm"
-            color="primary"
-            data-testid="opds-save-btn"
-            :loading="opdsSaving"
-          />
-        </div>
-      </UForm>
+    <!--
+      The separate OPDS username/password is gone. A reader signs in with your
+      own account name and an app password, so there is no second credential to
+      set up here and no way to end up with OPDS access you forgot you granted.
+      A richer devices UI is tracked separately.
+    -->
+    <div class="text-xs text-muted space-y-1">
+      <p>
+        <strong>Auth:</strong> HTTP Basic. Use your account email as the username and an
+        <strong>app password</strong> as the password.
+      </p>
+      <p data-testid="opds-app-password-hint">
+        Create one under App Passwords above — the password is shown once, when you create it.
+      </p>
     </div>
   </UCard>
 </template>

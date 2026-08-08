@@ -1,10 +1,10 @@
 /**
  * E2E: Command palette (UDashboardSearch).
  *
- * Regression coverage for libris-lroe — the palette previously rendered
- * untranslated i18n keys (`dashboardSearch.title`, `dashboardSearch.description`)
- * because Nuxt UI's English locale does not define them. The app now passes
- * explicit `title` and `description` props to UDashboardSearch.
+ * The palette must not render untranslated i18n keys. Nuxt UI's English locale
+ * does not define `dashboardSearch.title` or `dashboardSearch.description`, so
+ * the app passes explicit `title` and `description` props to UDashboardSearch —
+ * drop them and the raw keys show up on screen.
  *
  * These tests also exercise the representative rendering path (navigation
  * links and book search results) so we catch future regressions in how the

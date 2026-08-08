@@ -38,7 +38,7 @@ export type SyncCandidateRow = {
  */
 export async function findBooksToSyncToHardcover(
   db: Db,
-  apiKeyId: string,
+  userId: string,
 ): Promise<SyncCandidateRow[]> {
   const result = await db.execute<SyncCandidateRow>(sql`
     WITH book_progress AS (
@@ -52,8 +52,8 @@ export async function findBooksToSyncToHardcover(
         MIN(rph.created_at) AS first_activity,
         MAX(rph.created_at) AS last_activity
       FROM ${books} b
-      LEFT JOIN ${readingProgress} rp ON rp.book_id = b.id AND rp.api_key_id = ${apiKeyId}
-      LEFT JOIN ${readingProgressHistory} rph ON rph.book_id = b.id AND rph.api_key_id = ${apiKeyId}
+      LEFT JOIN ${readingProgress} rp ON rp.book_id = b.id AND rp.user_id = ${userId}
+      LEFT JOIN ${readingProgressHistory} rph ON rph.book_id = b.id AND rph.user_id = ${userId}
       WHERE b.status = 'organized'
         AND b.hardcover_book_id IS NOT NULL
       GROUP BY b.id
@@ -63,7 +63,7 @@ export async function findBooksToSyncToHardcover(
         ra.book_id,
         ra.manual_status::text AS manual_status
       FROM ${readingAggregate} ra
-      WHERE ra.api_key_id = ${apiKeyId}
+      WHERE ra.user_id = ${userId}
         AND ra.manual_status IS NOT NULL
     )
     SELECT
@@ -76,7 +76,7 @@ export async function findBooksToSyncToHardcover(
       sl.hardcover_read_id
     FROM book_progress bp
     LEFT JOIN book_override bo ON bo.book_id = bp.book_id
-    LEFT JOIN ${hardcoverSyncLog} sl ON sl.book_id = bp.book_id AND sl.api_key_id = ${apiKeyId}
+    LEFT JOIN ${hardcoverSyncLog} sl ON sl.book_id = bp.book_id AND sl.user_id = ${userId}
     WHERE (
         (bp.max_percentage IS NOT NULL AND bp.max_percentage > 0)
         OR bo.manual_status IS NOT NULL

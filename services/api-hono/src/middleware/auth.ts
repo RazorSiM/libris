@@ -1,315 +1,293 @@
 import { createMiddleware } from "hono/factory";
+import { timingSafeEqual } from "node:crypto";
 import { HTTPException } from "hono/http-exception";
-import { compare } from "bcryptjs";
-import { createHash } from "node:crypto";
-import { and, eq, or } from "drizzle-orm";
 import { getLogger } from "../lib/logger.js";
-import { apiKeys, serviceCredentials } from "#db";
-import type { Db } from "#db";
 import type { AppVariables } from "../context.js";
-import { resolvePolicy } from "../shared/route-policy.js";
-import { KEY_PREFIX_LENGTH, DUMMY_HASH } from "../shared/auth.js";
-import { readSession } from "../shared/session.js";
+import { deniesAppPasswords, resolvePolicy } from "../shared/route-policy.js";
 import { requireKosyncAuth } from "../shared/kosync-auth.js";
-import { getRequestIp } from "../shared/request-ip.js";
-
-// ── Auth result cache ─────────────────────────────────────────────
-// Avoids running bcrypt on every authenticated request.
-// Keys are SHA-256 digests of the raw credential — never the credential itself.
-//
-// IMPORTANT: Any route that creates, deletes, or modifies API key privileges
-// (e.g. isAdmin, scopes) MUST call clearAuthCaches() after the DB write.
-// Otherwise stale authorization data will be served for up to CACHE_TTL_MS.
-
-const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
-const CACHE_MAX = 500;
-
-interface CacheEntry<T> {
-  value: T;
-  expiresAt: number;
-}
-
-class TtlCache<T> {
-  private store = new Map<string, CacheEntry<T>>();
-
-  get(key: string): T | undefined {
-    const entry = this.store.get(key);
-    if (!entry) return undefined;
-    if (Date.now() > entry.expiresAt) {
-      this.store.delete(key);
-      return undefined;
-    }
-    return entry.value;
-  }
-
-  set(key: string, value: T): void {
-    if (this.store.size >= CACHE_MAX) {
-      const oldest = this.store.keys().next().value;
-      if (oldest !== undefined) this.store.delete(oldest);
-    }
-    this.store.set(key, { value, expiresAt: Date.now() + CACHE_TTL_MS });
-  }
-
-  delete(key: string): void {
-    this.store.delete(key);
-  }
-
-  clear(): void {
-    this.store.clear();
-  }
-}
-
-function sha256(input: string): string {
-  return createHash("sha256").update(input).digest("hex");
-}
-
-const apiKeyCache = new TtlCache<{ id: string; label: string | null; isAdmin: boolean }>();
-const opdsCache = new TtlCache<{ apiKeyId: string }>();
-
-/**
- * Clear all in-memory auth caches (apiKeyCache + opdsCache).
- *
- * Call this after any operation that changes key validity or privileges:
- * - Deleting an API key
- * - Updating key privileges (isAdmin, scopes, etc.)
- * - Rotating OPDS credentials
- *
- * Also used by test cleanup to prevent cross-test leakage.
- */
-export function clearAuthCaches(): void {
-  apiKeyCache.clear();
-  opdsCache.clear();
-}
+import { sessionHeaders } from "../shared/request-ip.js";
+import { isAdmin } from "../shared/auth.js";
+import { isUserBanned } from "../shared/user-ban.js";
+import { apiKeyFromHeaders } from "../lib/auth.js";
 
 const logger = getLogger("auth");
 
-const OPDS_REALM = "libris-opds";
+/** Unsafe methods that can mutate server state and therefore matter for CSRF. */
+const UNSAFE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
-function opds401(message: string): HTTPException {
-  return new HTTPException(401, {
-    message,
-    res: new Response(JSON.stringify({ error: message }), {
-      status: 401,
-      headers: {
-        "Content-Type": "application/json",
-        "WWW-Authenticate": `Basic realm="${OPDS_REALM}"`,
-      },
-    }),
-  });
+/**
+ * Development-only origins the SPA legitimately sends requests from. In dev the
+ * browser runs on the Vite server (3100) and reaches the API through its /api
+ * proxy. Production is same-origin only, so this list is empty there.
+ */
+const DEV_TRUSTED_ORIGINS = new Set(["http://localhost:3100", "http://localhost:3000"]);
+
+function isProductionEnv(env: unknown): boolean {
+  return (env as { NODE_ENV?: string })?.NODE_ENV === "production";
 }
 
 /**
- * Extract the raw API key from the Authorization header.
- * Supports:
- *   - Bearer <key>
- *   - Basic base64(user:pass)
+ * Whether an Origin header is one this server should accept for a
+ * cookie-authenticated mutation.
+ *
+ * Production is same-origin: the API serves the SPA from ./public, so the only
+ * legitimate Origin is the server's own (scheme from x-forwarded-proto when a
+ * TLS-terminating proxy is in front, host from the Host header). In dev the SPA
+ * runs on the Vite server, so the two localhost origins are allowed too.
  */
-function extractKey(header: string): string | null {
-  const [scheme, credentials] = header.split(" ", 2);
-  if (!scheme || !credentials) return null;
+export function isTrustedOrigin(
+  origin: string,
+  c: { req: { header(name: string): string | undefined } },
+  env: unknown,
+): boolean {
+  if (DEV_TRUSTED_ORIGINS.has(origin) && !isProductionEnv(env)) return true;
 
-  if (scheme.toLowerCase() === "bearer") {
-    return credentials;
+  let parsed: URL;
+  try {
+    parsed = new URL(origin);
+  } catch {
+    return false;
   }
 
-  if (scheme.toLowerCase() === "basic") {
-    const decoded = Buffer.from(credentials, "base64").toString("utf-8");
-    const colon = decoded.indexOf(":");
-    if (colon === -1) return null;
-    return decoded.substring(0, colon);
-  }
+  const host = c.req.header("host");
+  if (!host) return false;
 
-  return null;
-}
-
-/** Extract username and password from Basic auth header */
-function extractBasicCredentials(header: string): { username: string; password: string } | null {
-  const [scheme, credentials] = header.split(" ", 2);
-  if (!scheme || !credentials || scheme.toLowerCase() !== "basic") return null;
-
-  const decoded = Buffer.from(credentials, "base64").toString("utf-8");
-  const colon = decoded.indexOf(":");
-  if (colon === -1) return null;
-  return { username: decoded.substring(0, colon), password: decoded.substring(colon + 1) };
+  // Scheme-insensitive host comparison: the browser may reach the API over
+  // plain http on a LAN while the proxy presents https, or vice versa. The
+  // hostname being the same origin is what matters.
+  return parsed.hostname.toLowerCase() === host.split(":")[0].toLowerCase();
 }
 
 /**
- * Authenticate an OPDS request using Basic auth against service_credentials.
- * Requires OPDS credentials to be configured in the database.
- * Returns the apiKeyId for the matched credential so the caller can set user identity.
+ * CSRF defence-in-depth for cookie-authenticated unsafe requests.
+ *
+ * Existing controls (SameSite=Lax cookies, JSON-only bodies on most routes, no
+ * permissive CORS, no state-changing GETs) already make the residual risk low;
+ * this is the centralised explicit check. It rejects a present foreign Origin
+ * or a Sec-Fetch-Site: cross-site on an unsafe method that carries a cookie.
+ *
+ * Headerless clients are deliberately preserved: an API-key or OPDS request
+ * carries no cookie and no browser Origin, so it falls through untouched.
+ * Better Auth applies its own origin checks on /api/auth/* (policy "skip"), so
+ * those are not re-checked here.
  */
-async function requireOpdsAuth(authHeader: string | undefined, db: Db): Promise<string> {
-  if (!authHeader) {
-    throw opds401("Authentication required");
-  }
+export function isForeignCookieMutation(
+  c: {
+    req: { method: string; header(name: string): string | undefined };
+  },
+  env: unknown,
+): boolean {
+  const method = c.req.method.toUpperCase();
+  if (!UNSAFE_METHODS.has(method)) return false;
+  if (!c.req.header("cookie")) return false;
 
-  const basic = extractBasicCredentials(authHeader);
-  if (!basic) {
-    throw opds401("Invalid credentials");
-  }
+  // Strongest signal: browsers send Sec-Fetch-Site on every request.
+  const fetchSite = c.req.header("sec-fetch-site");
+  if (fetchSite && fetchSite.toLowerCase() === "cross-site") return true;
 
-  const cacheKey = sha256(`${basic.username}:${basic.password}`);
-  const cached = opdsCache.get(cacheKey);
-  if (cached) return cached.apiKeyId;
-
-  const [cred] = await db
-    .select()
-    .from(serviceCredentials)
-    .where(
-      and(eq(serviceCredentials.service, "opds"), eq(serviceCredentials.username, basic.username)),
-    )
-    .limit(1);
-
-  if (!cred) {
-    // Run bcrypt against dummy hash to normalize timing even when no credential found
-    await compare(basic.password, DUMMY_HASH);
-    throw opds401("Invalid credentials");
-  }
-
-  const valid = await compare(basic.password, cred.passwordHash);
-  if (!valid) {
-    throw opds401("Invalid credentials");
-  }
-
-  if (!cred.apiKeyId) {
-    throw opds401("OPDS credentials not linked to a user. Reconfigure in Settings.");
-  }
-
-  opdsCache.set(cacheKey, { apiKeyId: cred.apiKeyId });
-  return cred.apiKeyId;
+  // Fallback when Sec-Fetch-Site is absent (non-Fetch-API clients).
+  const origin = c.req.header("origin");
+  if (!origin) return false;
+  return !isTrustedOrigin(origin, c, env);
 }
 
+/**
+ * One session lookup for every kind of caller.
+ *
+ * This used to be a five-branch policy switch over a bespoke credential store,
+ * fronted by a five-minute in-memory cache whose correctness depended on every
+ * privilege-changing route remembering to call clearAuthCaches(). All of that
+ * is gone. `enableSessionForAPIKeys` makes the apiKey plugin resolve a valid app
+ * password into a session, so `getSession` answers for cookies and app passwords
+ * alike, and the admin plugin puts the role on the user where it belongs.
+ *
+ * Nothing is cached here. Better Auth's own cookie cache is off (see lib/auth.ts),
+ * so a revoked credential, a role change or a ban takes effect on the very next
+ * request rather than up to five minutes later.
+ *
+ * KoSync is the one genuine exception: KOReader sends md5(password) in its own
+ * x-auth-key header, which is not a Better Auth credential in any form.
+ */
 export const authMiddleware = createMiddleware<{ Variables: AppVariables }>(async (c, next) => {
   const path = c.req.path;
   const policy = resolvePolicy(path);
   const db = c.get("db");
   const env = c.get("env");
+  const auth = c.get("auth");
 
-  // Default to false so c.get('isAdmin') is always a boolean,
-  // even for policies (skip/public/optional) that may not authenticate.
-  c.set("isAdmin", false);
-
-  const validateApiKey = async (required: boolean, explicitKey?: string): Promise<void> => {
-    let key: string | null = explicitKey ?? null;
-
-    // Try Bearer/Basic header first
-    if (!key) {
-      const authHeader = c.req.header("authorization");
-      if (authHeader) {
-        key = extractKey(authHeader);
-      }
+  /**
+   * An OPDS reader that gets a bare 401 shows the user an error; one that gets
+   * a WWW-Authenticate challenge shows a login box. The header is the whole
+   * difference between "Libris is broken" and "Libris wants my password".
+   *
+   * It is scoped to OPDS on purpose — sending it on /api/* would pop the
+   * browser's native Basic dialog over the SPA.
+   */
+  const unauthorized = (): HTTPException => {
+    logger.warn(`Auth failure from ${c.get("clientIp")}`);
+    if (policy !== "opds") {
+      return new HTTPException(401, { message: "Authentication required" });
     }
-
-    // Fall back to session cookie if no header
-    if (!key) {
-      const session = await readSession(c);
-      if (session?.apiKey) {
-        key = session.apiKey;
-      }
-    }
-
-    if (!key) {
-      if (required) throw new HTTPException(401, { message: "Authentication required" });
-      return;
-    }
-
-    const cacheKey = sha256(key);
-    const cached = apiKeyCache.get(cacheKey);
-    if (cached) {
-      c.set("apiKeyId", cached.id);
-      c.set("apiKeyLabel", cached.label ?? undefined);
-      c.set("isAdmin", cached.isAdmin);
-      return;
-    }
-
-    const prefix = key.substring(0, KEY_PREFIX_LENGTH);
-    const candidates = await db
-      .select()
-      .from(apiKeys)
-      .where(or(eq(apiKeys.keyPrefix, prefix), eq(apiKeys.keyPrefix, "")));
-
-    let matchedKey: (typeof candidates)[number] | null = null;
-    for (const row of candidates) {
-      const matches = await compare(key, row.keyHash);
-      if (matches) {
-        matchedKey = row;
-        break;
-      }
-    }
-
-    if (!matchedKey) {
-      logger.warn(`Auth failure from ${getRequestIp(c)}`);
-      if (required) throw new HTTPException(401, { message: "Invalid API key" });
-      return;
-    }
-
-    apiKeyCache.set(cacheKey, {
-      id: matchedKey.id,
-      label: matchedKey.label ?? null,
-      isAdmin: matchedKey.isAdmin,
+    // `message` still carries the body text: app.ts builds the JSON from it and
+    // copies the headers off this response, so both survive.
+    return new HTTPException(401, {
+      message: "Authentication required",
+      res: new Response(null, {
+        status: 401,
+        headers: { "www-authenticate": 'Basic realm="Libris OPDS", charset="UTF-8"' },
+      }),
     });
-
-    // Update lastUsedAt in background (don't block the request)
-    db.update(apiKeys)
-      .set({ lastUsedAt: new Date() })
-      .where(eq(apiKeys.id, matchedKey.id))
-      .catch((err) =>
-        logger.withMetadata({ error: String(err) }).warn("Failed to update lastUsedAt"),
-      );
-
-    c.set("apiKeyId", matchedKey.id);
-    c.set("apiKeyLabel", matchedKey.label);
-    c.set("isAdmin", matchedKey.isAdmin);
   };
+
+  const resolveSession = async (required: boolean): Promise<void> => {
+    // getSession returns null for "no credential presented", but THROWS an
+    // APIError for a credential that was presented and rejected — an unknown or
+    // disabled app password, most commonly. Both mean the same thing here, and
+    // letting the throw escape would turn a bad key into a 500.
+    //
+    // Anything that is NOT an APIError is an infrastructure fault (Redis,
+    // Postgres) rather than a verdict on the credential.
+    // Collapsing both into the same bare "Auth failure from <ip>" line made a
+    // store outage indistinguishable from a wrong password in the logs, which
+    // is the difference between diagnosing an incident and guessing at it.
+    const session = await auth.api
+      .getSession({ headers: sessionHeaders(c) })
+      .catch((err: unknown) => {
+        if (err instanceof Error && err.name === "APIError") {
+          logger.withError(err).debug(`Credential rejected on ${path}`);
+        } else {
+          logger
+            .withError(err instanceof Error ? err : new Error(String(err)))
+            .error(
+              `Session lookup failed on ${path} — auth store unavailable, not a bad credential`,
+            );
+        }
+        return null as Awaited<ReturnType<typeof auth.api.getSession>>;
+      });
+
+    if (!session) {
+      if (required) throw unauthorized();
+      return;
+    }
+
+    /**
+     * A ban has to bind to the person, not to one kind of credential.
+     *
+     * Better Auth only checks `banned` when it CREATES a session
+     * (`plugins/admin/admin.mjs`, the session.create before-hook), and banning
+     * deletes the existing session rows — so the cookie path looked covered.
+     * An app password creates no session row: the apiKey plugin's before-hook
+     * looks the user up by referenceId and synthesises a session without ever
+     * reading the ban fields. A banned user's Kobo therefore kept downloading,
+     * uploading and PATCHing indefinitely, because app passwords never expire.
+     *
+     * Checking here covers cookies and app passwords in one place, because
+     * both arrive through this one getSession call. Throwing `unauthorized()`
+     * rather than a bare 401 keeps the OPDS WWW-Authenticate challenge, so a
+     * reader shows a login box instead of an error.
+     */
+    if (isUserBanned(session.user)) {
+      logger.warn(`Banned user ${session.user.id} refused on ${path}`);
+      throw unauthorized();
+    }
+
+    c.set("userId", session.user.id);
+    c.set("userName", session.user.name);
+    c.set("role", session.user.role ?? undefined);
+  };
+
+  /**
+   * How much authority this credential is allowed to carry.
+   *
+   * An app password resolves into a full session, so without this an OPDS
+   * credential copied off an e-reader is its owner — admin included. The check
+   * sits before the switch rather than inside each branch because it has to
+   * cover "skip" too: /api/auth/* is the most sensitive prefix in the app and
+   * the one the middleware otherwise stands aside for entirely.
+   *
+   * The signal is the credential the caller PRESENTED, not anything on the
+   * resolved session — the plugin's before-hook builds a session that is
+   * indistinguishable from a cookie one, and it overrides the cookie whenever a
+   * key is present. Asking apiKeyFromHeaders (the very getter the plugin is
+   * configured with) is the same question the plugin asked, so the two cannot
+   * disagree about what this request is.
+   *
+   * Refusing before authenticating means a garbage key on /api/jobs is a 403
+   * rather than a 401. That is the honest answer: the route does not take app
+   * passwords, valid or otherwise, and saying so reveals nothing about the key.
+   *
+   * Edge case, accepted: a browser that has been through the native Basic
+   * dialog on /opds may attach that Authorization header to same-origin /api/*
+   * requests, and the plugin would already have preferred it over the cookie.
+   * Such a request is refused here with a message that names the cause.
+   */
+  if ((policy === "admin" || deniesAppPasswords(path)) && apiKeyFromHeaders(c.req.raw.headers)) {
+    logger.warn(`App password refused on ${path} from ${c.get("clientIp")}`);
+    throw new HTTPException(403, {
+      message: "App passwords cannot be used here — sign in for this",
+    });
+  }
 
   switch (policy) {
     case "skip":
-      if (
-        path.startsWith("/__test/") &&
-        !(env.NODE_ENV === "development" || env.NODE_ENV === "test" || env.E2E_TEST === "1")
-      ) {
-        throw new HTTPException(404, { message: "Not found" });
-      }
       break;
 
     case "public":
       break;
 
     case "optional":
-      await validateApiKey(false);
+      await resolveSession(false);
       break;
+
+    case "test": {
+      const actual = Buffer.from(c.req.header("x-test-token") ?? "");
+      const expected = Buffer.from(env.TEST_ROUTE_TOKEN ?? "");
+      if (
+        expected.length < 32 ||
+        actual.length !== expected.length ||
+        !timingSafeEqual(actual, expected)
+      ) {
+        throw unauthorized();
+      }
+      break;
+    }
 
     case "kosync": {
       if (path === "/kosync/users/auth" || path === "/kosync/users/create") break;
-      const kosyncApiKeyId = await requireKosyncAuth(
+      const kosyncUserId = await requireKosyncAuth(
         {
           username: c.req.header("x-auth-user"),
           password: c.req.header("x-auth-key"),
         },
         db,
+        env.API_SECRET_KEY,
       );
-      c.set("apiKeyId", kosyncApiKeyId);
-      c.set("isAdmin", false);
+      c.set("userId", kosyncUserId);
       break;
     }
 
-    case "opds": {
-      const opdsApiKeyId = await requireOpdsAuth(c.req.header("authorization"), db);
-      c.set("apiKeyId", opdsApiKeyId);
-      c.set("isAdmin", false);
-      break;
-    }
-
+    // OPDS clients send their app password over Basic auth, which a
+    // customAPIKeyGetter turns into the same session everything else gets.
+    // No branch of its own any more.
+    case "opds":
     case "api-key":
-      await validateApiKey(true);
+      await resolveSession(true);
       break;
 
     case "admin":
-      await validateApiKey(true);
-      if (!c.get("isAdmin")) {
+      await resolveSession(true);
+      if (!isAdmin(c)) {
         throw new HTTPException(403, { message: "Admin access required" });
       }
       break;
+  }
+
+  // CSRF defence-in-depth: reject foreign-origin or
+  // cross-site cookie-authenticated mutations. Headerless API-key/OPDS
+  // requests carry no cookie and are untouched.
+  if (isForeignCookieMutation(c, env)) {
+    logger.warn(`Cross-site cookie mutation refused on ${path} from ${c.get("clientIp")}`);
+    throw new HTTPException(403, { message: "Cross-site request rejected" });
   }
 
   await next();

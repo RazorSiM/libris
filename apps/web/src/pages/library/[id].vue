@@ -42,11 +42,11 @@ defineShortcuts({
 
 const route = useRoute("/library/[id]");
 const toast = useToast();
-const { isAdmin, apiKeyId: currentApiKeyId } = useAuth();
+const { isAdmin, userId: currentUserId } = useAuth();
 const queryCache = useQueryCache();
 
 const canEditBook = computed(
-  () => isAdmin.value || (book.value?.createdBy && book.value.createdBy === currentApiKeyId.value),
+  () => isAdmin.value || (book.value?.createdBy && book.value.createdBy === currentUserId.value),
 );
 
 const id = computed(() => route.params.id);

@@ -1,33 +1,75 @@
 import { defineRelations } from "drizzle-orm";
 import * as schema from "./schema";
 
+/**
+ * Ownership hangs off `users`, not `apiKeys`: an api key is one of a user's
+ * credentials, so the "owner" side of every relation below points at users.
+ */
 export const relations = defineRelations(schema, (r) => ({
-  apiKeys: {
+  users: {
     createdBooks: r.many.books({
-      from: r.apiKeys.id,
+      from: r.users.id,
       to: r.books.createdBy,
     }),
+    apiKeys: r.many.apiKeys({
+      from: r.users.id,
+      to: r.apiKeys.referenceId,
+    }),
+    sessions: r.many.sessions({
+      from: r.users.id,
+      to: r.sessions.userId,
+    }),
+    accounts: r.many.accounts({
+      from: r.users.id,
+      to: r.accounts.userId,
+    }),
+    kosyncCredential: r.one.kosyncCredentials({
+      from: r.users.id,
+      to: r.kosyncCredentials.userId,
+    }),
     serviceCredentials: r.many.serviceCredentials({
-      from: r.apiKeys.id,
-      to: r.serviceCredentials.apiKeyId,
+      from: r.users.id,
+      to: r.serviceCredentials.userId,
     }),
     readingProgress: r.many.readingProgress({
-      from: r.apiKeys.id,
-      to: r.readingProgress.apiKeyId,
+      from: r.users.id,
+      to: r.readingProgress.userId,
     }),
     readingProgressHistory: r.many.readingProgressHistory({
-      from: r.apiKeys.id,
-      to: r.readingProgressHistory.apiKeyId,
+      from: r.users.id,
+      to: r.readingProgressHistory.userId,
+    }),
+    uploads: r.many.uploadRegistry({
+      from: r.users.id,
+      to: r.uploadRegistry.userId,
     }),
     hardcoverSyncLogs: r.many.hardcoverSyncLog({
-      from: r.apiKeys.id,
-      to: r.hardcoverSyncLog.apiKeyId,
+      from: r.users.id,
+      to: r.hardcoverSyncLog.userId,
+    }),
+  },
+  apiKeys: {
+    owner: r.one.users({
+      from: r.apiKeys.referenceId,
+      to: r.users.id,
+    }),
+  },
+  sessions: {
+    user: r.one.users({
+      from: r.sessions.userId,
+      to: r.users.id,
+    }),
+  },
+  accounts: {
+    user: r.one.users({
+      from: r.accounts.userId,
+      to: r.users.id,
     }),
   },
   books: {
-    creator: r.one.apiKeys({
+    creator: r.one.users({
       from: r.books.createdBy,
-      to: r.apiKeys.id,
+      to: r.users.id,
     }),
     hardcoverSyncLogs: r.many.hardcoverSyncLog({
       from: r.books.id,
@@ -47,9 +89,9 @@ export const relations = defineRelations(schema, (r) => ({
       from: r.hardcoverSyncLog.bookId,
       to: r.books.id,
     }),
-    apiKey: r.one.apiKeys({
-      from: r.hardcoverSyncLog.apiKeyId,
-      to: r.apiKeys.id,
+    owner: r.one.users({
+      from: r.hardcoverSyncLog.userId,
+      to: r.users.id,
     }),
   },
   bookFiles: {
@@ -69,9 +111,9 @@ export const relations = defineRelations(schema, (r) => ({
       from: r.readingProgress.bookId,
       to: r.books.id,
     }),
-    apiKey: r.one.apiKeys({
-      from: r.readingProgress.apiKeyId,
-      to: r.apiKeys.id,
+    owner: r.one.users({
+      from: r.readingProgress.userId,
+      to: r.users.id,
     }),
   },
   readingProgressHistory: {
@@ -79,21 +121,27 @@ export const relations = defineRelations(schema, (r) => ({
       from: r.readingProgressHistory.bookId,
       to: r.books.id,
     }),
-    apiKey: r.one.apiKeys({
-      from: r.readingProgressHistory.apiKeyId,
-      to: r.apiKeys.id,
+    owner: r.one.users({
+      from: r.readingProgressHistory.userId,
+      to: r.users.id,
+    }),
+  },
+  kosyncCredentials: {
+    owner: r.one.users({
+      from: r.kosyncCredentials.userId,
+      to: r.users.id,
     }),
   },
   serviceCredentials: {
-    apiKey: r.one.apiKeys({
-      from: r.serviceCredentials.apiKeyId,
-      to: r.apiKeys.id,
+    owner: r.one.users({
+      from: r.serviceCredentials.userId,
+      to: r.users.id,
     }),
   },
   uploadRegistry: {
-    apiKey: r.one.apiKeys({
-      from: r.uploadRegistry.apiKeyId,
-      to: r.apiKeys.id,
+    owner: r.one.users({
+      from: r.uploadRegistry.userId,
+      to: r.users.id,
     }),
   },
 }));

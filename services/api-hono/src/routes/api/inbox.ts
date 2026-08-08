@@ -1,30 +1,24 @@
-import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
+import { createRoute, z } from "@hono/zod-openapi";
+import { createOpenApiRouter } from "../../shared/openapi.js";
 import { HTTPException } from "hono/http-exception";
 import { and, count, eq, inArray, ne, sql } from "drizzle-orm";
 import { access } from "node:fs/promises";
 import { writeFile } from "node:fs/promises";
 import { basename, join, extname, resolve } from "node:path";
-import {
-  apiKeys,
-  books,
-  bookColumns,
-  bookFiles,
-  bookMetadataCandidates,
-  uploadRegistry,
-} from "#db";
+import { users, books, bookColumns, bookFiles, bookMetadataCandidates, uploadRegistry } from "#db";
 import type { AppVariables } from "../../context.js";
-import { requireBookOwnership } from "../../shared/auth.js";
+import { getUserId, isAdmin, requireBookOwnership } from "../../shared/auth.js";
+import { uploaderRef } from "../../shared/uploader-ref.js";
 import { extractEpubCoverImage } from "../../lib/metadata/index.js";
-import { assertNotInternalUrl } from "../../shared/ssrf.js";
+import { fetchExternalImage } from "../../shared/secure-image-fetch.js";
+import { validateEpubUpload } from "../../shared/epub-validation.js";
 
 import { getLogger } from "../../lib/logger.js";
 
 const coverLogger = getLogger("inbox:cover");
 
 const COVER_PROXY_TIMEOUT_MS = 10_000;
-const ALLOWED_COVER_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
 import { computeChecksumFromBuffer } from "../../shared/checksum.js";
-import { invalidateRouteCache } from "../../services/cache.js";
 import { InboxListQuerySchema, IdParamSchema } from "../../shared/validation.js";
 import {
   InboxListResponseSchema,
@@ -39,6 +33,15 @@ import {
 
 const SUPPORTED_EXTENSIONS = new Set([".epub"]);
 const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB
+
+/**
+ * Per-file skip reason when the same bytes are already on the server.
+ *
+ * Names neither the owner nor the status of the existing copy: the caller
+ * supplied these bytes, so the only thing disclosed is that they are already
+ * here. That is the price of not silently swallowing the upload.
+ */
+const DUPLICATE_UPLOAD_MESSAGE = "This file has already been uploaded to this library";
 
 function isPathWithinDirectory(filePath: string, rootPath: string): boolean {
   return filePath === rootPath || filePath.startsWith(`${rootPath}/`);
@@ -86,9 +89,16 @@ function detectMimeType(buf: Buffer): string {
 
 // ── Route definitions ────────────────────────────────────────────────
 
-function formatUploader(row: { uploaderId: string | null; uploaderLabel: string | null }) {
+/**
+ * Uploader attribution for a book row. `id` is the opaque uploader reference,
+ * never `users.id` — see `shared/uploader-ref.ts`.
+ */
+function formatUploader(
+  row: { uploaderId: string | null; uploaderLabel: string | null },
+  secret: string,
+) {
   if (!row.uploaderId || !row.uploaderLabel) return null;
-  return { id: row.uploaderId, label: row.uploaderLabel };
+  return { id: uploaderRef(row.uploaderId, secret), label: row.uploaderLabel };
 }
 
 const listInboxRoute = createRoute({
@@ -96,7 +106,8 @@ const listInboxRoute = createRoute({
   path: "/",
   tags: ["inbox"],
   summary: "List inbox books",
-  description: "Paginated list of books in inbox or review status",
+  description:
+    "Paginated list of books in inbox or review status. Non-admin users see only books they own.",
   request: {
     query: InboxListQuerySchema,
   },
@@ -115,7 +126,8 @@ const getInboxBookRoute = createRoute({
   path: "/{id}",
   tags: ["inbox"],
   summary: "Get inbox book",
-  description: "Retrieve a single inbox/review book with its files and metadata candidates",
+  description:
+    "Retrieve an owned inbox/review book with its files and metadata candidates. Admins may retrieve any book.",
   request: {
     params: IdParamSchema,
   },
@@ -126,6 +138,7 @@ const getInboxBookRoute = createRoute({
         "application/json": { schema: InboxDetailResponseSchema },
       },
     },
+    403: { description: "Not authorized to view this book" },
     404: { description: "Book not found" },
   },
 });
@@ -135,7 +148,8 @@ const inboxCountRoute = createRoute({
   path: "/count",
   tags: ["inbox"],
   summary: "Get inbox count",
-  description: "Returns the number of books in inbox or review status",
+  description:
+    "Returns the number of visible books in inbox or review status. Non-admin counts are owner-scoped.",
   responses: {
     200: {
       description: "Inbox count",
@@ -152,7 +166,7 @@ const inboxProcessingRoute = createRoute({
   tags: ["inbox"],
   summary: "Inbox processing status",
   description:
-    "Returns the current pipeline stage for books being processed (parsing, fetching metadata, organizing)",
+    "Returns the current pipeline stage for visible books being processed. Non-admin results are owner-scoped.",
   responses: {
     200: {
       description: "Map of bookId to processing stage",
@@ -191,7 +205,7 @@ const inboxCoverRoute = createRoute({
   tags: ["inbox"],
   summary: "Get inbox book cover",
   description:
-    "Returns the cover image for an inbox/review book. Tries EPUB extraction first, then falls back to proxying the coverUrl from metadata sources.",
+    "Returns the cover image for an owned inbox/review book. Admins may retrieve any cover. Tries EPUB extraction first, then falls back to proxying the coverUrl from metadata sources.",
   request: {
     params: IdParamSchema,
   },
@@ -206,6 +220,7 @@ const inboxCoverRoute = createRoute({
       },
     },
     400: { description: "Invalid book ID" },
+    403: { description: "Not authorized to view this book" },
     404: { description: "Book not found or no cover available" },
   },
 });
@@ -216,7 +231,7 @@ const uploadRoute = createRoute({
   tags: ["inbox"],
   summary: "Upload ebook files",
   description:
-    "Upload one or more ebook files (EPUB) to the inbox directory. Files are saved to disk; the file watcher picks them up for processing.",
+    "Upload one or more ebook files (EPUB) to the inbox directory. Files are saved to disk; the file watcher picks them up for processing.\n\nThe response splits the batch three ways. `uploaded[]` is what was written. `skipped[]` is files whose contents are already on the server — already ingested, or uploaded by anyone and still awaiting the watcher; ingestion deduplicates by checksum, so writing them would drop them silently, and they are not written. A skip is **not** a failure: the library already holds that book, which is what the caller wanted. `errors[]` is genuine rejections — unsupported format, over the size limit, not a readable EPUB, or an unsafe filename.\n\nThe status is 400 only when every file landed in `errors[]`. A batch that was entirely skipped is 200: nothing was wrong with the request, there was simply nothing left to do.",
   request: {
     body: {
       required: true,
@@ -236,26 +251,32 @@ const uploadRoute = createRoute({
   },
   responses: {
     200: {
-      description: "Upload results with per-file success/error details",
+      description:
+        "Per-file outcome for the batch: `uploaded[]`, `skipped[]` (already in the library), `errors[]`. Returned whenever at least one file was written or skipped, even if others errored.",
       content: {
         "application/json": { schema: UploadResponseSchema },
       },
     },
-    400: { description: "No files provided or all files rejected" },
+    400: {
+      description:
+        "No files provided, or every file in the batch failed. A batch where every file was skipped as already-present is 200, not 400.",
+    },
   },
 });
 
 // ── Handlers ─────────────────────────────────────────────────────────
 
-export const inboxRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
+export const inboxRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
   // GET / — list inbox books
   .openapi(listInboxRoute, async (c) => {
     const { page, limit, q, sort } = c.req.valid("query");
     const offset = (page - 1) * limit;
     const db = c.get("db");
+    const secret = c.get("env").API_SECRET_KEY;
 
     // Inbox shows books with status 'inbox' or 'review'
     const conditions = [inArray(books.status, ["inbox", "review"])];
+    if (!isAdmin(c)) conditions.push(eq(books.createdBy, getUserId(c)));
 
     // When searching: tsquery for FTS + pg_trgm fallback for typos/filenames
     let tsquery: string | null = null;
@@ -299,11 +320,11 @@ export const inboxRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
       db
         .select({
           ...bookColumns,
-          uploaderId: apiKeys.id,
-          uploaderLabel: apiKeys.label,
+          uploaderId: users.id,
+          uploaderLabel: users.name,
         })
         .from(books)
-        .leftJoin(apiKeys, eq(apiKeys.id, books.createdBy))
+        .leftJoin(users, eq(users.id, books.createdBy))
         .where(where)
         .orderBy(orderBy)
         .limit(limit)
@@ -330,7 +351,7 @@ export const inboxRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
     return c.json({
       data: items.map((book) => ({
         ...(({ uploaderId: _uploaderId, uploaderLabel: _uploaderLabel, ...rest }) => rest)(book),
-        uploader: formatUploader(book),
+        uploader: formatUploader(book, secret),
         files: (filesByBook.get(book.id) ?? []).map((f) => ({
           id: f.id,
           format: f.format,
@@ -350,17 +371,18 @@ export const inboxRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
   // GET /count — inbox count
   .openapi(inboxCountRoute, async (c) => {
     const db = c.get("db");
+    const where = isAdmin(c)
+      ? inArray(books.status, ["inbox", "review"])
+      : and(inArray(books.status, ["inbox", "review"]), eq(books.createdBy, getUserId(c)));
 
-    const result = await db
-      .select({ count: count() })
-      .from(books)
-      .where(inArray(books.status, ["inbox", "review"]));
+    const result = await db.select({ count: count() }).from(books).where(where);
 
     return c.json({ count: result[0]?.count ?? 0 });
   })
 
   // GET /processing — processing status
   .openapi(inboxProcessingRoute, async (c) => {
+    const db = c.get("db");
     const queues = c.get("queues");
     const processing: Record<string, { stage: string; label: string }> = {};
 
@@ -392,6 +414,17 @@ export const inboxRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
       // Redis may be unavailable — return empty map gracefully
     }
 
+    if (!isAdmin(c) && Object.keys(processing).length > 0) {
+      const owned = await db
+        .select({ id: books.id })
+        .from(books)
+        .where(and(inArray(books.id, Object.keys(processing)), eq(books.createdBy, getUserId(c))));
+      const ownedIds = new Set(owned.map(({ id }) => id));
+      for (const id of Object.keys(processing)) {
+        if (!ownedIds.has(id)) delete processing[id];
+      }
+    }
+
     return c.json({ processing });
   })
 
@@ -399,20 +432,23 @@ export const inboxRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
   .openapi(getInboxBookRoute, async (c) => {
     const { id } = c.req.valid("param");
     const db = c.get("db");
+    const secret = c.get("env").API_SECRET_KEY;
 
     const [book] = await db
       .select({
         ...bookColumns,
-        uploaderId: apiKeys.id,
-        uploaderLabel: apiKeys.label,
+        uploaderId: users.id,
+        uploaderLabel: users.name,
       })
       .from(books)
-      .leftJoin(apiKeys, eq(apiKeys.id, books.createdBy))
+      .leftJoin(users, eq(users.id, books.createdBy))
       .where(and(eq(books.id, id), inArray(books.status, ["inbox", "review"])));
 
     if (!book) {
       throw new HTTPException(404, { message: "Book not found" });
     }
+
+    await requireBookOwnership(c, db, id);
 
     const [files, candidates] = await Promise.all([
       db.select().from(bookFiles).where(eq(bookFiles.bookId, id)),
@@ -438,13 +474,12 @@ export const inboxRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
 
     return c.json({
       ...(({ uploaderId: _uploaderId, uploaderLabel: _uploaderLabel, ...rest }) => rest)(book),
-      uploader: formatUploader(book),
+      uploader: formatUploader(book, secret),
       possibleDuplicate,
       files: files.map((f) => ({
         id: f.id,
         format: f.format,
         originalName: f.originalName,
-        inboxPath: f.inboxPath,
         fileSize: f.fileSize.toString(),
         checksum: f.checksum,
       })),
@@ -463,7 +498,6 @@ export const inboxRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
     const { id } = c.req.valid("param");
     const db = c.get("db");
     const queues = c.get("queues");
-    const cacheStorage = c.get("cacheStorage");
 
     // Ownership check (owner or admin)
     await requireBookOwnership(c, db, id);
@@ -509,8 +543,10 @@ export const inboxRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
     // Enqueue metadata fetch job AFTER the transaction commits successfully
     await queues.bookFetchMetadata.add("fetch-metadata", { bookId: id, searchQuery });
 
-    // Invalidate caches: status changed, candidates deleted
-    await invalidateRouteCache(cacheStorage, "/api/inbox", `/api/books/${id}/candidates`);
+    // No invalidation: a rescan moves the book between "review" and "inbox",
+    // and neither status appears in the OPDS catalogue (organized only) or in
+    // the /api/stats aggregates. The inbox and candidates endpoints it used to
+    // name are not cached at all.
 
     return c.json({ status: "rescanning", bookId: id, searchQuery });
   })
@@ -520,6 +556,8 @@ export const inboxRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
   .openapi(inboxCoverRoute, async (c) => {
     const { id } = c.req.valid("param");
     const db = c.get("db");
+
+    await requireBookOwnership(c, db, id);
 
     // Verify book exists and is in inbox/review status
     const [book] = await db
@@ -571,26 +609,14 @@ export const inboxRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
     if (book.coverUrl) {
       coverLogger.debug(`Book ${id}: proxying cover from ${book.coverUrl}`);
       try {
-        await assertNotInternalUrl(book.coverUrl);
-
-        const response = await fetch(book.coverUrl, {
-          signal: AbortSignal.timeout(COVER_PROXY_TIMEOUT_MS),
+        const image = await fetchExternalImage(book.coverUrl, {
+          timeoutMs: COVER_PROXY_TIMEOUT_MS,
+          allowedOrigins: c.get("env").LIBRIS_COVER_FETCH_ALLOWLIST,
         });
-
-        if (!response.ok || !response.body) {
-          coverLogger.warn(`Book ${id}: cover proxy failed: HTTP ${response.status}`);
-          throw new HTTPException(404, { message: "Cover URL not reachable" });
-        }
-
-        const contentType = response.headers.get("content-type")?.split(";")[0]?.trim();
-        if (contentType && !ALLOWED_COVER_TYPES.has(contentType)) {
-          coverLogger.warn(`Book ${id}: cover proxy rejected Content-Type: ${contentType}`);
-          throw new HTTPException(404, { message: "Cover URL returned non-image content" });
-        }
-
-        return new Response(response.body, {
+        return new Response(new Uint8Array(image.data), {
           headers: {
-            "Content-Type": contentType ?? "image/jpeg",
+            "Content-Type": image.contentType,
+            "Content-Length": String(image.data.length),
             "X-Content-Type-Options": "nosniff",
             "Cache-Control": "private, max-age=3600",
           },
@@ -628,6 +654,7 @@ export const inboxRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
 
     const inboxPath = env.LIBRIS_INBOX_PATH;
     const uploaded: { filename: string; size: number }[] = [];
+    const skipped: { filename: string; reason: string }[] = [];
     const errors: { filename: string; error: string }[] = [];
 
     for (const file of fileEntries) {
@@ -650,10 +677,53 @@ export const inboxRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
       }
 
       const buffer = new Uint8Array(await file.arrayBuffer());
+      const epubError = validateEpubUpload(buffer);
+      if (epubError) {
+        errors.push({ filename: file.name, error: epubError });
+        continue;
+      }
       const safeName = basename(file.name);
+      const checksum = computeChecksumFromBuffer(buffer);
+      const db = c.get("db");
 
+      // Ingestion deduplicates by checksum: the book-detected worker returns
+      // early when any book already holds these bytes. Writing the file anyway
+      // returned 200 with nothing to show for it — the book stayed in the first
+      // uploader's inbox, which a second uploader cannot see now that the inbox
+      // is owner-scoped, and their copy sat in the inbox directory forever.
+      // Detect it here and say so instead.
+      //
+      // Both tables have to be checked: book_files covers everything already
+      // ingested, upload_registry covers an upload still waiting on the
+      // watcher, which is the window the two-user race lives in.
+      const [ingested, pending] = await Promise.all([
+        db
+          .select({ id: bookFiles.id })
+          .from(bookFiles)
+          .where(eq(bookFiles.checksum, checksum))
+          .limit(1),
+        db
+          .select({ id: uploadRegistry.id })
+          .from(uploadRegistry)
+          .where(eq(uploadRegistry.checksum, checksum))
+          .limit(1),
+      ]);
+
+      if (ingested.length > 0 || pending.length > 0) {
+        // Reported as a skip, not an error. Nothing went wrong: the caller
+        // wanted this book in the library and the library already has it. Only
+        // a client that conflates the two would call this a failure.
+        //
+        // The reason says nothing about who holds the existing copy or what
+        // state it is in. The caller supplied these bytes, so all this admits
+        // is that the same bytes are already here.
+        skipped.push({ filename: file.name, reason: DUPLICATE_UPLOAD_MESSAGE });
+        continue;
+      }
+
+      let storedName: string;
       try {
-        await writeInboxFile(inboxPath, safeName, buffer);
+        ({ storedName } = await writeInboxFile(inboxPath, safeName, buffer));
       } catch (error) {
         if (error instanceof HTTPException && error.status === 400) {
           errors.push({ filename: file.name, error: error.message });
@@ -663,18 +733,18 @@ export const inboxRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
         throw error;
       }
 
-      // Register the upload with its checksum so the book-detected worker
-      // can attribute ownership to the uploading API key.
-      const apiKeyId = c.get("apiKeyId");
-      if (apiKeyId) {
-        const checksum = computeChecksumFromBuffer(buffer);
-        const db = c.get("db");
+      // Register the upload with its checksum so the book-detected worker can
+      // attribute ownership. The name recorded is the name ON DISK, not the one
+      // the browser sent: a collision renames the file, and the worker matches
+      // registry rows against the file it is actually ingesting.
+      const userId = c.get("userId");
+      if (userId) {
         await db
           .insert(uploadRegistry)
           .values({
             checksum,
-            apiKeyId,
-            filename: safeName,
+            userId,
+            filename: storedName,
           })
           .onConflictDoNothing();
       }
@@ -682,11 +752,16 @@ export const inboxRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
       uploaded.push({ filename: file.name, size: file.size });
     }
 
-    if (uploaded.length === 0 && errors.length > 0) {
+    // 400 only when the whole batch genuinely failed. A batch that produced
+    // nothing but skips is a successful no-op — every file the caller asked for
+    // is in the library, which is the outcome they were after — so it gets a
+    // 200 whose body says so. Making it a 400 would be telling the user their
+    // request was malformed when it was merely redundant.
+    if (uploaded.length === 0 && skipped.length === 0 && errors.length > 0) {
       throw new HTTPException(400, {
         message: `All files rejected: ${errors.map((e) => `${e.filename}: ${e.error}`).join("; ")}`,
       });
     }
 
-    return c.json({ uploaded, errors });
+    return c.json({ uploaded, skipped, errors });
   });

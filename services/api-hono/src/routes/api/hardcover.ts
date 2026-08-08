@@ -1,4 +1,5 @@
-import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
+import { createRoute, z } from "@hono/zod-openapi";
+import { createOpenApiRouter } from "../../shared/openapi.js";
 import { HTTPException } from "hono/http-exception";
 import { and, eq, desc } from "drizzle-orm";
 import { serviceCredentials, hardcoverSyncLog, books } from "#db";
@@ -6,7 +7,7 @@ import type { AppVariables } from "../../context.js";
 import { verifyToken } from "../../lib/hardcover/client.js";
 import { searchHardcover } from "../../lib/metadata/clients/hardcover.js";
 import { isHardcoverMetadataEnabled } from "../../services/settings.js";
-import { unsealToken, getApiKeyId } from "../../shared/auth.js";
+import { unsealToken, getUserId } from "../../shared/auth.js";
 import { HardcoverSearchResponseSchema } from "../../shared/schemas.js";
 import { getQueues } from "../../services/queue.js";
 import { parseRedisUrl } from "../../env.js";
@@ -47,7 +48,7 @@ const syncRoute = createRoute({
   tags: ["hardcover"],
   summary: "Trigger Hardcover sync",
   description:
-    "Enqueue a job to synchronize reading progress and ratings with the Hardcover service. Requires a configured Hardcover credential.",
+    "Enqueue a user-scoped job to synchronize reading progress and ratings with the Hardcover service. Global metadata maintenance runs only on scheduled jobs. Requires a configured Hardcover credential.",
   responses: {
     200: {
       description: "Sync job enqueued",
@@ -112,7 +113,7 @@ const searchRoute = createRoute({
   tags: ["hardcover"],
   summary: "Search Hardcover for metadata",
   description:
-    "Run a free-text search against Hardcover and return up to 5 normalized metadata candidates. Used by the UI when auto-fetched metadata is wrong or missing — the user picks a result to autofill the edit form.",
+    "Run a free-text search against Hardcover and return up to 5 normalized metadata candidates. Used by the UI when auto-fetched metadata is wrong or missing — the user picks a result to autofill the edit form. The search always spends the caller's own Hardcover token; a caller with no Hardcover credential of their own gets 503 and no request is made to Hardcover, matching what GET /api/hardcover/status reports for them.",
   request: {
     query: z.object({
       q: z
@@ -129,24 +130,27 @@ const searchRoute = createRoute({
         "application/json": { schema: HardcoverSearchResponseSchema },
       },
     },
-    503: { description: "Hardcover credential not configured or metadata search disabled" },
+    503: {
+      description:
+        "The caller has no Hardcover credential of their own, its token could not be decrypted, or metadata search is disabled",
+    },
   },
 });
 
 // ── Router ───────────────────────────────────────────────────────
 
-export const hardcoverRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
+export const hardcoverRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
   .openapi(statusRoute, async (c) => {
     const db = c.get("db");
     const env = c.get("env");
-    const apiKeyId = getApiKeyId(c);
+    const userId = getUserId(c);
 
     // Check if credential exists
     const [cred] = await db
       .select({ passwordHash: serviceCredentials.passwordHash })
       .from(serviceCredentials)
       .where(
-        and(eq(serviceCredentials.service, "hardcover"), eq(serviceCredentials.apiKeyId, apiKeyId)),
+        and(eq(serviceCredentials.service, "hardcover"), eq(serviceCredentials.userId, userId)),
       )
       .limit(1);
 
@@ -173,7 +177,7 @@ export const hardcoverRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
     const [lastSync] = await db
       .select({ lastSyncedAt: hardcoverSyncLog.lastSyncedAt })
       .from(hardcoverSyncLog)
-      .where(eq(hardcoverSyncLog.apiKeyId, apiKeyId))
+      .where(eq(hardcoverSyncLog.userId, userId))
       .orderBy(desc(hardcoverSyncLog.lastSyncedAt))
       .limit(1);
 
@@ -186,13 +190,13 @@ export const hardcoverRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
   .openapi(syncRoute, async (c) => {
     const db = c.get("db");
     const env = c.get("env");
-    const apiKeyId = getApiKeyId(c);
+    const userId = getUserId(c);
 
     const [cred] = await db
       .select({ id: serviceCredentials.id })
       .from(serviceCredentials)
       .where(
-        and(eq(serviceCredentials.service, "hardcover"), eq(serviceCredentials.apiKeyId, apiKeyId)),
+        and(eq(serviceCredentials.service, "hardcover"), eq(serviceCredentials.userId, userId)),
       )
       .limit(1);
 
@@ -205,7 +209,7 @@ export const hardcoverRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
       (q): q is Queue => q instanceof Queue && q.name === QUEUE_HARDCOVER_SYNC,
     );
 
-    const jobPayload = { manual: true, apiKeyId };
+    const jobPayload = { manual: true, userId };
 
     if (!syncQueue) {
       // Fallback: create a one-off queue connection
@@ -222,7 +226,7 @@ export const hardcoverRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
   .openapi(syncLogRoute, async (c) => {
     const { limit } = c.req.valid("query");
     const db = c.get("db");
-    const apiKeyId = getApiKeyId(c);
+    const userId = getUserId(c);
 
     const rows = await db
       .select({
@@ -235,7 +239,7 @@ export const hardcoverRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
       })
       .from(hardcoverSyncLog)
       .innerJoin(books, eq(hardcoverSyncLog.bookId, books.id))
-      .where(eq(hardcoverSyncLog.apiKeyId, apiKeyId))
+      .where(eq(hardcoverSyncLog.userId, userId))
       .orderBy(desc(hardcoverSyncLog.lastSyncedAt))
       .limit(limit);
 
@@ -244,6 +248,8 @@ export const hardcoverRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
   .openapi(searchRoute, async (c) => {
     const { q } = c.req.valid("query");
     const db = c.get("db");
+    const env = c.get("env");
+    const userId = getUserId(c);
 
     // Surface clear status codes when Hardcover is unusable, instead of the
     // silent empty-array behavior of searchHardcover().
@@ -252,16 +258,29 @@ export const hardcoverRoutes = new OpenAPIHono<{ Variables: AppVariables }>()
       throw new HTTPException(503, { message: "Hardcover metadata search is disabled" });
     }
 
+    // The caller's OWN credential. The unscoped "does anyone on this server hold
+    // a Hardcover token" gate let a user who had never connected Hardcover
+    // search on someone else's token — billed to and rate-limited against that
+    // account — while /api/hardcover/status correctly reported them as
+    // disconnected.
     const [cred] = await db
-      .select({ id: serviceCredentials.id })
+      .select({ passwordHash: serviceCredentials.passwordHash })
       .from(serviceCredentials)
-      .where(eq(serviceCredentials.service, "hardcover"))
+      .where(
+        and(eq(serviceCredentials.service, "hardcover"), eq(serviceCredentials.userId, userId)),
+      )
       .limit(1);
     if (!cred) {
       throw new HTTPException(503, { message: "Hardcover credential not configured" });
     }
 
-    const results = await searchHardcover({ title: q });
+    const token = await unsealToken(cred.passwordHash, env.API_SECRET_KEY);
+    if (!token) {
+      throw new HTTPException(503, { message: "Failed to decrypt the stored Hardcover token" });
+    }
+
+    // Pass the token explicitly so the client cannot resolve an arbitrary one.
+    const results = await searchHardcover({ title: q }, { token });
     return c.json({
       results: results.map((r) => ({
         source: r.source,

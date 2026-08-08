@@ -14,12 +14,15 @@ import { test, expect } from "./fixtures";
 import {
   API_BASE,
   authHeaders,
+  getAdminUserId,
   getSql,
   deleteAllBooks,
   seedBookFile,
+  seedMetadataCandidate,
   goPath,
   waitForAllQueuesIdle,
 } from "./helpers";
+import { ADMIN } from "./helpers/accounts.js";
 
 /** Insert a book in review status with metadata candidates. Returns the book id. */
 async function seedReviewBook(
@@ -36,14 +39,15 @@ async function seedReviewBook(
     const genresLiteral = `{${genres.map((g) => `"${g}"`).join(",")}}`;
     const [row] = await sql`
       INSERT INTO books (
-        status, title, author, description, genres
+        status, title, author, description, genres, created_by
       )
       VALUES (
         'review',
         ${overrides.title ?? "Test Review Book"},
         ${overrides.author ?? "Test Author"},
         ${overrides.description ?? null},
-        ${genresLiteral}::text[]
+        ${genresLiteral}::text[],
+        ${getAdminUserId()}
       )
       RETURNING id
     `;
@@ -58,12 +62,13 @@ async function seedInboxBook(overrides: { title?: string; author?: string } = {}
   const sql = getSql();
   try {
     const [row] = await sql`
-      INSERT INTO books (status, title, author, genres)
+      INSERT INTO books (status, title, author, genres, created_by)
       VALUES (
         'inbox',
         ${overrides.title ?? "Inbox Book"},
         ${overrides.author ?? null},
-        '{}'::text[]
+        '{}'::text[],
+        ${getAdminUserId()}
       )
       RETURNING id
     `;
@@ -76,30 +81,11 @@ async function seedInboxBook(overrides: { title?: string; author?: string } = {}
 /**
  * Seed metadata candidates for a book. Each candidate is a source with normalized metadata.
  * The confidence is used to determine auto-selection priority.
+ *
+ * Delegates to the shared helper — writing the jsonb column by hand is how this
+ * file spent a long time storing a jsonb string instead of a jsonb object.
  */
-async function seedCandidate(
-  bookId: string,
-  source: string,
-  confidence: number,
-  normalized: Record<string, unknown>,
-): Promise<string> {
-  const sql = getSql();
-  try {
-    const [row] = await sql`
-      INSERT INTO book_metadata_candidates (book_id, source, confidence, normalized)
-      VALUES (
-        ${bookId},
-        ${source},
-        ${confidence},
-        ${JSON.stringify(normalized)}::jsonb
-      )
-      RETURNING id
-    `;
-    return row.id;
-  } finally {
-    await sql.end();
-  }
-}
+const seedCandidate = seedMetadataCandidate;
 
 /** Navigate to inbox — uses goPath for a full SSR render (avoids client-side cache issues). */
 async function goInbox(page: Page): Promise<void> {
@@ -140,13 +126,10 @@ test.describe("Inbox List", { tag: "@smoke" }, () => {
     test.beforeAll(async () => {
       await deleteAllBooks();
 
-      const keyRes = await fetch(`${API_BASE}/api/auth/keys`, { headers: authHeaders() });
-      const keyData = (await keyRes.json()) as {
-        keys: Array<{ id: string; label: string; isAdmin: boolean }>;
-      };
-      const adminKey = keyData.keys.find((key) => key.isAdmin);
-      if (!adminKey) throw new Error("Expected admin API key to exist");
-      uploaderLabel = adminKey.label;
+      // Was the label of the isAdmin key from /api/auth/keys, back when a key
+      // was a person. The byline shows the USER's name now, and app passwords
+      // carry no role at all — so there is nothing to look up.
+      uploaderLabel = ADMIN.name;
 
       // Review books with files (for status badges, format column, search)
       const reviewId = await seedReviewBook({ title: "Review Alpha", author: "Author A" });
@@ -179,7 +162,7 @@ test.describe("Inbox List", { tag: "@smoke" }, () => {
       try {
         await sql`
           UPDATE books
-          SET created_by = ${adminKey.id}
+          SET created_by = ${getAdminUserId()}
           WHERE id = ${uploaderBookId}
         `;
       } finally {
@@ -247,7 +230,11 @@ test.describe("Inbox List", { tag: "@smoke" }, () => {
     test("inbox list and detail show uploader label", async ({ authedPage: page }) => {
       await goInbox(page);
       await expect(page.getByText("Uploader Inbox Book")).toBeVisible({ timeout: 10_000 });
-      await expect(page.getByText(`Uploaded by ${uploaderLabel}`)).toBeVisible();
+
+      // Scoped to this book's row: every book has an owner, so the byline is on
+      // every row and an unscoped getByText matches the whole list.
+      const row = page.getByRole("button").filter({ hasText: "Uploader Inbox Book" });
+      await expect(row.getByText(`Uploaded by ${uploaderLabel}`)).toBeVisible();
 
       await page.getByText("Uploader Inbox Book").click();
       await page.waitForURL(`**/inbox/${uploaderBookId}`, { timeout: 10_000 });
