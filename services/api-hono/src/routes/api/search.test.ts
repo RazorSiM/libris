@@ -1,9 +1,10 @@
 /**
- * Owner-scoping of the dashboard's pre-approval counts.
+ * Owner-scoping of the command-palette suggest endpoint.
  *
- * The organized library is shared — `recentlyAdded` and `stats` are deliberately
- * install-wide. Inbox and review books are not: they are pre-approval uploads,
- * and every other inbox surface refuses to show one the caller does not own.
+ * Organized books are the shared library and match for everyone. Review books
+ * are pre-approval uploads: /api/inbox refuses to list, show or serve the cover
+ * of one the caller does not own, so suggest must not hand back their title,
+ * author and cover either.
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import type { PGlite } from "@electric-sql/pglite";
@@ -101,61 +102,64 @@ beforeEach(async () => {
   await db.delete(schema.books);
 });
 
-describe("GET /api/dashboard", () => {
-  it("counts only the caller's own inbox/review books, and matches /api/inbox/count", async () => {
-    const alice = await seedUserKey("Dashboard Alice");
-    const bob = await seedUserKey("Dashboard Bob");
+describe("GET /api/search/suggest", () => {
+  /** Titles the suggest endpoint returned for `q`, as the given caller. */
+  async function suggestTitles(
+    app: ReturnType<typeof createTestApp>["app"],
+    rawKey: string,
+    q: string,
+  ) {
+    const response = await app.request(`/api/search/suggest?q=${encodeURIComponent(q)}`, {
+      headers: { Authorization: `Bearer ${rawKey}` },
+    });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { data: { title: string | null }[] };
+    return body.data.map((r) => r.title);
+  }
 
-    // Alice has three pending uploads; Bob has none.
+  it("hides another user's review books but keeps organized books and your own", async () => {
+    const alice = await seedUserKey("Suggest Alice");
+    const bob = await seedUserKey("Suggest Bob");
+
     await db.insert(schema.books).values([
-      { status: "review", title: "Alice Review One", createdBy: alice.userId },
-      { status: "review", title: "Alice Review Two", createdBy: alice.userId },
-      { status: "inbox", title: "Alice Inbox One", createdBy: alice.userId },
-      { status: "organized", title: "Shared Organized", createdBy: alice.userId },
+      // Alice's embarrassing pre-approval upload — Bob must not see it.
+      { status: "review", title: "Zerbinax Private Draft", createdBy: alice.userId },
+      // Bob's own pending upload — Bob must still see it.
+      { status: "review", title: "Zerbinax Bob Draft", createdBy: bob.userId },
+      // Shared library — everyone sees it.
+      { status: "organized", title: "Zerbinax Shared Volume", createdBy: alice.userId },
     ]);
 
     const { app } = createTestApp();
 
-    const bobDashboard = await app.request("/api/dashboard", {
-      headers: { Authorization: `Bearer ${bob.rawKey}` },
-    });
-    expect(bobDashboard.status).toBe(200);
-    const bobBody = await bobDashboard.json();
+    const bobTitles = await suggestTitles(app, bob.rawKey, "Zerbinax");
+    // Pre-fix this contained "Zerbinax Private Draft": the query matched
+    // status IN ('organized','review') with no owner predicate at all.
+    expect(bobTitles).not.toContain("Zerbinax Private Draft");
+    expect(bobTitles).toEqual(
+      expect.arrayContaining(["Zerbinax Shared Volume", "Zerbinax Bob Draft"]),
+    );
 
-    // Pre-fix this was 3 — a bare count() over every user's pending uploads.
-    expect(bobBody.inboxCount).toBe(0);
-
-    // ...and it now agrees with the owner-scoped endpoint feeding the sidebar.
-    const bobInboxCount = await app.request("/api/inbox/count", {
-      headers: { Authorization: `Bearer ${bob.rawKey}` },
-    });
-    expect((await bobInboxCount.json()).count).toBe(bobBody.inboxCount);
-
-    // The shared organized library is still install-wide for Bob.
-    expect(bobBody.stats.totalBooks).toBe(1);
-    expect(bobBody.recentlyAdded).toHaveLength(1);
-
-    const aliceDashboard = await app.request("/api/dashboard", {
-      headers: { Authorization: `Bearer ${alice.rawKey}` },
-    });
-    expect((await aliceDashboard.json()).inboxCount).toBe(3);
+    const aliceTitles = await suggestTitles(app, alice.rawKey, "Zerbinax");
+    expect(aliceTitles).toEqual(
+      expect.arrayContaining(["Zerbinax Private Draft", "Zerbinax Shared Volume"]),
+    );
+    expect(aliceTitles).not.toContain("Zerbinax Bob Draft");
   });
 
-  it("still reports the install-wide inbox count to an admin", async () => {
-    const alice = await seedUserKey("Dashboard Admin Alice");
-    const admin = await seedUserKey("Dashboard Admin", "admin");
+  it("lets an admin suggest across every user's review books", async () => {
+    const alice = await seedUserKey("Suggest Admin Alice");
+    const admin = await seedUserKey("Suggest Admin", "admin");
 
     await db.insert(schema.books).values([
-      { status: "review", title: "Alice Pending", createdBy: alice.userId },
-      { status: "inbox", title: "Admin Pending", createdBy: admin.userId },
+      { status: "review", title: "Quorbal Alice Draft", createdBy: alice.userId },
+      { status: "organized", title: "Quorbal Shared Volume", createdBy: alice.userId },
     ]);
 
     const { app } = createTestApp();
-    const response = await app.request("/api/dashboard", {
-      headers: { Authorization: `Bearer ${admin.rawKey}` },
-    });
-
-    expect(response.status).toBe(200);
-    expect((await response.json()).inboxCount).toBe(2);
+    const titles = await suggestTitles(app, admin.rawKey, "Quorbal");
+    expect(titles).toEqual(
+      expect.arrayContaining(["Quorbal Alice Draft", "Quorbal Shared Volume"]),
+    );
   });
 });

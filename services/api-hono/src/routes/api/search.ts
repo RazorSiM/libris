@@ -1,8 +1,9 @@
 import { createRoute, z } from "@hono/zod-openapi";
 import { createOpenApiRouter } from "../../shared/openapi.js";
-import { sql } from "drizzle-orm";
+import { and, sql } from "drizzle-orm";
 import { books } from "#db";
 import type { AppVariables } from "../../context.js";
+import { getUserId, isAdmin } from "../../shared/auth.js";
 
 // ── GET /suggest ─────────────────────────────────────────────────
 
@@ -12,7 +13,7 @@ const suggestRoute = createRoute({
   tags: ["search"],
   summary: "Search suggestions for command palette",
   description:
-    "Lightweight prefix search returning up to 8 results for autocomplete. Searches both organized and review books.",
+    "Lightweight prefix search returning up to 8 results for autocomplete. Matches every organized book (the library is shared) plus the caller's own review books, so you can find an upload of yours that is still awaiting metadata approval. Other users' review books are never returned; admins see all of them.",
   request: {
     query: z.object({
       q: z
@@ -52,6 +53,7 @@ export const searchRoutes = createOpenApiRouter<{ Variables: AppVariables }>().o
   async (c) => {
     const { q } = c.req.valid("query");
     const db = c.get("db");
+    const userId = getUserId(c);
 
     // Sanitize input for tsquery: remove special tsquery characters
     const sanitized = q.replaceAll(/[&|!<>():*\\]/g, " ").trim();
@@ -65,6 +67,15 @@ export const searchRoutes = createOpenApiRouter<{ Variables: AppVariables }>().o
       .map((w: string, i: number) => (i === words.length - 1 ? `${w}:*` : w))
       .join(" & ");
 
+    // Organized books are the shared library and match for everyone. Review
+    // books are pre-approval uploads: /api/inbox refuses to list, show or serve
+    // the cover of one the caller does not own, so suggest must not hand back
+    // their title, author and cover either. Your own still match — that is how
+    // you find an upload that is waiting on you.
+    const visible = isAdmin(c)
+      ? sql`${books.status} IN ('organized', 'review')`
+      : sql`(${books.status} = 'organized' OR (${books.status} = 'review' AND ${books.createdBy} = ${userId}))`;
+
     const results = await db
       .select({
         id: books.id,
@@ -74,9 +85,7 @@ export const searchRoutes = createOpenApiRouter<{ Variables: AppVariables }>().o
         coverUrl: books.coverUrl,
       })
       .from(books)
-      .where(
-        sql`${books.status} IN ('organized', 'review') AND "search_vector" @@ to_tsquery('english', ${tsquery})`,
-      )
+      .where(and(visible, sql`"search_vector" @@ to_tsquery('english', ${tsquery})`))
       .orderBy(sql`ts_rank("search_vector", to_tsquery('english', ${tsquery})) DESC`)
       .limit(8);
 
