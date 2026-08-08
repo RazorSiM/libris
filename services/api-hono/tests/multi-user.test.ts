@@ -17,7 +17,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vite-plu
 import { bootstrapAdmin, createAccount, createTestApp, createFetchHelper } from "./setup.js";
 import type { Db } from "../src/db/client.js";
 import type { AppServices } from "../src/bootstrap.js";
-import { books, readingProgress, hardcoverSyncLog } from "../src/db/schema.js";
+import { books, hardcoverSyncLog } from "../src/db/schema.js";
 import { eq } from "drizzle-orm";
 
 // ── App-level state ────────────────────────────────────────────────
@@ -51,6 +51,26 @@ function adminSession() {
 
 function userSession() {
   return { cookie: userCookie };
+}
+
+// ── KoSync credential helpers ─────────────────────────────────────
+
+/** md5("testpass-strong") — the userkey KOReader sends once it has exchanged. */
+const KOSYNC_KEY = "7b41a909c57c86088eb92f47bdd6dc67";
+const KOSYNC_PASSWORD = "testpass-strong";
+
+/** Give a person a KoSync username so their reader can sync as them. */
+async function seedKosyncFor(session: Record<string, string>, username: string) {
+  await $fetchRaw("/api/credentials/kosync", {
+    method: "PUT",
+    headers: session,
+    body: { username, password: KOSYNC_PASSWORD },
+  });
+}
+
+/** KOReader's own credential form: the non-standard x-auth-* header pair. */
+function kosyncAuth(username: string) {
+  return { "x-auth-user": username, "x-auth-key": KOSYNC_KEY };
 }
 
 // ── App lifecycle ──────────────────────────────────────────────────
@@ -381,31 +401,10 @@ describe("credential isolation", () => {
 // ── KoSync Progress Isolation ─────────────────────────────────────
 
 describe("KoSync progress isolation", () => {
-  const ADMIN_TESTPASS_MD5 = "7b41a909c57c86088eb92f47bdd6dc67"; // md5("testpass-strong")
-
-  async function seedKosyncForAdmin() {
-    await $fetchRaw("/api/credentials/kosync", {
-      method: "PUT",
-      headers: adminSession(),
-      body: { username: "admin-kosync", password: "testpass-strong" },
-    });
-  }
-
-  async function seedKosyncForUser() {
-    await $fetchRaw("/api/credentials/kosync", {
-      method: "PUT",
-      headers: userSession(),
-      body: { username: "user-kosync", password: "testpass-strong" },
-    });
-  }
-
-  function adminKosyncAuth() {
-    return { "x-auth-user": "admin-kosync", "x-auth-key": ADMIN_TESTPASS_MD5 };
-  }
-
-  function userKosyncAuth() {
-    return { "x-auth-user": "user-kosync", "x-auth-key": ADMIN_TESTPASS_MD5 };
-  }
+  const seedKosyncForAdmin = () => seedKosyncFor(adminSession(), "admin-kosync");
+  const seedKosyncForUser = () => seedKosyncFor(userSession(), "user-kosync");
+  const adminKosyncAuth = () => kosyncAuth("admin-kosync");
+  const userKosyncAuth = () => kosyncAuth("user-kosync");
 
   it("two users see different progress on the same document", async () => {
     await seedKosyncForAdmin();
@@ -454,103 +453,99 @@ describe("KoSync progress isolation", () => {
 });
 
 // ── Reading Stats Isolation ───────────────────────────────────────
-// NOTE: The /api/stats endpoint uses raw SQL (db.execute) that returns
-// PGlite-incompatible result shapes. Stats isolation is verified at the
-// data layer here; the full endpoint is tested in E2E against real Postgres.
+//
+// This block used to insert both users' reading_progress rows itself and then
+// SELECT them straight back with the same userId filter it had just written
+// (libris-59m.31). No src/ code ran, so "reading progress rows are scoped per
+// user" was really an assertion that PostgreSQL honours a WHERE clause. It read
+// as coverage of /api/stats, and would have stayed green with that endpoint's
+// user scoping deleted.
+//
+// The header note claiming /api/stats is PGlite-incompatible is stale: the
+// route carries a `rowsOf()` helper that normalises both driver shapes, so it
+// answers here. It is driven for real below.
 
 describe("reading stats isolation", () => {
-  it("reading progress rows are scoped per user via userId", async () => {
-    // Seed books
+  /** Seed `count` organized, finished books for one person, via the API. */
+  async function seedFinished(
+    session: Record<string, string>,
+    titles: string[],
+  ): Promise<string[]> {
     const { data: booksData } = await $fetchRaw("/__test/seed-books", {
       method: "POST",
-      body: {
-        books: [
-          { title: "Admin Book 1", author: "A1", status: "organized" },
-          { title: "Admin Book 2", author: "A2", status: "organized" },
-          { title: "Admin Book 3", author: "A3", status: "organized" },
-          { title: "User Book 1", author: "U1", status: "organized" },
-        ],
-      },
+      body: { books: titles.map((title) => ({ title, author: title, status: "organized" })) },
     });
-    const [ab1, ab2, ab3, ub1] = booksData.inserted;
+    const ids: string[] = booksData.inserted.map((b: { id: string }) => b.id);
 
-    // Seed files for all books
     await $fetchRaw("/__test/seed-files", {
       method: "POST",
       body: {
-        files: [
-          { bookId: ab1.id, format: "epub", originalName: "a1.epub", contentHash: "hash-a1" },
-          { bookId: ab2.id, format: "epub", originalName: "a2.epub", contentHash: "hash-a2" },
-          { bookId: ab3.id, format: "epub", originalName: "a3.epub", contentHash: "hash-a3" },
-          { bookId: ub1.id, format: "epub", originalName: "u1.epub", contentHash: "hash-u1" },
-        ],
+        files: ids.map((bookId, i) => ({
+          bookId,
+          format: "epub",
+          originalName: `${titles[i]}.epub`,
+          contentHash: `hash-${titles[i]}`,
+        })),
       },
     });
 
-    // Admin finishes 3 books
-    const now = Math.floor(Date.now() / 1000);
-    for (const [bookId, hash] of [
-      [ab1.id, "hash-a1"],
-      [ab2.id, "hash-a2"],
-      [ab3.id, "hash-a3"],
-    ] as const) {
-      await testDb.insert(readingProgress).values({
-        bookId,
-        userId: adminUserId,
-        document: hash,
-        device: "kindle",
-        progress: "end",
-        percentage: "0.9800",
-        timestamp: BigInt(now),
+    // Progress arrives the way it really does: over the KoSync route, as the
+    // person who read it. That is what attributes it to a user.
+    for (const title of titles) {
+      await $fetchRaw("/kosync/syncs/progress", {
+        method: "PUT",
+        headers: session,
+        body: { document: `hash-${title}`, progress: "end", device: "kindle", percentage: 0.98 },
       });
     }
+    return ids;
+  }
 
-    // User finishes 1 book
-    await testDb.insert(readingProgress).values({
-      bookId: ub1.id,
-      userId: userUserId,
-      document: "hash-u1",
-      device: "kindle",
-      progress: "end",
-      percentage: "0.9800",
-      timestamp: BigInt(now),
+  it("counts only your own finished books in GET /api/stats", async () => {
+    await seedKosyncFor(adminSession(), "admin-stats");
+    await seedKosyncFor(userSession(), "user-stats");
+
+    await seedFinished(kosyncAuth("admin-stats"), ["as1", "as2", "as3"]);
+    await seedFinished(kosyncAuth("user-stats"), ["us1"]);
+
+    const { data: adminStats, status: adminStatus } = await $fetchRaw("/api/stats", {
+      headers: adminSession(),
     });
+    expect(adminStatus).toBe(200);
+    expect(adminStats.booksFinished.allTime).toBe(3);
 
-    // Verify isolation at the data layer: query progress rows per user
-    const adminRows = await testDb
-      .select()
-      .from(readingProgress)
-      .where(eq(readingProgress.userId, adminUserId));
-    expect(adminRows).toHaveLength(3);
+    // The same four books exist for both people; only the progress differs.
+    const { data: userStats, status: userStatus } = await $fetchRaw("/api/stats", {
+      headers: userSession(),
+    });
+    expect(userStatus).toBe(200);
+    expect(userStats.booksFinished.allTime).toBe(1);
+  });
 
-    const userRows = await testDb
-      .select()
-      .from(readingProgress)
-      .where(eq(readingProgress.userId, userUserId));
-    expect(userRows).toHaveLength(1);
+  it("shows a reader with no progress an empty stats page, not the library's", async () => {
+    await seedKosyncFor(adminSession(), "admin-stats");
+    await seedFinished(kosyncAuth("admin-stats"), ["as1", "as2"]);
 
-    // Verify all admin rows have >= 95% (finished threshold)
-    for (const row of adminRows) {
-      expect(Number(row.percentage)).toBeGreaterThanOrEqual(0.95);
-    }
-    expect(Number(userRows[0]!.percentage)).toBeGreaterThanOrEqual(0.95);
+    const { data: userStats } = await $fetchRaw("/api/stats", { headers: userSession() });
+    expect(userStats.booksFinished.allTime).toBe(0);
   });
 });
 
 // ── Hardcover Sync Log Isolation ──────────────────────────────────
+//
+// Same rewrite as above: this inserted both users' hardcover_sync_log rows and
+// selected them back by userId without involving the route (libris-59m.31).
 
 describe("hardcover sync log isolation", () => {
-  it("each user has independent sync log entries", async () => {
-    // Seed a shared book
+  it("GET /api/hardcover/sync/log shows you only your own entries", async () => {
     const { data: seedData } = await $fetchRaw("/__test/seed-books", {
       method: "POST",
-      body: {
-        books: [{ title: "Shared Book", author: "Shared Author", status: "organized" }],
-      },
+      body: { books: [{ title: "Shared Book", author: "Shared Author", status: "organized" }] },
     });
     const bookId = seedData.inserted[0].id;
 
-    // Insert sync log entries for both users directly
+    // The sync worker is what writes these; seeding them directly is fine
+    // because the route's scoping is what is under test.
     await testDb.insert(hardcoverSyncLog).values({
       bookId,
       userId: adminUserId,
@@ -558,7 +553,6 @@ describe("hardcover sync log isolation", () => {
       lastProgress: "0.5000",
       lastSyncedAt: new Date(),
     });
-
     await testDb.insert(hardcoverSyncLog).values({
       bookId,
       userId: userUserId,
@@ -567,20 +561,23 @@ describe("hardcover sync log isolation", () => {
       lastSyncedAt: new Date(),
     });
 
-    // Verify both entries exist with different statuses
-    const adminLogs = await testDb
-      .select()
-      .from(hardcoverSyncLog)
-      .where(eq(hardcoverSyncLog.userId, adminUserId));
-    expect(adminLogs).toHaveLength(1);
-    expect(adminLogs[0]!.lastStatus).toBe("currently_reading");
+    const { data: adminLog, status: adminStatus } = await $fetchRaw("/api/hardcover/sync/log", {
+      headers: adminSession(),
+    });
+    expect(adminStatus).toBe(200);
+    expect(adminLog).toHaveLength(1);
+    expect(adminLog[0]).toMatchObject({
+      bookId,
+      bookTitle: "Shared Book",
+      status: "currently_reading",
+    });
 
-    const userLogs = await testDb
-      .select()
-      .from(hardcoverSyncLog)
-      .where(eq(hardcoverSyncLog.userId, userUserId));
-    expect(userLogs).toHaveLength(1);
-    expect(userLogs[0]!.lastStatus).toBe("want_to_read");
+    const { data: userLog, status: userStatus } = await $fetchRaw("/api/hardcover/sync/log", {
+      headers: userSession(),
+    });
+    expect(userStatus).toBe(200);
+    expect(userLog).toHaveLength(1);
+    expect(userLog[0]).toMatchObject({ bookId, status: "want_to_read" });
   });
 });
 

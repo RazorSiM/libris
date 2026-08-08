@@ -55,6 +55,42 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
+    # Most of this suite runs on PGlite, which is one embedded backend on one
+    # connection. That is fine until the SUBJECT of a test is concurrency: a row
+    # lock cannot contend with itself, so the last-admin `FOR UPDATE` shipped
+    # with a test that stayed green when the lock was deleted, and the atomic
+    # Redis rate-limit increment had no behavioural test at all (libris-59m.31).
+    # These two services back the handful of suites that need real ones. They
+    # are NOT optional: those suites fail rather than skip when `CI` is set, so
+    # removing a service here surfaces as a red build, not as silent green.
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: libris_test
+          POSTGRES_USER: libris_test
+          POSTGRES_PASSWORD: libris_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U libris_test -d libris_test"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 15
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # Locally these default to docker-compose.test.yml's published ports
+      # (5433 / 6380); service containers here publish the standard ones.
+      LIBRIS_TEST_POSTGRES_URL: postgres://libris_test:libris_test@localhost:5432/libris_test
+      LIBRIS_TEST_REDIS_URL: redis://localhost:6379
     steps:
       - uses: actions/checkout@v4
         with:

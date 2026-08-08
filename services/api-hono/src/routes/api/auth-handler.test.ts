@@ -10,7 +10,6 @@ import { createMemoryKVStore } from "../../services/kv-store.js";
 import { betterAuthClientIpHeader } from "../../shared/request-ip.js";
 import { eq } from "drizzle-orm";
 import { admin as adminPlugin } from "better-auth/plugins";
-import { withLastAdminLock } from "../../middleware/last-admin.js";
 
 vi.mock("../../services/redis.js", () => ({
   isRedisHealthy: async () => ({ ok: true, latencyMs: 1 }),
@@ -475,26 +474,15 @@ describe("last-admin invariant", () => {
     },
   );
 
-  it("allows only one of two concurrent demotions", async () => {
-    const { auth } = createTestApp();
-    const first = await createAdmin(auth, "first-admin@example.com");
-    const second = await createAdmin(auth, "second-admin@example.com");
-
-    const attempts = await Promise.allSettled([
-      withLastAdminLock(db as never, second.id, async (tx) => {
-        await tx.update(schema.users).set({ role: "user" }).where(eq(schema.users.id, second.id));
-      }),
-      withLastAdminLock(db as never, first.id, async (tx) => {
-        await tx.update(schema.users).set({ role: "user" }).where(eq(schema.users.id, first.id));
-      }),
-    ]);
-
-    expect(attempts.map(({ status }) => status).sort()).toEqual(["fulfilled", "rejected"]);
-    const rejection = attempts.find(({ status }) => status === "rejected");
-    expect(rejection).toMatchObject({ reason: { status: 409 } });
-    const admins = await db.select().from(schema.users).where(eq(schema.users.role, "admin"));
-    expect(admins).toHaveLength(1);
-  });
+  // The CONCURRENCY case deliberately does not live here (libris-59m.31). It
+  // used to: two `withLastAdminLock` calls through `Promise.allSettled` against
+  // this file's PGlite database. PGlite is one embedded backend on one
+  // connection, so its transactions are queued and the `SELECT ... FOR UPDATE`
+  // can never contend — the second call always ran after the first committed,
+  // and deleting the lock line left the test green. It now lives in
+  // tests/last-admin-lock.postgres.test.ts, against a real server on a real
+  // pool, where it asserts the second transaction blocks until the first
+  // commits. Do not reintroduce a concurrency test in this file.
 });
 
 describe("sign-in over HTTP", () => {
@@ -539,6 +527,9 @@ describe("sign-in over HTTP", () => {
       body: JSON.stringify({ email: "reader@example.com", password: "wrong" }),
     });
 
-    expect(res.status).not.toBe(200);
+    // `not.toBe(200)` also passed on a 500 or a 429 (libris-59m.31) — it could
+    // not distinguish a refusal from the handler falling over.
+    expect(res.status).toBe(401);
+    expect(res.headers.getSetCookie()).toEqual([]);
   });
 });

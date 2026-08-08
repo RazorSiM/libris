@@ -3,7 +3,7 @@ import { eq, ne } from "drizzle-orm";
 import { migrate } from "drizzle-orm/pglite/migrator";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vite-plus/test";
 import * as schema from "./schema";
-import { createTestDb, type TestDb } from "./test-utils";
+import { createTestDb, readMigrationDirs, type TestDb } from "./test-utils";
 
 let pglite: PGlite;
 let db: TestDb;
@@ -58,9 +58,13 @@ afterEach(async () => {
 
 describe("migrations", () => {
   it("runs all migrations on a fresh database", async () => {
-    // The beforeAll already ran migrations. Verify the migration journal table exists.
-    const result = await pglite.query(`SELECT count(*) as cnt FROM drizzle.__drizzle_migrations`);
-    expect(Number((result.rows[0] as Record<string, unknown>).cnt)).toBeGreaterThanOrEqual(1);
+    // `>= 1` was vacuous (libris-59m.31): beforeAll had already run them, so the
+    // journal could not have been empty. The journal must hold exactly one row
+    // per migration directory on disk, which is what "all of them ran" means.
+    const result = await pglite.query<{ cnt: string }>(
+      `SELECT count(*) as cnt FROM drizzle.__drizzle_migrations`,
+    );
+    expect(Number(result.rows[0]!.cnt)).toBe(readMigrationDirs().length);
   });
 
   it("leaves no drift between the migrations and schema.ts", async () => {
@@ -191,19 +195,38 @@ describe("migrations", () => {
     const dir = nodePath.dirname(nodeUrl.fileURLToPath(import.meta.url));
     await migrate(fresh.db, { migrationsFolder: nodePath.resolve(dir, "../../migrations") });
 
-    const result = await fresh.pglite.query(
+    // `>= 1` made this a test that migrate() did not throw (libris-59m.31).
+    // Idempotent means the journal did not GROW: a second run that re-applied
+    // everything would double the row count, which is exactly the failure the
+    // branched-snapshot bug produced on deploy.
+    const result = await fresh.pglite.query<{ cnt: string }>(
       `SELECT count(*) as cnt FROM drizzle.__drizzle_migrations`,
     );
-    expect(Number((result.rows[0] as Record<string, unknown>).cnt)).toBeGreaterThanOrEqual(1);
+    expect(Number(result.rows[0]!.cnt)).toBe(readMigrationDirs().length);
     await fresh.pglite.close();
   });
 });
 
 // ---------------------------------------------------------------------------
-// CRUD query tests (using PGlite)
+// Schema/DDL tests (using PGlite)
 // ---------------------------------------------------------------------------
 
-describe("books CRUD", () => {
+/**
+ * SCHEMA-level tests (libris-59m.31).
+ *
+ * The five blocks below drive Drizzle and PostgreSQL directly — no `src/` route,
+ * service or worker runs in any of them, so no application change can turn one
+ * red. That is legitimate for what they DO pin: the DDL the migrations produce
+ * (constraints, defaults, foreign keys, cascades). It is not coverage of
+ * anything above the database, and they were named "books CRUD" / "apiKeys
+ * CRUD" as if it were. Renamed so a close-reason cannot cite them for behaviour
+ * they never exercised.
+ *
+ * The one test in this file that guards the schema against real drift is
+ * "leaves no drift between the migrations and schema.ts" above.
+ */
+
+describe("SCHEMA: books table", () => {
   it("inserts a book with defaults", async () => {
     const [book] = await db.insert(schema.books).values({ createdBy: OWNER_ID }).returning();
 
@@ -336,7 +359,7 @@ describe("books CRUD", () => {
   });
 });
 
-describe("bookFiles CRUD", () => {
+describe("SCHEMA: book_files table", () => {
   it("inserts a file linked to a book", async () => {
     const [book] = await db.insert(schema.books).values({ createdBy: OWNER_ID }).returning();
     const [file] = await db
@@ -384,7 +407,7 @@ describe("bookFiles CRUD", () => {
   });
 });
 
-describe("bookMetadataCandidates CRUD", () => {
+describe("SCHEMA: book_candidates table", () => {
   it("inserts metadata candidate with jsonb", async () => {
     const [book] = await db.insert(schema.books).values({ createdBy: OWNER_ID }).returning();
     const [candidate] = await db
@@ -452,7 +475,7 @@ describe("bookMetadataCandidates CRUD", () => {
   });
 });
 
-describe("readingProgress CRUD", () => {
+describe("SCHEMA: reading_progress table", () => {
   it("inserts reading progress", async () => {
     const owner = await insertUser("usr_insert_progress_test_hash");
 
@@ -582,7 +605,7 @@ describe("readingProgress CRUD", () => {
 // App passwords. Since the Better Auth cutover an api key is a credential
 // belonging to a user, not an identity of its own — the plugin owns this table,
 // so these tests cover the shape and constraints rather than any Libris logic.
-describe("apiKeys CRUD", () => {
+describe("SCHEMA: api_keys table", () => {
   it("inserts an app password with the plugin's defaults", async () => {
     const [key] = await db
       .insert(schema.apiKeys)

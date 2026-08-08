@@ -172,7 +172,9 @@ describe("account creation", () => {
       .then(() => ({ status: 200 }))
       .catch((err: { statusCode?: number }) => ({ status: err.statusCode ?? 500 }));
 
-    expect(second.status).not.toBe(200);
+    // `not.toBe(200)` was satisfied by a 500 too (libris-59m.31), so it could
+    // not tell "refused" from "crashed".
+    expect(second.status).toBe(400);
     expect(await db.select().from(schema.users)).toHaveLength(1);
   });
 });
@@ -627,7 +629,10 @@ describe("sign-in", () => {
       asResponse: true,
     });
 
-    expect(res.status).not.toBe(200);
+    expect(res.status).toBe(401);
+    // The property that matters is not the status code but that no session was
+    // issued. `not.toBe(200)` asserted neither.
+    expect(cookieFrom(res)).toBeFalsy();
   });
 
   it("rejects an unknown email", async () => {
@@ -636,6 +641,9 @@ describe("sign-in", () => {
       asResponse: true,
     });
 
-    expect(res.status).not.toBe(200);
+    // Same status and no cookie as the wrong-password case above: a different
+    // answer here would tell an attacker which addresses have accounts.
+    expect(res.status).toBe(401);
+    expect(cookieFrom(res)).toBeFalsy();
   });
 });

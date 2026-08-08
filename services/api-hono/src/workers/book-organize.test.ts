@@ -1,4 +1,4 @@
-import { mkdtemp, rm, stat } from "node:fs/promises";
+import { mkdtemp, realpath, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vite-plus/test";
@@ -30,8 +30,13 @@ describe("createDestinationDirectory", () => {
 
     await createDestinationDirectory(library, destination);
 
+    // `destination` is built with join(library, ...) a few lines up, so
+    // asserting it starts with `library` was a tautology (libris-59m.31). What
+    // matters is where the directory RESOLVED to on disk once ".." was
+    // sanitized — a real ".." would have escaped into the library's parent.
     expect((await stat(destination)).isDirectory()).toBe(true);
-    expect(destination.startsWith(`${library}/`)).toBe(true);
+    const resolved = await realpath(destination);
+    expect(resolved.startsWith(`${await realpath(library)}/`)).toBe(true);
   });
 
   it("validates the destination before creating it", async () => {

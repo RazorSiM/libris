@@ -211,44 +211,112 @@ Requests are organized by OpenAPI tag into folders:
 
 Test config lives in each workspace's `vite.config.ts` `test` block, per Vite+ guidance — there are no `vitest.config.ts` files.
 
+### A test that cannot fail is worse than no test
+
+It gets counted as coverage. An adversarial review of the `libris-5ng` and
+`libris-7h7` work found several issues closed on the strength of tests that were
+structurally incapable of failing; `libris-59m.31` replaced them and left these
+rules behind.
+
+**The bar for a new test is that you watched it go red.** Break the code it
+claims to cover — delete the lock, drop the `WHERE`, remove the guard — and
+confirm it fails. If it stays green it does not test that thing. Name the
+mutation you used in the commit message.
+
+Shapes to refuse:
+
+| Shape                                                                     | Why it cannot fail                                                                                                                                                                                                         |
+| ------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Asserting on the **echoed** request body a handler sent back              | A handler echoing its input satisfies it with the write deleted. Re-read the persisted row.                                                                                                                                |
+| Inserting rows yourself, then `SELECT`ing them back with the same filter  | No `src/` code runs — it asserts that PostgreSQL honours a `WHERE` clause. Drive the endpoint.                                                                                                                             |
+| A concurrency test on PGlite or an in-memory `Map`                        | One connection / one JS turn. A row lock cannot contend and a `Map` write cannot be lost.                                                                                                                                  |
+| `expect(x).toBeDefined()` where `x` cannot be undefined                   | The function returns an object on every path.                                                                                                                                                                              |
+| String-matching source text (a Lua script against `/INCR/`)               | Pins the text, not the behaviour. Any rewrite keeping the substring passes.                                                                                                                                                |
+| `expect(status).not.toBe(200)`                                            | Satisfied by 500 and 429 — cannot tell "refused" from "crashed".                                                                                                                                                           |
+| `expect(rows.length).toBeGreaterThanOrEqual(n)` where exactly `n` exist   | Cannot notice a listing that leaked someone else's rows.                                                                                                                                                                   |
+| A **negative control** produced by omitting a wrapper, middleware or flag | Only meaningful while that thing is genuinely optional. Once the wiring moves into `createApp`, the flag disables nothing and the "proves the bug" test silently becomes decoration. Re-check these whenever wiring moves. |
+
+A test that only pins the schema is legitimate — name it `SCHEMA:` so a
+close-reason cannot cite it as endpoint coverage. `src/db/db.test.ts` and the
+reading-progress block of `tests/auth-access-control.test.ts` follow that
+convention.
+
+### Tests that need a real PostgreSQL or Redis
+
+Most of the suite runs on PGlite, which is one embedded backend on one
+connection. Anything whose _subject_ is concurrency, and anything whose SQL
+depends on the driver's `db.execute` shape, cannot run there:
+
+| File                                              | Needs      | Why PGlite will not do                                                                                                                  |
+| ------------------------------------------------- | ---------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `tests/last-admin-lock.postgres.test.ts`          | PostgreSQL | `SELECT ... FOR UPDATE` can only block a _different_ session, so on one connection the lock never contends.                             |
+| `tests/reading-status-isolation.postgres.test.ts` | PostgreSQL | `getReadingStatusCounts` iterates `db.execute()`, which PGlite resolves to `{ rows }` — the route 500s with "result is not iterable".   |
+| `tests/redis-increment.test.ts`                   | Redis      | `createMemoryKVStore.increment` is a synchronous `Map` write that cannot lose an update, so it passes against a broken production path. |
+
+`tests/backing-services.ts` resolves the connections and creates a uniquely
+named throwaway database per suite (dropped afterwards), so several checkouts
+can share one server.
+
+| Variable                   | Default                                                         |
+| -------------------------- | --------------------------------------------------------------- |
+| `LIBRIS_TEST_POSTGRES_URL` | `postgres://libris_test:libris_test@localhost:5433/libris_test` |
+| `LIBRIS_TEST_REDIS_URL`    | `redis://localhost:6380`                                        |
+
+Both defaults match `docker-compose.test.yml`, so a full local run is:
+
+```bash
+docker compose -f docker-compose.test.yml up -d --wait postgres redis
+vp run -F @libris/api-hono test
+```
+
+Without them those suites **skip loudly**, printing `[SKIPPED — NOT COVERED]`
+and how to start the service. **When `CI` is set they fail instead of skipping**
+— a silently skipped concurrency test is the exact failure mode this convention
+exists to remove. The CI `test` job therefore runs `postgres:17` and `redis:7`
+service containers and points both variables at them.
+
 ### API Unit/Integration Test Files
 
 Paths relative to `services/api-hono/`. Test DB uses in-memory PGlite with mocked BullMQ queues.
 
-| File                                                | Coverage                                                                  |
-| --------------------------------------------------- | ------------------------------------------------------------------------- |
-| `src/db/db.test.ts`                                 | Database schema, migrations, and query helpers                            |
-| `src/env.test.ts`                                   | Environment variable parsing (Redis URL, required vars, defaults)         |
-| `src/lib/epub/embed-metadata.test.ts`               | EPUB metadata embedding (OPF rewriting)                                   |
-| `src/lib/hardcover/client.test.ts`                  | Hardcover GraphQL client (request shaping, response mapping)              |
-| `src/lib/hardcover/matching.test.ts`                | Hardcover ISBN / title matching for sync linkage                          |
-| `src/lib/hardcover/pull-status.test.ts`             | Pulling existing Hardcover reading statuses (DNF → paused mapping)        |
-| `src/lib/languages.test.ts`                         | Canonical ISO 639-1 language normalization (aliases, BCP-47, 639-2/3)     |
-| `src/lib/metadata/clients/metadata-clients.test.ts` | External metadata API clients (MSW mocked)                                |
-| `src/lib/metadata/detect-language.test.ts`          | Content-based language detection (tinyld)                                 |
-| `src/lib/metadata/extractors/epub.test.ts`          | EPUB metadata extraction (OPF parsing, cover detection)                   |
-| `src/lib/metadata/sanitize.test.ts`                 | HTML stripping and metadata field sanitization                            |
-| `src/lib/progress-aggregate.test.ts`                | Per-device reading-progress aggregation                                   |
-| `src/lib/reading-aggregate.test.ts`                 | Per-(user, book) reading aggregate derivation                             |
-| `src/lib/reading-status.test.ts`                    | Reading status derivation from KoSync progress                            |
-| `src/lib/socket-guard.test.ts`                      | WebSocket connection auth guard                                           |
-| `src/middleware/rate-limit.test.ts`                 | Per-IP tiered rate limiting (auth / keyCreation / general)                |
-| `src/routes/api/books.test.ts`                      | `/api/books/*` approve, delete, candidates (integration)                  |
-| `src/routes/api/hardcover.test.ts`                  | `/api/hardcover/*` search, sync status, trigger, log (integration)        |
-| `src/routes/api/inbox.test.ts`                      | `/api/inbox/*` list, detail, approve, delete (integration)                |
-| `src/routes/api/library.test.ts`                    | `/api/library/*` list, detail, covers, downloads (integration)            |
-| `src/routes/api/settings.test.ts`                   | `/api/settings/*` get/update including combined status endpoint           |
-| `src/routes/opds.test.ts`                           | OPDS feed endpoints (integration, Hono test client + PGlite)              |
-| `src/services/queue-diagnostics.test.ts`            | BullMQ aggregation for home/settings diagnostics                          |
-| `src/services/settings.test.ts`                     | App settings service CRUD                                                 |
-| `src/shared/checksum.test.ts`                       | File checksum helpers used by the ingestion pipeline                      |
-| `src/shared/kosync-auth.test.ts`                    | KoSync header-based auth (`x-auth-user` / `x-auth-key`)                   |
-| `src/shared/request-ip.test.ts`                     | Trusted-proxy chain validation, IPv6 `/64` buckets, and auth IP injection |
-| `src/shared/route-policy.test.ts`                   | Route auth policy lookup table (public/api-key/admin/opds/kosync)         |
-| `src/workers/book-detected.test.ts`                 | `BOOK_DETECTED` worker: checksum, format detect, dedup                    |
-| `src/workers/book-fetch-metadata.test.ts`           | `BOOK_FETCH_METADATA` worker: Hardcover lookup, promote to review         |
-| `src/workers/book-parse-file.test.ts`               | `BOOK_PARSE_FILE` worker: metadata extraction orchestration               |
-| `src/workers/cleanup-orphaned-files.test.ts`        | Scheduled orphan-file cleanup worker                                      |
+| File                                                | Coverage                                                                          |
+| --------------------------------------------------- | --------------------------------------------------------------------------------- |
+| `src/db/db.test.ts`                                 | Database schema, migrations, and query helpers                                    |
+| `src/env.test.ts`                                   | Environment variable parsing (Redis URL, required vars, defaults)                 |
+| `src/lib/epub/embed-metadata.test.ts`               | EPUB metadata embedding (OPF rewriting)                                           |
+| `src/lib/hardcover/client.test.ts`                  | Hardcover GraphQL client (request shaping, response mapping)                      |
+| `src/lib/hardcover/matching.test.ts`                | Hardcover ISBN / title matching for sync linkage                                  |
+| `src/lib/hardcover/pull-status.test.ts`             | Pulling existing Hardcover reading statuses (DNF → paused mapping)                |
+| `src/lib/languages.test.ts`                         | Canonical ISO 639-1 language normalization (aliases, BCP-47, 639-2/3)             |
+| `src/lib/metadata/clients/metadata-clients.test.ts` | External metadata API clients (MSW mocked)                                        |
+| `src/lib/metadata/detect-language.test.ts`          | Content-based language detection (tinyld)                                         |
+| `src/lib/metadata/extractors/epub.test.ts`          | EPUB metadata extraction (OPF parsing, cover detection)                           |
+| `src/lib/metadata/sanitize.test.ts`                 | HTML stripping and metadata field sanitization                                    |
+| `src/lib/progress-aggregate.test.ts`                | Per-device reading-progress aggregation                                           |
+| `src/lib/reading-aggregate.test.ts`                 | Per-(user, book) reading aggregate derivation                                     |
+| `src/lib/reading-status.test.ts`                    | Reading status derivation from KoSync progress                                    |
+| `src/lib/socket-guard.test.ts`                      | WebSocket connection auth guard                                                   |
+| `src/middleware/rate-limit.test.ts`                 | Per-IP tiered rate limiting (auth / keyCreation / general)                        |
+| `src/routes/api/books.test.ts`                      | `/api/books/*` approve, delete, candidates (integration)                          |
+| `src/routes/api/hardcover.test.ts`                  | `/api/hardcover/*` search, sync status, trigger, log (integration)                |
+| `src/routes/api/inbox.test.ts`                      | `/api/inbox/*` list, detail, approve, delete (integration)                        |
+| `src/routes/api/library.test.ts`                    | `/api/library/*` list, detail, covers, downloads (integration)                    |
+| `src/routes/api/settings.test.ts`                   | `/api/settings/*` get/update including combined status endpoint                   |
+| `src/routes/opds.test.ts`                           | OPDS feed endpoints (integration, Hono test client + PGlite)                      |
+| `src/services/queue-diagnostics.test.ts`            | BullMQ aggregation for home/settings diagnostics                                  |
+| `src/services/rate-limit.test.ts`                   | Tier limits, window anchoring, and the in-memory fallback used when Redis is down |
+| `src/services/settings.test.ts`                     | App settings service CRUD                                                         |
+| `src/shared/checksum.test.ts`                       | File checksum helpers used by the ingestion pipeline                              |
+| `src/shared/kosync-auth.test.ts`                    | KoSync header-based auth (`x-auth-user` / `x-auth-key`)                           |
+| `src/shared/request-ip.test.ts`                     | Trusted-proxy chain validation, IPv6 `/64` buckets, and auth IP injection         |
+| `src/shared/route-policy.test.ts`                   | Route auth policy lookup table (public/api-key/admin/opds/kosync)                 |
+| `src/workers/book-detected.test.ts`                 | `BOOK_DETECTED` worker: checksum, format detect, dedup                            |
+| `src/workers/book-fetch-metadata.test.ts`           | `BOOK_FETCH_METADATA` worker: Hardcover lookup, promote to review                 |
+| `src/workers/book-parse-file.test.ts`               | `BOOK_PARSE_FILE` worker: metadata extraction orchestration                       |
+| `src/workers/cleanup-orphaned-files.test.ts`        | Scheduled orphan-file cleanup worker                                              |
+| `tests/last-admin-lock.postgres.test.ts`            | The last-admin row lock under real contention (needs PostgreSQL)                  |
+| `tests/reading-status-isolation.postgres.test.ts`   | Per-user `/api/reading-status/*` over HTTP (needs PostgreSQL)                     |
+| `tests/redis-increment.test.ts`                     | Atomicity of both rate-limit increments (needs Redis)                             |
 
 ### Web Unit Test Files
 

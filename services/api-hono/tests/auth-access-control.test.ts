@@ -488,16 +488,28 @@ describe("credential isolation", () => {
 // 5. Reading progress isolation
 // ═══════════════════════════════════════════════════════════════════
 //
-// Note: /api/stats and /api/reading-status/counts use raw SQL that
-// returns differently under PGlite vs PostgreSQL (db.execute shape).
-// We test isolation at the DB layer and via the unique constraint
-// to verify the schema correctly partitions progress by userId.
+// These blocks used to insert both users' rows themselves, run their own
+// UPDATE, and then assert the other row was untouched (libris-59m.31). No
+// application code ran, so they held whatever the KoSync routes did — the
+// invariant was really being kept by schema.ts's per-user unique index, and
+// the tests would have stayed green with the routes' user scoping deleted.
+//
+// They drive `/kosync/syncs/progress` now: the PUT is the real upsert (whose
+// ON CONFLICT target is what partitions two readers), and every assertion
+// reads the value back out through the GET (whose WHERE clause is the other
+// half). One DB-level test survives, renamed to say plainly that it pins the
+// schema rather than the routes.
 
 describe("reading progress isolation", () => {
+  /** md5("testpass-strong") — the userkey KOReader sends after the exchange. */
+  const KOSYNC_KEY = "7b41a909c57c86088eb92f47bdd6dc67";
+  const KOSYNC_PASSWORD = "testpass-strong";
+  /** Matches the seeded file's content hash, so the upsert resolves a book id. */
+  const DOCUMENT = "shared-book-content-hash";
+
   let bookId: string;
 
   beforeEach(async () => {
-    // Create a shared book
     const [book] = await testDb
       .insert(books)
       .values({
@@ -510,118 +522,132 @@ describe("reading progress isolation", () => {
       })
       .returning({ id: books.id });
     bookId = book!.id;
+
+    await $fetchRaw("/__test/seed-files", {
+      method: "POST",
+      body: {
+        files: [
+          {
+            bookId,
+            format: "epub",
+            originalName: "shared-book.epub",
+            contentHash: DOCUMENT,
+          },
+        ],
+      },
+    });
+
+    await $fetchRaw("/api/credentials/kosync", {
+      method: "PUT",
+      headers: adminSession(),
+      body: { username: "admin-kosync", password: KOSYNC_PASSWORD },
+    });
+    await $fetchRaw("/api/credentials/kosync", {
+      method: "PUT",
+      headers: userSession(),
+      body: { username: "user-kosync", password: KOSYNC_PASSWORD },
+    });
   });
 
-  it("two users can have independent reading progress on the same book", async () => {
-    // Insert reading progress for admin (80%)
-    await testDb.insert(readingProgress).values({
-      bookId,
-      userId: adminUserId,
-      document: "shared-book.epub",
-      device: "admin-device",
-      progress: "/body/chapter[8]",
-      percentage: "0.8000",
-      timestamp: BigInt(Date.now()),
+  /** KOReader's own credential form: the non-standard x-auth-* header pair. */
+  const adminReader = () => ({ "x-auth-user": "admin-kosync", "x-auth-key": KOSYNC_KEY });
+  const userReader = () => ({ "x-auth-user": "user-kosync", "x-auth-key": KOSYNC_KEY });
+
+  function sync(
+    headers: Record<string, string>,
+    body: { device: string; progress: string; percentage: number },
+  ) {
+    return $fetchRaw("/kosync/syncs/progress", {
+      method: "PUT",
+      headers,
+      body: { document: DOCUMENT, ...body },
     });
+  }
 
-    // Insert reading progress for user (30%) - same document, different device/user
-    await testDb.insert(readingProgress).values({
-      bookId,
-      userId: userUserId,
-      document: "shared-book.epub",
-      device: "user-device",
-      progress: "/body/chapter[3]",
-      percentage: "0.3000",
-      timestamp: BigInt(Date.now()),
-    });
+  /** Deliberately a second request: the point is what was PERSISTED. */
+  function readBack(headers: Record<string, string>) {
+    return $fetchRaw(`/kosync/syncs/progress/${DOCUMENT}`, { headers });
+  }
 
-    // Query admin's progress
-    const adminRows = await testDb
-      .select({ percentage: readingProgress.percentage })
-      .from(readingProgress)
-      .where(and(eq(readingProgress.bookId, bookId), eq(readingProgress.userId, adminUserId)));
-    expect(adminRows).toHaveLength(1);
-    expect(Number(adminRows[0]!.percentage)).toBeCloseTo(0.8, 2);
+  it("each reader is served its own progress, not whichever row is newest", async () => {
+    expect(
+      (await sync(adminReader(), { device: "kobo", progress: "/ch[8]", percentage: 0.8 })).status,
+    ).toBe(200);
+    expect(
+      (await sync(userReader(), { device: "kindle", progress: "/ch[3]", percentage: 0.3 })).status,
+    ).toBe(200);
 
-    // Query user's progress
-    const userRows = await testDb
-      .select({ percentage: readingProgress.percentage })
-      .from(readingProgress)
-      .where(and(eq(readingProgress.bookId, bookId), eq(readingProgress.userId, userUserId)));
-    expect(userRows).toHaveLength(1);
-    expect(Number(userRows[0]!.percentage)).toBeCloseTo(0.3, 2);
+    const admin = await readBack(adminReader());
+    expect(admin.status).toBe(200);
+    expect(admin.data.percentage).toBe(0.8);
+
+    const member = await readBack(userReader());
+    expect(member.status).toBe(200);
+    expect(member.data.percentage).toBe(0.3);
   });
 
-  it("per-user unique constraint allows same document+device for different users", async () => {
-    // Both users reading the same document on same-named device
-    await testDb.insert(readingProgress).values({
-      bookId,
-      userId: adminUserId,
-      document: "shared-book.epub",
-      device: "shared-device",
-      progress: "/body/chapter[8]",
-      percentage: "0.8000",
-      timestamp: BigInt(Date.now()),
-    });
+  it("the same device name on two accounts is two rows, not one", async () => {
+    // Both people call their reader "kindle". Only the userId in the upsert's
+    // conflict target keeps the second sync from overwriting the first.
+    await sync(adminReader(), { device: "kindle", progress: "/ch[8]", percentage: 0.8 });
+    await sync(userReader(), { device: "kindle", progress: "/ch[3]", percentage: 0.3 });
 
-    // Should NOT violate unique constraint because userId is different
-    await testDb.insert(readingProgress).values({
-      bookId,
-      userId: userUserId,
-      document: "shared-book.epub",
-      device: "shared-device",
-      progress: "/body/chapter[3]",
-      percentage: "0.3000",
-      timestamp: BigInt(Date.now()),
-    });
+    expect((await readBack(adminReader())).data.percentage).toBe(0.8);
+    expect((await readBack(userReader())).data.percentage).toBe(0.3);
 
-    // Both rows exist
-    const allRows = await testDb
+    const stored = await testDb
+      .select({ userId: readingProgress.userId })
+      .from(readingProgress)
+      .where(eq(readingProgress.document, DOCUMENT));
+    expect(stored.map(({ userId }) => userId).sort()).toEqual([adminUserId, userUserId].sort());
+  });
+
+  it("one reader syncing again does not move the other reader's place", async () => {
+    await sync(adminReader(), { device: "kobo", progress: "/ch[5]", percentage: 0.5 });
+    await sync(userReader(), { device: "kindle", progress: "/ch[2]", percentage: 0.2 });
+
+    // The second sync from the same device takes the ON CONFLICT branch.
+    await sync(adminReader(), { device: "kobo", progress: "/ch[10]", percentage: 0.99 });
+
+    expect((await readBack(userReader())).data.percentage).toBe(0.2);
+    expect((await readBack(adminReader())).data.percentage).toBe(0.99);
+  });
+
+  it("resolves the document to the book so progress is not orphaned", async () => {
+    await sync(adminReader(), { device: "kobo", progress: "/ch[1]", percentage: 0.1 });
+
+    const [stored] = await testDb
+      .select({ bookId: readingProgress.bookId })
+      .from(readingProgress)
+      .where(and(eq(readingProgress.document, DOCUMENT), eq(readingProgress.userId, adminUserId)));
+    expect(stored?.bookId).toBe(bookId);
+  });
+
+  it("SCHEMA: the per-user unique index is what makes those two rows possible", async () => {
+    // Not a test of any route — it pins reading_progress_user_document_device_uniq
+    // directly, because the upsert above is only correct while the constraint it
+    // names has userId in it. Named so nobody reads it as endpoint coverage.
+    const row = {
+      bookId,
+      document: DOCUMENT,
+      device: "shared-device",
+      progress: "/ch[1]",
+      percentage: "0.1000",
+      timestamp: BigInt(Date.now()),
+    };
+
+    await testDb.insert(readingProgress).values({ ...row, userId: adminUserId });
+    // Different user, same (document, device): allowed.
+    await testDb.insert(readingProgress).values({ ...row, userId: userUserId });
+    // Same user, same (document, device): refused.
+    await expect(
+      testDb.insert(readingProgress).values({ ...row, userId: adminUserId }),
+    ).rejects.toThrow();
+
+    const stored = await testDb
       .select()
       .from(readingProgress)
-      .where(eq(readingProgress.bookId, bookId));
-    expect(allRows).toHaveLength(2);
-  });
-
-  it("user A progress update does not overwrite user B progress", async () => {
-    // Insert initial progress for both users
-    await testDb.insert(readingProgress).values({
-      bookId,
-      userId: adminUserId,
-      document: "shared-book.epub",
-      device: "admin-device",
-      progress: "/body/chapter[5]",
-      percentage: "0.5000",
-      timestamp: BigInt(Date.now()),
-    });
-    await testDb.insert(readingProgress).values({
-      bookId,
-      userId: userUserId,
-      document: "shared-book.epub",
-      device: "user-device",
-      progress: "/body/chapter[2]",
-      percentage: "0.2000",
-      timestamp: BigInt(Date.now()),
-    });
-
-    // Admin updates their progress to 99%
-    await testDb
-      .update(readingProgress)
-      .set({ percentage: "0.9900", progress: "/body/chapter[10]" })
-      .where(and(eq(readingProgress.bookId, bookId), eq(readingProgress.userId, adminUserId)));
-
-    // User's progress should be unchanged
-    const [userRow] = await testDb
-      .select({ percentage: readingProgress.percentage })
-      .from(readingProgress)
-      .where(and(eq(readingProgress.bookId, bookId), eq(readingProgress.userId, userUserId)));
-    expect(Number(userRow!.percentage)).toBeCloseTo(0.2, 2);
-
-    // Admin's progress should be updated
-    const [adminRow] = await testDb
-      .select({ percentage: readingProgress.percentage })
-      .from(readingProgress)
-      .where(and(eq(readingProgress.bookId, bookId), eq(readingProgress.userId, adminUserId)));
-    expect(Number(adminRow!.percentage)).toBeCloseTo(0.99, 2);
+      .where(eq(readingProgress.device, "shared-device"));
+    expect(stored).toHaveLength(2);
   });
 });
