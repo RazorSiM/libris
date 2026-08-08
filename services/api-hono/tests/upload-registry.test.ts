@@ -7,7 +7,7 @@
  * 3. Registry entry is cleaned up after ownership is recorded
  */
 
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vite-plus/test";
@@ -77,6 +77,10 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   await $fetchRaw("/__test/cleanup", { method: "POST" });
+  // Files left in the inbox by an earlier test (or an earlier run) would be
+  // collision-renamed by the next upload, which the duplicate cases assert on.
+  await rm("/tmp/libris-test-inbox", { recursive: true, force: true });
+  await mkdir("/tmp/libris-test-inbox", { recursive: true });
 
   // Bootstrapping the first admin and minting them a credential are two
   // separate acts; bootstrapAdmin does both.
@@ -322,8 +326,9 @@ describe("book-detected worker uses registry for ownership", () => {
     expect(await testDb.select().from(books)).toHaveLength(0);
   });
 
-  it("skips duplicate files and does not consume registry entry", async () => {
-    // Create and process first file
+  it("skips a re-detected file without deleting the file the book was made from", async () => {
+    // Re-detection of an already-ingested PATH — a watcher restart, say. No
+    // second book, and the file the existing book_files row points at survives.
     const tempDir = await mkdtemp(join(tmpdir(), "libris-worker-test-"));
     const epubContent = "PK\x03\x04duplicate-test-epub";
     const filePath = join(tempDir, "duplicate.epub");
@@ -344,7 +349,8 @@ describe("book-detected worker uses registry for ownership", () => {
     const booksAfterFirst = await testDb.select().from(books);
     expect(booksAfterFirst).toHaveLength(1);
 
-    // Now insert a registry entry for the same checksum (simulating a re-upload)
+    // A registry row for the same checksum AND the same file on disk, as a
+    // re-upload of the identical path would leave behind.
     const { computeChecksumFromFile } = await import("../src/shared/checksum.js");
     const checksum = await computeChecksumFromFile(filePath);
 
@@ -364,8 +370,162 @@ describe("book-detected worker uses registry for ownership", () => {
     const booksAfterSecond = await testDb.select().from(books);
     expect(booksAfterSecond).toHaveLength(1);
 
-    // Registry entry should NOT have been consumed (worker returned early)
+    // The stale row IS consumed now. It used to survive forever — the worker
+    // returned early before touching upload_registry, so every deduped upload
+    // left a row nothing would ever clean up. (This assertion is the inverse of
+    // what this test pinned before; the old expectation encoded the bug.)
+    const registryRows = await testDb.select().from(uploadRegistry);
+    expect(registryRows).toHaveLength(0);
+
+    // ...but the file backing the existing book is untouched.
+    await expect(access(filePath)).resolves.toBeUndefined();
+  });
+
+  it("attributes the book to the user whose file was actually ingested", async () => {
+    // Two users upload identical bytes seconds apart, so the second file is
+    // collision-renamed. Ownership must follow the file the watcher picks up,
+    // not whichever registry row happens to be older.
+    const { userId: bobUserId } = await seedAppPassword(testApp.services.auth, testApp.testDb, {
+      name: "concurrent-bob",
+      role: "user",
+    });
+
+    const tempDir = await mkdtemp(join(tmpdir(), "libris-worker-test-"));
+    const contents = "PK\x03\x04concurrent-upload-epub";
+    const alicePath = join(tempDir, "shared.epub");
+    const bobPath = join(tempDir, "shared-1.epub");
+    await writeFile(alicePath, contents);
+    await writeFile(bobPath, contents);
+
+    const { computeChecksumFromFile } = await import("../src/shared/checksum.js");
+    const checksum = await computeChecksumFromFile(alicePath);
+
+    // Alice (the admin here) registered first; Bob's row is newer.
+    await testDb.insert(uploadRegistry).values({
+      checksum,
+      userId: adminUserId,
+      filename: "shared.epub",
+    });
+    await testDb.insert(uploadRegistry).values({
+      checksum,
+      userId: bobUserId,
+      filename: "shared-1.epub",
+    });
+
+    const processor = createBookDetectedProcessor({ add: async () => ({}) } as never, tempDir);
+
+    // The watcher reaches BOB's file first.
+    await processor({
+      data: { filePath: bobPath, detectedAt: new Date().toISOString() },
+      log: async () => {},
+    } as never);
+
+    const created = await testDb.select().from(books);
+    expect(created).toHaveLength(1);
+    // Pre-fix this was the admin: ownership came from the OLDEST registry row
+    // regardless of which file was ingested.
+    expect(created[0].createdBy).toBe(bobUserId);
+
+    // Only Bob's row was consumed; Alice's still describes her un-ingested file.
+    // Pre-fix every row for the checksum was deleted here, so her file had
+    // nothing left to match against.
+    const afterFirst = await testDb.select().from(uploadRegistry);
+    expect(afterFirst).toHaveLength(1);
+    expect(afterFirst[0].userId).toBe(adminUserId);
+
+    // The watcher then reaches Alice's copy, which is now a duplicate.
+    await processor({
+      data: { filePath: alicePath, detectedAt: new Date().toISOString() },
+      log: async () => {},
+    } as never);
+
+    expect(await testDb.select().from(books)).toHaveLength(1);
+
+    // No stale registry row and no orphaned file left behind.
+    expect(await testDb.select().from(uploadRegistry)).toHaveLength(0);
+    await expect(access(alicePath)).rejects.toThrow();
+    // Bob's file, the one the book was made from, is still there.
+    await expect(access(bobPath)).resolves.toBeUndefined();
+  });
+});
+
+// ── Duplicate rejection at the upload route ───────────────────────
+
+describe("upload route rejects files already on the server", () => {
+  function uploadEpub(rawKey: string, content: Buffer, filename: string) {
+    const formData = new FormData();
+    formData.append(
+      "file",
+      new Blob([new Uint8Array(content)], { type: "application/epub+zip" }),
+      filename,
+    );
+    return testApp.app.request("http://localhost/api/inbox/upload", {
+      method: "POST",
+      headers: { authorization: `Bearer ${rawKey}` },
+      body: formData,
+    });
+  }
+
+  it("tells a second uploader instead of accepting bytes that will never surface", async () => {
+    const { rawKey: bobKey } = await seedAppPassword(testApp.services.auth, testApp.testDb, {
+      name: "duplicate-bob",
+      role: "user",
+    });
+
+    const epubContent = validEpub("shared-between-users");
+    const checksum = computeChecksumFromBuffer(epubContent);
+
+    // Alice uploads first and is accepted.
+    expect((await uploadEpub(adminKey, epubContent, "shared.epub")).status).toBe(200);
+
+    // Bob uploads the same bytes. Pre-fix: 200 with `uploaded: [shared.epub]`, a
+    // second registry row, a second file on disk, and no book he could ever see
+    // — the watcher would skip his file as a duplicate. The duplicate is the
+    // only file in this batch, so the route rejects the whole request.
+    const bobResponse = await uploadEpub(bobKey, epubContent, "shared.epub");
+    expect(bobResponse.status).toBe(400);
+    expect(await bobResponse.text()).toContain("already been uploaded");
+
+    // Only Alice's registry row exists, and Bob's copy was never written.
     const registryRows = await testDb.select().from(uploadRegistry);
     expect(registryRows).toHaveLength(1);
+    expect(registryRows[0].checksum).toBe(checksum);
+    expect(registryRows[0].userId).toBe(adminUserId);
+    await expect(access("/tmp/libris-test-inbox/shared-1.epub")).rejects.toThrow();
+  });
+
+  it("rejects only the duplicate when a batch also contains a new file", async () => {
+    const duplicate = validEpub("batch-duplicate");
+    const fresh = validEpub("batch-fresh");
+
+    expect((await uploadEpub(adminKey, duplicate, "batch-dup.epub")).status).toBe(200);
+
+    const formData = new FormData();
+    formData.append(
+      "file",
+      new Blob([new Uint8Array(duplicate)], { type: "application/epub+zip" }),
+      "batch-dup.epub",
+    );
+    formData.append(
+      "file",
+      new Blob([new Uint8Array(fresh)], { type: "application/epub+zip" }),
+      "batch-fresh.epub",
+    );
+
+    const response = await testApp.app.request("http://localhost/api/inbox/upload", {
+      method: "POST",
+      headers: { authorization: `Bearer ${adminKey}` },
+      body: formData,
+    });
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.uploaded).toEqual([expect.objectContaining({ filename: "batch-fresh.epub" })]);
+    expect(body.errors).toEqual([
+      expect.objectContaining({
+        filename: "batch-dup.epub",
+        error: expect.stringContaining("already been uploaded"),
+      }),
+    ]);
   });
 });

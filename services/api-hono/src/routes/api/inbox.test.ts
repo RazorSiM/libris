@@ -9,6 +9,7 @@ import { createApp } from "../../app.js";
 import { createTestAuth, createTestDb, seedAppPassword, type TestDb } from "../../db/test-utils.js";
 import * as schema from "../../db/schema.js";
 import type { Env } from "../../env.js";
+import { uploaderRef } from "../../shared/uploader-ref.js";
 
 let pglite: PGlite;
 let db: TestDb;
@@ -155,7 +156,10 @@ describe("POST /api/inbox/upload", () => {
       .from(schema.uploadRegistry)
       .where(eq(schema.uploadRegistry.userId, userId));
 
-    expect(registryRow).toEqual({ filename: "same.epub", userId });
+    // The name ON DISK, not the one the browser sent: the book-detected worker
+    // matches registry rows against the file it is actually ingesting, which is
+    // how a concurrent upload of identical bytes reaches the right owner.
+    expect(registryRow).toEqual({ filename: "same-1.epub", userId });
 
     await rm(inboxPath, { recursive: true, force: true });
   });
@@ -403,7 +407,13 @@ describe("GET /api/inbox", () => {
     const listBody = await listResponse.json();
     const listedBook = listBody.data.find((item: { id: string }) => item.id === book.id);
     expect(listedBook).toBeDefined();
-    expect(listedBook.uploader).toEqual({ id: userId, label: "Inbox Test Key" });
+    // `id` is the opaque uploader reference, never users.id — see
+    // shared/uploader-ref.ts.
+    expect(listedBook.uploader).toEqual({
+      id: uploaderRef(userId, env.API_SECRET_KEY),
+      label: "Inbox Test Key",
+    });
+    expect(listedBook.uploader.id).not.toBe(userId);
     expect(listedBook.uploader).not.toHaveProperty("key");
     expect(listedBook.uploader).not.toHaveProperty("keyPrefix");
     expect(listedBook.uploader).not.toHaveProperty("keyHash");
@@ -417,7 +427,11 @@ describe("GET /api/inbox", () => {
     expect(detailResponse.status).toBe(200);
     const detailBody = await detailResponse.json();
     expect(detailBody.files[0]).not.toHaveProperty("inboxPath");
-    expect(detailBody.uploader).toEqual({ id: userId, label: "Inbox Test Key" });
+    expect(detailBody.uploader).toEqual({
+      id: uploaderRef(userId, env.API_SECRET_KEY),
+      label: "Inbox Test Key",
+    });
+    expect(detailBody.uploader.id).not.toBe(userId);
     expect(detailBody.uploader).not.toHaveProperty("key");
     expect(detailBody.uploader).not.toHaveProperty("keyPrefix");
     expect(detailBody.uploader).not.toHaveProperty("keyHash");

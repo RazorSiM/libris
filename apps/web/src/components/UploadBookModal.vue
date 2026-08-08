@@ -87,15 +87,18 @@ async function upload() {
     });
 
     const count = result.uploaded.length;
-    toast.add({
-      title: `${count} ${count === 1 ? "file" : "files"} uploaded`,
-      color: "success",
-    });
+    // Only claim success when something was actually accepted. A batch where
+    // every file was rejected — every file already in the library, say — used
+    // to toast "0 files uploaded" as a success next to the warnings saying why.
+    if (count > 0) {
+      toast.add({
+        title: `${count} ${count === 1 ? "file" : "files"} uploaded`,
+        color: "success",
+      });
+    }
 
-    if (result.errors.length > 0) {
-      for (const err of result.errors) {
-        toast.add({ title: `${err.filename}: ${err.error}`, color: "warning" });
-      }
+    for (const err of result.errors) {
+      toast.add({ title: `${err.filename}: ${err.error}`, color: "warning" });
     }
 
     emit("uploaded");

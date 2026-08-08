@@ -355,11 +355,18 @@ export const appSettings = pgTable("app_settings", {
 });
 
 /**
- * Ephemeral registry linking an uploaded file's checksum to the API key that
+ * Ephemeral registry linking an uploaded file's checksum to the user who
  * uploaded it.  Rows are consumed by the book-detected worker to assign book
- * ownership and should be deleted after processing.  Rows that are never
- * picked up (e.g. worker crash) are orphans and could benefit from periodic
- * TTL-based cleanup.
+ * ownership and deleted once consumed — one row at a time, matched against the
+ * file actually being ingested.  Rows that are never picked up (e.g. worker
+ * crash) are orphans and could benefit from periodic TTL-based cleanup.
+ *
+ * `filename` is the name the file was written under IN THE INBOX, which is not
+ * necessarily the name the browser sent: `writeInboxFile` appends `-1`, `-2`, …
+ * on collision.  The worker matches on it, so it has to describe the file on
+ * disk.  (It is also what becomes `book_files.original_name`, so a collided
+ * upload is displayed under its on-disk name — recording both would need a
+ * second column and a migration.)
  */
 export const uploadRegistry = pgTable(
   "upload_registry",

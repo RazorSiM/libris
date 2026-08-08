@@ -190,8 +190,10 @@ describe("in-handler admin checks are declared in the policy", () => {
    */
   const ISADMIN_ROW_SCOPING_ONLY: Record<string, string> = {
     "api/inbox.ts": "widens a WHERE clause from own rows to all rows",
-    "api/library.ts": "the uploader filter on the library listing",
+    "api/library.ts": "decides whether a payload carries the owner's raw user id",
     "api/events.ts": "chooses which per-user topics the socket subscribes to",
+    "api/dashboard.ts": "widens the inbox count from own pending uploads to all",
+    "api/search.ts": "widens suggest from own review books to every user's",
   };
 
   function listSourceFiles(dir: string): string[] {
