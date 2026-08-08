@@ -1,13 +1,11 @@
 <script setup lang="ts">
 import type { NavigationMenuItem } from "@nuxt/ui";
-import { useDebounceFn } from "@vueuse/core";
 import logoHorizontal from "~/assets/logo-horizontal.svg";
 import logoIcon from "~/assets/logo-icon.svg";
 
 const open = ref(false);
-const { isAuthenticated, userLabel, isAdmin } = useAuth();
+const { userLabel, isAdmin } = useAuth();
 const { showShortcuts } = useDashboard();
-const client = useApiClient();
 const { docsUrl } = useLibrisConfig();
 
 // Sidebar data — Pinia Colada queries (enabled when authenticated)
@@ -139,43 +137,12 @@ const settingsLinks = computed<NavigationMenuItem[]>(() => [
   },
 ]);
 
-// Book search
-interface SearchResult {
-  id: string;
-  title: string | null;
-  author: string | null;
-  status: "review" | "organized";
-  coverUrl: string | null;
-}
-
-const searchTerm = ref("");
-const searchResults = ref<SearchResult[]>([]);
-const searchLoading = ref(false);
-
-const fetchResults = useDebounceFn(async (q: string) => {
-  if (!q.trim()) {
-    searchResults.value = [];
-    searchLoading.value = false;
-    return;
-  }
-  searchLoading.value = true;
-  try {
-    const res = await client.api.search.suggest.$get({ query: { q } });
-    const { data } = await res.json();
-    searchResults.value = data as SearchResult[];
-  } catch {
-    searchResults.value = [];
-  } finally {
-    searchLoading.value = false;
-  }
-}, 200);
-
-watch(searchTerm, (q) => {
-  if (q.trim()) {
-    searchLoading.value = true;
-  }
-  fetchResults(q);
-});
+// Book search — Pinia Colada query, debounced and keyed on the typed term.
+const {
+  term: searchTerm,
+  results: searchResults,
+  loading: searchLoading,
+} = useSearchSuggestQuery();
 
 const router = useRouter();
 
@@ -308,6 +275,7 @@ const groups = computed(() => {
       :loading="searchLoading"
       title="Search"
       description="Jump to a page or search your library"
+      data-testid="command-palette"
     />
 
     <slot />

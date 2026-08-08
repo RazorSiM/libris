@@ -41,53 +41,60 @@ App passwords are a separate credential minted under **Settings → Connections 
 Single `default.vue` layout with:
 
 - **Sidebar:** Logo, search button, nav links (Home, Inbox with badge, Library, Series, Stats), Reading section (Reading, Finished, Unread, Paused links with count badges), your own name (a link to `/settings?tab=account`, with an Admin badge where it applies), Settings link with failed jobs badge, and an external Documentation link (shown only when the runtime config `docsUrl` is set). The color mode and theme toggles are not in the sidebar — they live in each page's toolbar (see Styling).
-- **Global search:** Debounced (200ms) command palette searching books and navigation links
+- **Global search:** Command palette searching books and navigation links, backed by `useSearchSuggestQuery()` — a Pinia Colada query keyed on the term, debounced by 200ms
 - **Content area:** `<RouterView>`
 
 ## Composables
 
-Composables are split into general-purpose utilities (`composables/`) and data-fetching queries (`composables/queries/`). All queries use Pinia Colada (`useQuery`/`defineQuery`) with automatic caching and stale-time management.
+Composables are split into general-purpose utilities (`composables/`), data-fetching queries (`composables/queries/`) and writes (`composables/mutations/`). **Every API call in the SPA goes through Pinia Colada** — `useQuery` for reads, `useMutation` for writes — so caching, deduplication, stale-time and invalidation are handled in one place rather than per call site. A hand-rolled `loading`/`error`/`try`/`catch`/`finally` around a `useApiClient()` call is a bug, not a style choice: it cannot be invalidated, deduplicated or shared.
+
+Two shapes are deliberately not plain `useQuery` calls:
+
+- **Debounce is the caller's job.** `useHardcoverSearch()` and `useSearchSuggestQuery()` pair `useDebouncedSearch()` with a query keyed on the _debounced_ term. Colada has no opinion about when a keystroke becomes a key, so the debounce stays outside; everything after it — the request, the cache, the loading and error state — is Colada's. Both report `loading` from the keystroke rather than from the request, so the debounce window does not read as "no results".
+- **`useBookCandidatesQuery()` is event-triggered.** Nothing wants a book's freshly fetched metadata candidates until the pipeline announces `book:metadata-ready`, so the query sets `enabled: false` and `RefetchMetadataModal` drives it with `refetch()` from the WebSocket handler. It is still a query, so the answer is cached under `["library", id, "candidates"]` and invalidated by the same `["library", id]` prefix every book mutation already invalidates.
 
 Detail pages additionally use route-level data loaders defined inline via `defineColadaLoader` from `vue-router/experimental/pinia-colada`: `useInboxDetailLoader` (`pages/inbox/[id].vue`), `useBookDetailLoader` (`pages/library/[id].vue`), and `useSeriesDetailLoader` (`pages/series/[name].vue`). These loaders resolve the page's primary record during navigation and are distinct from the query composables listed below.
 
 ### General
 
-| Composable             | Purpose                                                                                                              |
-| ---------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `useApiClient()`       | Typed Hono RPC client — cookie-based auth, automatic error wrapping via `ApiError`                                   |
-| `useAuth()`            | Auth state (`isAuthenticated`, `isAdmin`, `userId`, `userLabel`, `checked`) and methods (`check`, `login`, `logout`) |
-| `useDashboard()`       | Shared keyboard shortcuts (`G+H/I/L/S` navigation, `?` shortcuts modal)                                              |
-| `useDebouncedSearch()` | Reactive `search`/`debouncedSearch` ref pair with configurable delay (default 300ms)                                 |
-| `useUpload()`          | XHR-based file upload with progress tracking and cancellation                                                        |
-| `useServerEvents()`    | WebSocket event streaming for real-time updates (book pipeline, Hardcover sync, job status)                          |
-| `useTheme()`           | Color-theme picker state: the selected theme value and the list of available themes (see Styling)                    |
-| `useChartTheme()`      | Resolves an ECharts theme object from the current color mode and Nuxt UI design tokens, used by the `/stats` charts  |
-| `useLibrisConfig()`    | Returns the runtime `AppConfig` (`docsUrl`, `wsBaseUrl`) loaded from `/config.json` and provided in `main.ts`        |
+| Composable             | Purpose                                                                                                                                                                                                                                                     |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `useApiClient()`       | Typed Hono RPC client — cookie-based auth, automatic error wrapping via `ApiError`                                                                                                                                                                          |
+| `useAuth()`            | Auth state (`isAuthenticated`, `isAdmin`, `userId`, `userLabel`, `checked`) and methods (`check`, `login`, `logout`)                                                                                                                                        |
+| `useDashboard()`       | Shared keyboard shortcuts (`G+H/I/L/S` navigation, `?` shortcuts modal)                                                                                                                                                                                     |
+| `useDebouncedSearch()` | Reactive `search`/`debouncedSearch` ref pair with configurable delay (default 300ms)                                                                                                                                                                        |
+| `useUpload()`          | File upload with progress tracking and cancellation. A Colada `useMutation` like every other write (so it invalidates the inbox list and count on settle), but the request itself is an `XMLHttpRequest` on purpose — `fetch` has no upload-progress events |
+| `useServerEvents()`    | WebSocket event streaming for real-time updates (book pipeline, Hardcover sync, job status)                                                                                                                                                                 |
+| `useTheme()`           | Color-theme picker state: the selected theme value and the list of available themes (see Styling)                                                                                                                                                           |
+| `useChartTheme()`      | Resolves an ECharts theme object from the current color mode and Nuxt UI design tokens, used by the `/stats` charts                                                                                                                                         |
+| `useLibrisConfig()`    | Returns the runtime `AppConfig` (`docsUrl`, `wsBaseUrl`) loaded from `/config.json` and provided in `main.ts`                                                                                                                                               |
 
 ### Query Composables (`queries/`)
 
-| Composable                   | Purpose                                                                               |
-| ---------------------------- | ------------------------------------------------------------------------------------- |
-| `useDashboardQuery()`        | Dashboard data (stats, currently reading, recent additions)                           |
-| `useInboxListQuery()`        | Paginated inbox list with search and sort                                             |
-| `useInboxProcessingQuery()`  | Currently processing inbox items                                                      |
-| `useInboxDetailQuery()`      | Single inbox item with metadata candidates                                            |
-| `useLibraryListQuery()`      | Paginated library list with search plus author/genre/language/series/uploader filters |
-| `useLibraryFacetsQuery()`    | Library filter facets (authors, genres, languages, series, uploaders)                 |
-| `useBookDetailQuery()`       | Single book detail                                                                    |
-| `useBookProgressQuery()`     | Reading progress for a single book                                                    |
-| `useReadingQuery()`          | Filtered reading list by status (reading, finished, unread, paused)                   |
-| `useSeriesListQuery()`       | Series list with search                                                               |
-| `useSeriesDetailQuery()`     | Series detail with ordered book list                                                  |
-| `useStatsQuery()`            | Reading analytics data                                                                |
-| `useSettingsStatusQuery()`   | Combined settings status (health, queues, credentials, app settings)                  |
-| `useHardcoverStatusQuery()`  | Hardcover connection status                                                           |
-| `useHardcoverSyncLogQuery()` | Hardcover sync log entries                                                            |
-| `useHardcoverSearch()`       | Debounced free-text search against Hardcover for manual metadata autofill             |
-| `useJobsQuery()`             | Paginated job browser with queue/status filters                                       |
-| `useInboxCountQuery()`       | Inbox count for sidebar badge                                                         |
-| `useReadingCountsQuery()`    | Reading status counts for sidebar badges                                              |
-| `useFailedJobsCountQuery()`  | Failed jobs count for settings badge                                                  |
+| Composable                   | Purpose                                                                                                                                                                                                                                             |
+| ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `useDashboardQuery()`        | Dashboard data (stats, currently reading, recent additions)                                                                                                                                                                                         |
+| `useInboxListQuery()`        | Paginated inbox list with search and sort                                                                                                                                                                                                           |
+| `useInboxProcessingQuery()`  | Currently processing inbox items                                                                                                                                                                                                                    |
+| `useInboxDetailQuery()`      | Single inbox item with metadata candidates                                                                                                                                                                                                          |
+| `useLibraryListQuery()`      | Paginated library list with search plus author/genre/language/series/uploader filters                                                                                                                                                               |
+| `useLibraryFacetsQuery()`    | Library filter facets (authors, genres, languages, series, uploaders)                                                                                                                                                                               |
+| `useBookDetailQuery()`       | Single book detail                                                                                                                                                                                                                                  |
+| `useBookProgressQuery()`     | Reading progress for a single book                                                                                                                                                                                                                  |
+| `useBookCandidatesQuery()`   | Metadata candidates for a book — `enabled: false`, driven by `refetch()` on the WebSocket `book:metadata-ready` event                                                                                                                               |
+| `useReadingQuery()`          | Filtered reading list by status (reading, finished, unread, paused)                                                                                                                                                                                 |
+| `useSeriesListQuery()`       | Series list with search                                                                                                                                                                                                                             |
+| `useSeriesDetailQuery()`     | Series detail with ordered book list                                                                                                                                                                                                                |
+| `useStatsQuery()`            | Reading analytics data                                                                                                                                                                                                                              |
+| `useSettingsStatusQuery()`   | Combined settings status (health, queues, credentials, app settings)                                                                                                                                                                                |
+| `useHardcoverStatusQuery()`  | Hardcover connection status                                                                                                                                                                                                                         |
+| `useHardcoverSyncLogQuery()` | Hardcover sync log entries                                                                                                                                                                                                                          |
+| `useHardcoverSearch()`       | Debounced (300ms) free-text search against Hardcover for manual metadata autofill. Maps a 503 — nobody has connected a Hardcover credential — to its own `disabled` error kind, which the panel renders as muted guidance rather than a red failure |
+| `useSearchSuggestQuery()`    | Debounced (200ms) command-palette book suggestions. `results` stays empty while `error` is set: the palette has never shown a failure, but the failure is no longer swallowed                                                                       |
+| `useJobsQuery()`             | Paginated job browser with queue/status filters                                                                                                                                                                                                     |
+| `useInboxCountQuery()`       | Inbox count for sidebar badge                                                                                                                                                                                                                       |
+| `useReadingCountsQuery()`    | Reading status counts for sidebar badges                                                                                                                                                                                                            |
+| `useFailedJobsCountQuery()`  | Failed jobs count for settings badge                                                                                                                                                                                                                |
 
 ## Components
 
