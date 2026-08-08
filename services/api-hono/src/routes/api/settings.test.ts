@@ -1,10 +1,14 @@
 import { createMemoryKVStore } from "../../services/kv-store.js";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import type { PGlite } from "@electric-sql/pglite";
+import { createNodeWebSocket } from "@hono/node-ws";
+import { OpenAPIHono } from "@hono/zod-openapi";
 import { createApp } from "../../app.js";
+import { createRouter } from "../index.js";
 import { createTestAuth, createTestDb, seedAppPassword, type TestDb } from "../../db/test-utils.js";
 import * as schema from "../../db/schema.js";
 import type { Env } from "../../env.js";
+import { ADMIN_ONLY_SETTINGS_FIELDS, SettingsResponseSchema } from "./settings.js";
 
 // Mock Redis-dependent modules so admin health/queue checks don't need a real connection
 vi.mock("../../services/redis.js", () => ({
@@ -387,7 +391,8 @@ describe("GET /api/settings", () => {
       headers: { cookie: admin.cookie },
     });
     expect(adminResponse.status).toBe(200);
-    await expect(adminResponse.json()).resolves.toMatchObject({
+    const adminBody = await adminResponse.json();
+    expect(adminBody).toMatchObject({
       libraryPath: TEST_ENV.LIBRIS_LIBRARY_PATH,
       inboxPath: TEST_ENV.LIBRIS_INBOX_PATH,
     });
@@ -397,8 +402,109 @@ describe("GET /api/settings", () => {
     });
     expect(memberResponse.status).toBe(200);
     const memberBody = await memberResponse.json();
-    expect(memberBody).not.toHaveProperty("libraryPath");
-    expect(memberBody).not.toHaveProperty("inboxPath");
+
+    // Driven off the exported field list rather than two literals, so a third
+    // admin-only field cannot be added to the projection without this test
+    // covering it (libris-n2j).
+    for (const field of ADMIN_ONLY_SETTINGS_FIELDS) {
+      expect(Object.keys(adminBody), field).toContain(field);
+      // Absent, not null and not empty: an undefined-valued key would still
+      // announce that the concept exists, and `toHaveProperty` would pass it.
+      expect(Object.keys(memberBody), field).not.toContain(field);
+    }
+
+    // One declared schema, and neither role produces anything outside it —
+    // strict, so an undeclared extra key fails too.
+    expect(SettingsResponseSchema.strict().safeParse(adminBody).success).toBe(true);
+    expect(SettingsResponseSchema.strict().safeParse(memberBody).success).toBe(true);
+  });
+});
+
+// ── The contract has to admit that it varies by role (libris-n2j) ────
+
+/**
+ * The response shape of `GET /api/settings` depends on who is asking, and the
+ * OpenAPI document has to say so.
+ *
+ * The handler withheld `libraryPath`/`inboxPath` from non-admins with an inline
+ * `...(isAdmin(c) ? {…} : {})` spread mid-return-statement, while the route
+ * declared both as bare `z.string().optional()`. To a client author — and to
+ * anyone auditing which surfaces disclose host filesystem paths — that reads as
+ * "the server might not have configured these", not "you are not allowed to see
+ * these". Same bytes, entirely different contract.
+ *
+ * Asserted against the generated document, the one `/_docs/scalar` renders and
+ * `scripts/generate-openapi.ts` writes, because the document is what a client
+ * author actually reads.
+ */
+describe("the OpenAPI document declares the settings role variance", () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let doc: any;
+
+  beforeAll(() => {
+    const { upgradeWebSocket } = createNodeWebSocket({ app: new OpenAPIHono() });
+    doc = createRouter(upgradeWebSocket).getOpenAPIDocument({
+      openapi: "3.1.0",
+      info: { title: "Libris API", version: "0.0.0-test" },
+    });
+  });
+
+  /** Follow a `$ref` into components, or hand back an inline schema unchanged. */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function responseSchema(path: string, method = "get"): any {
+    const schema = doc.paths[path][method].responses["200"].content["application/json"].schema;
+    if (!schema?.$ref) return schema;
+    return doc.components.schemas[String(schema.$ref).replace("#/components/schemas/", "")];
+  }
+
+  it("publishes a response schema for GET /api/settings at all", () => {
+    // Guards everything below from passing vacuously on a renamed path.
+    expect(responseSchema("/api/settings").properties).toBeTruthy();
+    expect(ADMIN_ONLY_SETTINGS_FIELDS.length).toBeGreaterThan(0);
+  });
+
+  it.each(ADMIN_ONLY_SETTINGS_FIELDS)("declares %s optional AND admin-scoped", (field) => {
+    const schema = responseSchema("/api/settings");
+
+    expect(Object.keys(schema.properties)).toContain(field);
+    // Optional, because a non-admin genuinely does not receive it...
+    expect(schema.required ?? []).not.toContain(field);
+    // ...and the document must say whose it is. This is the assertion that was
+    // red before the fix: the field carried no description whatsoever.
+    expect(schema.properties[field].description ?? "").toMatch(/administrator/i);
+  });
+
+  it("keeps every field both roles receive required", () => {
+    // The other half of the claim. "Optional" on this response means
+    // "role-scoped", not "the server is being vague" — so nothing else may be
+    // optional without joining the admin-only list.
+    const schema = responseSchema("/api/settings");
+    const shared = Object.keys(schema.properties).filter(
+      (key) => !(ADMIN_ONLY_SETTINGS_FIELDS as string[]).includes(key),
+    );
+    const required = [...((schema.required ?? []) as string[])];
+    expect(shared.sort()).toEqual(required.sort());
+  });
+
+  it("says on the operation itself that the response varies by role", () => {
+    // What a client author skimming the endpoint list sees before any schema.
+    expect(doc.paths["/api/settings"].get.description).toMatch(/administrator/i);
+  });
+
+  it.each(["health", "queues", "failedJobs", "settings"])(
+    "names the authority behind /status's %s being null",
+    (field) => {
+      // The second admin-authority branch on this prefix. Its variance already
+      // WAS in the declared shape — every admin-only section is nullable and the
+      // handler nulls them wholesale — so the only thing missing was the reason,
+      // which is why this one stayed a documentation fix and GET / did not.
+      const schema = responseSchema("/api/settings/status");
+      expect(schema.properties[field].description ?? "").toMatch(/administrator/i);
+    },
+  );
+
+  it("leaves the /status section every caller receives required", () => {
+    expect(responseSchema("/api/settings/status").required).toContain("credentials");
   });
 });
 
