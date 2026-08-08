@@ -2,14 +2,15 @@
 
 ## E2E Tests (Playwright)
 
-173 spec test bodies across 18 spec files in `tests/e2e/`, running sequentially (1 worker, shared database). The setup projects add 3 executions, and `prod-config.spec.ts` (4 tests) runs only in its own CI job, so a complete ordinary run is 172 tests. Regenerate the exact counts with `vp exec playwright test --list` (run from `tests/e2e/`) rather than hand-counting.
+185 spec test bodies across 19 spec files in `tests/e2e/`, running sequentially (1 worker, shared database). The setup projects add 3 executions, and `prod-config.spec.ts` (4 tests) runs only in its own CI job, so a complete ordinary run is 184 tests. Regenerate the exact counts with `vp exec playwright test --list` (run from `tests/e2e/`) rather than hand-counting.
 
 ### Test Files
 
 | File                       | Tests | Tags            | Coverage                                                                                                                                    |
 | -------------------------- | ----- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `account.spec.ts`          | 17    | @smoke (4)      | Profile, password changes, session and device management, account access                                                                    |
-| `auth.spec.ts`             | 47    | mostly @smoke   | Sign-in, sessions, authorization, app passwords, OPDS authentication, user management                                                       |
+| `account.spec.ts`          | 20    | @smoke (4)      | Profile, password changes, session and device management, account access                                                                    |
+| `admin-authority.spec.ts`  | 4     | —               | Routes whose admin authority lives inside the handler, refused to app passwords and served to the same person's session                     |
+| `auth.spec.ts`             | 49    | mostly @smoke   | Sign-in, sessions, authorization, app passwords, OPDS authentication, user management                                                       |
 | `book-progress.spec.ts`    | 3     | @smoke          | Multi-device progress, empty state, finished badge                                                                                          |
 | `command-palette.spec.ts`  | 3     | —               | Global search modal, navigation, book results                                                                                               |
 | `errors.spec.ts`           | 5     | @smoke / @slow  | Error toasts, conflict handling, network failures, and duplicate file detection                                                             |
@@ -25,7 +26,7 @@
 | `reading-status.spec.ts`   | 8     | @smoke          | Sidebar links, status tabs, empty state, wide-screen cards, plus a parametrized loop covering the reading/finished/unread/paused tabs       |
 | `settings.spec.ts`         | 8     | @smoke (4)      | Health & diagnostics (@smoke); jobs browser and queue management untagged                                                                   |
 | `stats.spec.ts`            | 7     | @smoke          | Books finished, streaks, daily activity, genre distribution                                                                                 |
-| `websocket-events.spec.ts` | 6     | @smoke (1)      | Realtime event bus over WebSocket — job status, pipeline events, Hardcover sync updates                                                     |
+| `websocket-events.spec.ts` | 9     | @smoke (3)      | Realtime event bus over WebSocket — job status, pipeline events, per-user scoping, and socket teardown when a session is revoked            |
 
 > **Note:** Feed structure, search, language filtering, authentication, and content-type
 > contracts live in `services/api-hono/src/routes/opds.test.ts`. `opds.spec.ts` retains only
@@ -57,17 +58,18 @@ session invariant carries `@smoke`.** Concretely that is the sign-in,
 post-sign-in redirect, session, authorization, app-password, app-password-scope,
 OPDS and user-management blocks of `auth.spec.ts`; the ownership, per-user
 stats, sign-out cache and upload-collision blocks of `isolation.spec.ts`; the
-WebSocket per-user event scoping case; and the password-change,
-session-token-leak, device-revocation and non-admin-access cases in
-`account.spec.ts`. Presentation and convenience coverage stays untagged so the
-gate stays a gate. That takes the PR selection from 89 tests to 136.
+WebSocket per-user event scoping, identity-switch and ban-severs-the-socket
+cases; and the password-change, session-token-leak, device-revocation and
+non-admin-access cases in `account.spec.ts`. Presentation and convenience
+coverage stays untagged so the gate stays a gate. That takes the PR selection
+from 89 tests to 139.
 
 ::: warning `first-run-setup.spec.ts` cannot be tagged
 Its `first-run` project declares `dependencies: ["chromium"]` so it sorts last —
 it wipes every account, so nothing may follow it. Playwright does **not** apply
 `--grep` to a dependency project: it runs the whole thing. Tagging anything in
-that file therefore drags the entire `chromium` project into the PR run (136
-tests becomes all 175) and the gate silently stops being a gate.
+that file therefore drags the entire `chromium` project into the PR run (139
+tests becomes all 184) and the gate silently stops being a gate.
 
 First-run setup runs on main only. If you want it on PRs, the honest change is
 to run the full suite on PRs, not to tag the file.

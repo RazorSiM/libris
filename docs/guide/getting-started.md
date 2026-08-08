@@ -13,6 +13,8 @@ Open Libris in a browser. While you are signed out, `/login` is the only route y
 
 On a brand-new install that page offers a **first-run setup form** instead of the sign-in form. It decides which to show by asking the server whether anybody on this install can sign in with a password yet.
 
+![First-run setup form on an empty install](./images/initial-setup.webp)
+
 Fill in three fields:
 
 - **Your name** — how you are shown in the sidebar and on uploader attributions.
@@ -48,6 +50,8 @@ The role lives on the person, not on a credential, so promoting someone applies 
 
 There is no self-registration. An admin adds people from **Settings → Users → Add someone**: name, email, an initial password of at least 8 characters, and a role. Click **Create account** and pass the password to them out of band — they can change it themselves from **Settings → Account**.
 
+![Settings - Users tab](./images/settings-users.webp)
+
 Each row in the user list carries three actions:
 
 - **Make admin / Make user** — flips the role.
@@ -69,6 +73,8 @@ Unbanning restores the account, but **not** the app passwords. The disabled rows
 ## Pairing an E-Reader: App Passwords
 
 Your account password is for the browser. Devices and scripts get their own credential — an **app password** — from **Settings → Connections → App Passwords**.
+
+![Settings - Connections tab, with three paired devices](./images/settings-connections.webp)
 
 1. Type a name for the device in **Name this device** (for example `Kobo Clara` or `laptop script`). Names are capped at 32 characters.
 2. Click **Create app password**.
