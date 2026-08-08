@@ -7,9 +7,6 @@ import type { Env } from "../../env.js";
 import { createAuth } from "../../lib/auth.js";
 import { createMemorySecondaryStorage } from "../../services/auth-secondary-storage.js";
 import { createMemoryKVStore } from "../../services/kv-store.js";
-import { betterAuthClientIpHeader } from "../../shared/request-ip.js";
-import { eq } from "drizzle-orm";
-import { admin as adminPlugin } from "better-auth/plugins";
 
 vi.mock("../../services/redis.js", () => ({
   isRedisHealthy: async () => ({ ok: true, latencyMs: 1 }),
@@ -67,16 +64,7 @@ const TEST_ENV: Env = {
 let pglite: PGlite;
 let db: TestDb;
 
-interface TestAppOptions {
-  /**
-   * Called with the headers of every `auth.api.getSession` the request stack
-   * makes. Used to assert what the middleware layer actually hands Better
-   * Auth, which is not observable from the response (libris-59m.42).
-   */
-  onGetSession?: (headers: Headers) => void;
-}
-
-function createTestApp(options: TestAppOptions = {}) {
+function createTestApp() {
   const auth = createAuth({
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     db: db as any,
@@ -85,17 +73,6 @@ function createTestApp(options: TestAppOptions = {}) {
     secret: TEST_ENV.BETTER_AUTH_SECRET,
     baseURL: "http://localhost:3000",
   });
-
-  if (options.onGetSession) {
-    const { onGetSession } = options;
-    const original = auth.api.getSession;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (auth.api as any).getSession = (input: any) => {
-      onGetSession(new Headers(input?.headers ?? {}));
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-return
-      return original(input);
-    };
-  }
 
   // The auth instance is returned alongside the app: accounts are created
   // server-side through it now, since there is no HTTP sign-up.
@@ -138,87 +115,6 @@ beforeEach(async () => {
   await db.delete(schema.users);
   await db.delete(schema.appSettings);
 });
-
-async function createAdmin(
-  auth: ReturnType<typeof createTestApp>["auth"],
-  email: string,
-): Promise<{ id: string; cookie: string }> {
-  const created = await auth.api.createUser({
-    body: {
-      email,
-      password: "correct-horse-battery",
-      name: email.split("@")[0]!,
-      role: "admin",
-    },
-  });
-  const { headers } = await auth.api.signInEmail({
-    body: { email, password: "correct-horse-battery" },
-    returnHeaders: true,
-  });
-  return {
-    id: created.user.id,
-    cookie: headers
-      .getSetCookie()
-      .map((value) => value.split(";")[0])
-      .join("; "),
-  };
-}
-
-async function setRoleOverHttp(
-  app: ReturnType<typeof createTestApp>["app"],
-  cookie: string,
-  userId: string,
-  role: "admin" | "user",
-) {
-  return await app.request("/api/auth/admin/set-role", {
-    method: "POST",
-    headers: {
-      cookie,
-      "content-type": "application/json",
-      origin: "http://localhost:3000",
-    },
-    body: JSON.stringify({ userId, role }),
-  });
-}
-
-async function adminActionOverHttp(
-  app: ReturnType<typeof createTestApp>["app"],
-  cookie: string,
-  path: "ban-user" | "remove-user",
-  userId: string,
-) {
-  return await app.request(`/api/auth/admin/${path}`, {
-    method: "POST",
-    headers: {
-      cookie,
-      "content-type": "application/json",
-      origin: "http://localhost:3000",
-    },
-    body: JSON.stringify({ userId }),
-  });
-}
-
-/**
- * /admin/update-user nests the privilege fields under `data`, which is the
- * whole of 59m.12: the guard read `body.role`, found undefined, and stood
- * aside while Better Auth wrote `data.role` to the database.
- */
-async function updateUserOverHttp(
-  app: ReturnType<typeof createTestApp>["app"],
-  cookie: string,
-  userId: string,
-  data: Record<string, unknown>,
-) {
-  return await app.request("/api/auth/admin/update-user", {
-    method: "POST",
-    headers: {
-      cookie,
-      "content-type": "application/json",
-      origin: "http://localhost:3000",
-    },
-    body: JSON.stringify({ userId, data }),
-  });
-}
 
 describe("GET /api/auth/ok", () => {
   it("answers without any credentials", async () => {
@@ -303,187 +199,23 @@ describe("the auth middleware stands aside for /api/auth/", () => {
   });
 });
 
-describe("last-admin invariant", () => {
-  it("refuses a direct HTTP attempt to demote the sole admin", async () => {
-    const { app, auth } = createTestApp();
-    const admin = await createAdmin(auth, "sole-admin@example.com");
-
-    const response = await setRoleOverHttp(app, admin.cookie, admin.id, "user");
-
-    expect(response.status).toBe(409);
-    const [stored] = await db.select().from(schema.users).where(eq(schema.users.id, admin.id));
-    expect(stored?.role).toBe("admin");
-  });
-
-  it("still allows demotion while another admin remains", async () => {
-    const { app, auth } = createTestApp();
-    const acting = await createAdmin(auth, "acting-admin@example.com");
-    const target = await createAdmin(auth, "target-admin@example.com");
-
-    const response = await setRoleOverHttp(app, acting.cookie, target.id, "user");
-
-    expect(response.status).toBe(200);
-    const admins = await db.select().from(schema.users).where(eq(schema.users.role, "admin"));
-    expect(admins.map(({ id }) => id)).toEqual([acting.id]);
-  });
-
-  it.each(["ban-user", "remove-user"] as const)(
-    "refuses to %s when the target is the sole admin",
-    async (path) => {
-      const { app, auth } = createTestApp();
-      const admin = await createAdmin(auth, `${path}@example.com`);
-
-      const response = await adminActionOverHttp(app, admin.cookie, path, admin.id);
-
-      expect(response.status).toBe(409);
-      const [stored] = await db.select().from(schema.users).where(eq(schema.users.id, admin.id));
-      expect(stored).toMatchObject({ role: "admin", banned: false });
-    },
-  );
-
-  /**
-   * libris-59m.42. lib/auth.ts tells Better Auth to read the client address
-   * from one private header, on the stated invariant that the app always
-   * overwrites it with the address resolved from the TCP peer and the
-   * trusted-proxy CIDRs. app.ts only does that inside the /api/auth/*
-   * catch-all HANDLER, which runs AFTER this middleware — so passing
-   * `c.req.raw.headers` straight through handed Better Auth whatever the
-   * client sent.
-   */
-  it("never lets a client-supplied private IP header reach Better Auth", async () => {
-    const seen: string[] = [];
-    const { app, auth } = createTestApp({
-      onGetSession: (headers) => seen.push(headers.get(betterAuthClientIpHeader) ?? "<absent>"),
-    });
-    const acting = await createAdmin(auth, "spoof-acting@example.com");
-    const target = await createAdmin(auth, "spoof-target@example.com");
-    seen.length = 0;
-
-    const response = await app.request("/api/auth/admin/set-role", {
-      method: "POST",
-      headers: {
-        cookie: acting.cookie,
-        "content-type": "application/json",
-        origin: "http://localhost:3000",
-        [betterAuthClientIpHeader]: "203.0.113.9",
-      },
-      body: JSON.stringify({ userId: target.id, role: "user" }),
-    });
-
-    expect(response.status).toBe(200);
-    // The middleware really did consult Better Auth — otherwise this asserts
-    // nothing at all.
-    expect(seen.length).toBeGreaterThan(0);
-    expect(seen).not.toContain("203.0.113.9");
-    // getRequestIp falls back to the loopback identity when there is no socket.
-    expect(new Set(seen)).toEqual(new Set(["127.0.0.1"]));
-  });
-
-  // ── /admin/update-user (59m.12) ────────────────────────────────────
-  //
-  // The guard used to be three paths listed in app.ts, and update-user was not
-  // one of them. It performs the same writes: `data.role` and the ban fields.
-  // Against that code the first test below returned 200 and left the install
-  // with zero admins — /api/jobs, PATCH /api/settings and create-user all 403
-  // for everyone, recoverable only by hand-editing the database.
-
-  it("refuses to demote the sole admin through update-user's nested data.role", async () => {
-    const { app, auth } = createTestApp();
-    const admin = await createAdmin(auth, "nested-demotion@example.com");
-
-    const response = await updateUserOverHttp(app, admin.cookie, admin.id, { role: "user" });
-
-    expect(response.status).toBe(409);
-    const [stored] = await db.select().from(schema.users).where(eq(schema.users.id, admin.id));
-    expect(stored?.role).toBe("admin");
-  });
-
-  it("refuses to ban the sole admin through update-user's nested data.banned", async () => {
-    const { app, auth } = createTestApp();
-    const admin = await createAdmin(auth, "nested-ban@example.com");
-
-    const response = await updateUserOverHttp(app, admin.cookie, admin.id, { banned: true });
-
-    // 409, not the 400 Better Auth's own YOU_CANNOT_BAN_YOURSELF produces. The
-    // distinction is the point: that check only knows about self, while the
-    // invariant is about the last admin, so it is our guard that has to answer.
-    expect(response.status).toBe(409);
-    const [stored] = await db.select().from(schema.users).where(eq(schema.users.id, admin.id));
-    expect(stored).toMatchObject({ role: "admin", banned: false });
-  });
-
-  it("still allows an ordinary profile edit on the sole admin", async () => {
-    // The guard must not have become "the last admin is immutable".
-    const { app, auth } = createTestApp();
-    const admin = await createAdmin(auth, "renamed-admin@example.com");
-
-    const response = await updateUserOverHttp(app, admin.cookie, admin.id, { name: "Renamed" });
-
-    expect(response.status).toBe(200);
-    const [stored] = await db.select().from(schema.users).where(eq(schema.users.id, admin.id));
-    expect(stored).toMatchObject({ name: "Renamed", role: "admin" });
-  });
-
-  it("still allows demotion through update-user while another admin remains", async () => {
-    const { app, auth } = createTestApp();
-    const acting = await createAdmin(auth, "acting-updater@example.com");
-    const target = await createAdmin(auth, "target-updatee@example.com");
-
-    const response = await updateUserOverHttp(app, acting.cookie, target.id, { role: "user" });
-
-    expect(response.status).toBe(200);
-    const admins = await db.select().from(schema.users).where(eq(schema.users.role, "admin"));
-    expect(admins.map(({ id }) => id)).toEqual([acting.id]);
-  });
-
-  // ── The whole admin surface, not the endpoints we happened to think of ──
-
-  const adminPostEndpoints = Object.values(
-    adminPlugin().endpoints as Record<string, { path: string; options?: { method?: string } }>,
-  )
-    .filter(({ options }) => options?.method === "POST")
-    .map(({ path }) => path);
-
-  it.each(adminPostEndpoints)(
-    "leaves the sole admin an active admin after POST %s",
-    async (pluginPath) => {
-      // Sweeps every mutating endpoint the installed admin plugin exposes with
-      // the most demotion-shaped body each of them could accept, in both the
-      // flat and the nested shape. Whatever the endpoint answers — 409 from the
-      // guard, 400 from Better Auth's validation, 200 for the harmless ones —
-      // the one thing that must hold is that the install still has an admin.
-      const { app, auth } = createTestApp();
-      const admin = await createAdmin(auth, "sweep@example.com");
-
-      await app.request(`/api/auth${pluginPath}`, {
-        method: "POST",
-        headers: {
-          cookie: admin.cookie,
-          "content-type": "application/json",
-          origin: "http://localhost:3000",
-        },
-        body: JSON.stringify({ userId: admin.id, role: "user", data: { role: "user" } }),
-      });
-
-      const [stored] = await db.select().from(schema.users).where(eq(schema.users.id, admin.id));
-      expect(stored, `${pluginPath} deleted the last admin`).toBeDefined();
-      expect(stored, `${pluginPath} stripped the last admin`).toMatchObject({
-        role: "admin",
-        banned: false,
-      });
-    },
-  );
-
-  // The CONCURRENCY case deliberately does not live here (libris-59m.31). It
-  // used to: two `withLastAdminLock` calls through `Promise.allSettled` against
-  // this file's PGlite database. PGlite is one embedded backend on one
-  // connection, so its transactions are queued and the `SELECT ... FOR UPDATE`
-  // can never contend — the second call always ran after the first committed,
-  // and deleting the lock line left the test green. It now lives in
-  // tests/last-admin-lock.postgres.test.ts, against a real server on a real
-  // pool, where it asserts the second transaction blocks until the first
-  // commits. Do not reintroduce a concurrency test in this file.
-});
+/**
+ * The last-admin invariant (59m.12, 59m.42) is NOT tested here any more.
+ *
+ * lastAdminMiddleware holds a `SELECT ... FOR UPDATE` transaction open across
+ * `next()`, and Better Auth's write inside `next()` goes through its own
+ * captured pooled handle. That needs two connections at once, which PGlite —
+ * one embedded backend behind an exclusive mutex — cannot give: the request
+ * deadlocks. middleware/last-admin.ts used to carry a `NODE_ENV === "test"`
+ * branch that closed the transaction before `next()` so this file could run,
+ * which meant these tests exercised a guard that was not the shipped one
+ * (libris-8mx).
+ *
+ * That branch is gone. The whole block moved to
+ * tests/admin-subtree-http.postgres.test.ts, which drives the same requests
+ * through the same `createApp` against a real PostgreSQL server. Do not
+ * reintroduce a last-admin HTTP test in this file — it will hang.
+ */
 
 describe("sign-in over HTTP", () => {
   /** Accounts are admin-created; there is no HTTP sign-up to drive. */
