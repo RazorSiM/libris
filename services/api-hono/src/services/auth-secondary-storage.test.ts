@@ -5,6 +5,7 @@ import { createAuth } from "../lib/auth.js";
 import { createTestDb, type TestDb } from "../db/test-utils.js";
 import type { Env } from "../env.js";
 import {
+  clearUserSessions,
   createMemorySecondaryStorage,
   createRedisSecondaryStorage,
   resetSecondaryStorageFallback,
@@ -134,6 +135,69 @@ describe("createMemorySecondaryStorage", () => {
         vi.useRealTimers();
       }
     });
+  });
+});
+
+/**
+ * The cleanup Better Auth's `internalAdapter.deleteUser` does not do
+ * (libris-jyp).
+ *
+ * The behaviour that matters is pinned end-to-end in lib/auth.integration.test.ts,
+ * where a real `deleteUser` fires the real `user.delete` database hook. These
+ * cover the shapes a real deletion cannot produce on demand: a missing index
+ * key, and a corrupt one.
+ */
+describe("clearUserSessions", () => {
+  function activeSessions(...tokens: string[]): string {
+    return JSON.stringify(
+      tokens.map((token) => ({ token, expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000 })),
+    );
+  }
+
+  it("deletes every listed session and the index that named them", async () => {
+    const storage = createMemorySecondaryStorage();
+    await storage.set("tok-a", "{}");
+    await storage.set("tok-b", "{}");
+    await storage.set("active-sessions-u1", activeSessions("tok-a", "tok-b"));
+
+    await clearUserSessions(storage, "u1");
+
+    expect(await storage.get("tok-a")).toBeNull();
+    expect(await storage.get("tok-b")).toBeNull();
+    expect(await storage.get("active-sessions-u1")).toBeNull();
+  });
+
+  it("leaves another user's sessions and index alone", async () => {
+    const storage = createMemorySecondaryStorage();
+    await storage.set("mine", "{}");
+    await storage.set("active-sessions-u1", activeSessions("mine"));
+    await storage.set("theirs", "{}");
+    await storage.set("active-sessions-u2", activeSessions("theirs"));
+
+    await clearUserSessions(storage, "u1");
+
+    expect(await storage.get("theirs")).toBe("{}");
+    expect(await storage.get("active-sessions-u2")).toBeTruthy();
+  });
+
+  it("is a no-op when the user has no index key", async () => {
+    // The ordinary case on /admin/remove-user, which calls deleteUserSessions
+    // just before deleteUser: the hook finds nothing left to do. It must not
+    // throw, or every removal would 500 after the account was already gone.
+    const storage = createMemorySecondaryStorage();
+
+    await expect(clearUserSessions(storage, "never-signed-in")).resolves.toBeUndefined();
+  });
+
+  it("still drops a corrupt index rather than leaving it behind", async () => {
+    // A half-written index names tokens nothing can reach any more; keeping it
+    // would make them permanently undeletable.
+    const storage = createMemorySecondaryStorage();
+    await storage.set("active-sessions-u1", "{not json");
+
+    await clearUserSessions(storage, "u1");
+
+    expect(await storage.get("active-sessions-u1")).toBeNull();
   });
 });
 

@@ -160,6 +160,61 @@ export function createRedisSecondaryStorage(redis: Redis, prefix = "ba"): Second
   };
 }
 
+/** How Better Auth indexes a user's live sessions in secondary storage. */
+const ACTIVE_SESSIONS_KEY = (userId: string) => `active-sessions-${userId}`;
+
+interface ActiveSessionEntry {
+  token: string;
+  expiresAt: number;
+}
+
+/**
+ * Drop every secondary-storage entry belonging to a user's sessions.
+ *
+ * ⚠︎ RE-VERIFY ON EVERY BETTER AUTH BUMP. This mirrors the secondary-storage
+ * half of `internalAdapter.deleteUserSessions` (dist/db/internal-adapter.mjs),
+ * including the `active-sessions-<userId>` index key and the
+ * `{ token, expiresAt }` entry shape written by `createSession`. Verified
+ * against better-auth 1.6.25.
+ *
+ * Needed because `internalAdapter.deleteUser` does NOT do this (libris-jyp). It
+ * issues three statements — delete session ROWS, delete account rows, delete the
+ * user row — and never touches secondary storage. `findSession` reads secondary
+ * storage FIRST and returns whatever it finds without re-checking that the user
+ * still exists, so a session left behind there keeps resolving, with the deleted
+ * account's cached user object attached, until its TTL lapses.
+ *
+ * Today `/admin/remove-user` masks that by calling `deleteUserSessions`
+ * immediately before `deleteUser` — but that is one caller's ordering, not a
+ * property of deletion. Better Auth's own `/delete-user` calls the two in the
+ * opposite order, and an upstream refactor that drops the extra call turns a
+ * removed account into a live one.
+ *
+ * Idempotent by construction: when the index key is already gone there is
+ * nothing to do, which is the normal case on the remove-user path.
+ */
+export async function clearUserSessions(
+  secondaryStorage: SecondaryStorage,
+  userId: string,
+): Promise<void> {
+  const raw = await secondaryStorage.get(ACTIVE_SESSIONS_KEY(userId));
+  if (!raw) return;
+
+  let entries: ActiveSessionEntry[] = [];
+  try {
+    const parsed: unknown = typeof raw === "string" ? JSON.parse(raw) : raw;
+    if (Array.isArray(parsed)) entries = parsed as ActiveSessionEntry[];
+  } catch {
+    // A corrupt index is still worth clearing: leaving it would leave the
+    // tokens it names unreachable and undeletable.
+  }
+
+  for (const entry of entries) {
+    if (typeof entry?.token === "string") await secondaryStorage.delete(entry.token);
+  }
+  await secondaryStorage.delete(ACTIVE_SESSIONS_KEY(userId));
+}
+
 /**
  * In-memory equivalent for dev and test, mirroring how bootstrap falls back to
  * createMemoryKVStore(). Single-process only — it makes no attempt to be

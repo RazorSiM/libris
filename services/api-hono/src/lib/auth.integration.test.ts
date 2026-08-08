@@ -361,6 +361,64 @@ describe("sessions", () => {
     expect(await auth.api.getSession({ headers: new Headers({ cookie }) })).not.toBeNull();
   });
 
+  /**
+   * libris-jyp. Deleting a user must not leave their sessions live in Redis.
+   *
+   * `internalAdapter.deleteUser` (better-auth 1.6.25,
+   * dist/db/internal-adapter.mjs) deletes session ROWS, account rows and the
+   * user row, and touches secondary storage nowhere. `findSession` reads
+   * secondary storage FIRST and returns what it finds without re-checking that
+   * the user still exists — so the deleted account's session keeps resolving,
+   * with its cached user object attached, for the rest of its TTL.
+   *
+   * This calls `deleteUser` directly on purpose. `/admin/remove-user` calls
+   * `deleteUserSessions` on the line above it, which masks the defect
+   * completely, so a test that went through the endpoint would be green either
+   * way. The primitive is what every other caller reaches for — Better Auth's
+   * own `/delete-user` calls the pair in the opposite order — and it is what an
+   * upstream refactor would leave behind.
+   */
+  it("clears a deleted user's sessions from secondary storage", async () => {
+    const first = cookieFrom(await signUp("deleted@example.com"));
+    const second = cookieFrom(
+      await auth.api.signInEmail({
+        body: { email: "deleted@example.com", password: PASSWORD },
+        asResponse: true,
+      }),
+    );
+    const userId = (await auth.api.getSession({ headers: new Headers({ cookie: first }) }))!.user
+      .id;
+
+    // Both devices are live in secondary storage beforehand, so their absence
+    // afterwards means something.
+    expect(await secondaryStorage.get(tokenFrom(first))).toBeTruthy();
+    expect(await secondaryStorage.get(tokenFrom(second))).toBeTruthy();
+
+    await (await auth.$context).internalAdapter.deleteUser(userId);
+
+    // THE ASSERTIONS THAT FAIL WITHOUT THE user.delete HOOK: every one of these
+    // returned the deleted account's session.
+    expect(await secondaryStorage.get(tokenFrom(first))).toBeNull();
+    expect(await secondaryStorage.get(tokenFrom(second))).toBeNull();
+    expect(await secondaryStorage.get(`active-sessions-${userId}`)).toBeNull();
+    for (const cookie of [first, second]) {
+      expect(await auth.api.getSession({ headers: new Headers({ cookie }) })).toBeNull();
+    }
+  });
+
+  it("leaves other users' sessions alone when one account is deleted", async () => {
+    const doomed = cookieFrom(await signUp("doomed@example.com"));
+    const bystander = cookieFrom(await signUp("survivor@example.com"));
+    const doomedId = (await auth.api.getSession({ headers: new Headers({ cookie: doomed }) }))!.user
+      .id;
+
+    await (await auth.$context).internalAdapter.deleteUser(doomedId);
+
+    expect(
+      await auth.api.getSession({ headers: new Headers({ cookie: bystander }) }),
+    ).not.toBeNull();
+  });
+
   it("returns null for a cookie that was never issued", async () => {
     const session = await auth.api.getSession({
       headers: new Headers({ cookie: "better-auth.session_token=not-a-real-token" }),
