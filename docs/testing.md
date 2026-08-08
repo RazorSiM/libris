@@ -280,50 +280,51 @@ service containers and points both variables at them.
 
 Paths relative to `services/api-hono/`. Test DB uses in-memory PGlite with mocked BullMQ queues.
 
-| File                                                | Coverage                                                                                            |
-| --------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| `src/db/db.test.ts`                                 | Database schema, migrations, and query helpers                                                      |
-| `src/db/rows.test.ts`                               | `rowsOf()` / `rowCount()`: the postgres-js vs PGlite `db.execute()` result shapes                   |
-| `src/env.test.ts`                                   | Environment variable parsing (Redis URL, required vars, defaults)                                   |
-| `src/lib/epub/embed-metadata.test.ts`               | EPUB metadata embedding (OPF rewriting)                                                             |
-| `src/lib/hardcover/client.test.ts`                  | Hardcover GraphQL client (request shaping, response mapping)                                        |
-| `src/lib/hardcover/matching.test.ts`                | Hardcover ISBN / title matching for sync linkage                                                    |
-| `src/lib/hardcover/pull-status.test.ts`             | Pulling existing Hardcover reading statuses (DNF → paused mapping)                                  |
-| `src/lib/languages.test.ts`                         | Canonical ISO 639-1 language normalization (aliases, BCP-47, 639-2/3)                               |
-| `src/lib/metadata/clients/metadata-clients.test.ts` | External metadata API clients (MSW mocked)                                                          |
-| `src/lib/metadata/detect-language.test.ts`          | Content-based language detection (tinyld)                                                           |
-| `src/lib/metadata/extractors/epub.test.ts`          | EPUB metadata extraction (OPF parsing, cover detection)                                             |
-| `src/lib/metadata/sanitize.test.ts`                 | HTML stripping and metadata field sanitization                                                      |
-| `src/lib/progress-aggregate.test.ts`                | Per-device reading-progress aggregation                                                             |
-| `src/lib/reading-aggregate.test.ts`                 | Per-(user, book) reading aggregate derivation                                                       |
-| `src/lib/reading-status.test.ts`                    | Reading status derivation from KoSync progress                                                      |
-| `src/lib/socket-guard.test.ts`                      | WebSocket connection auth guard                                                                     |
-| `src/middleware/rate-limit.test.ts`                 | Per-IP tiered rate limiting (auth / keyCreation / general)                                          |
-| `src/routes/api/books.test.ts`                      | `/api/books/*` approve, delete, candidates (integration)                                            |
-| `src/routes/api/dashboard.test.ts`                  | `/api/dashboard` owner scoping of inbox count, byte volume and pipeline                             |
-| `src/routes/api/events.test.ts`                     | `/api/events` upgrade guard, connection cap, and closing sockets on revocation                      |
-| `src/routes/api/hardcover.test.ts`                  | `/api/hardcover/*` search, sync status, trigger, log (integration)                                  |
-| `src/routes/api/inbox.test.ts`                      | `/api/inbox/*` list, detail, approve, delete (integration)                                          |
-| `src/routes/api/library.test.ts`                    | `/api/library/*` list, detail, covers, downloads (integration)                                      |
-| `src/routes/api/settings.test.ts`                   | `/api/settings/*` get/update including combined status endpoint                                     |
-| `src/routes/opds.test.ts`                           | OPDS feed endpoints (integration, Hono test client + PGlite)                                        |
-| `src/services/cache.test.ts`                        | Route cache invalidation degrading, deferring and retrying when the KV store is down                |
-| `src/services/queue-diagnostics.test.ts`            | BullMQ aggregation for home/settings diagnostics                                                    |
-| `src/services/rate-limit.test.ts`                   | Tier limits, window anchoring, and the in-memory fallback used when Redis is down                   |
-| `src/services/settings.test.ts`                     | App settings service CRUD                                                                           |
-| `src/shared/checksum.test.ts`                       | File checksum helpers used by the ingestion pipeline                                                |
-| `src/shared/kosync-auth.test.ts`                    | KoSync header-based auth (`x-auth-user` / `x-auth-key`)                                             |
-| `src/shared/request-ip.test.ts`                     | Trusted-proxy chain validation, IPv6 `/64` buckets, and auth IP injection                           |
-| `src/shared/route-policy.test.ts`                   | Route auth policy lookup table (public/api-key/admin/opds/kosync)                                   |
-| `src/workers/book-detected.test.ts`                 | `BOOK_DETECTED` worker: checksum, format detect, dedup                                              |
-| `src/workers/book-fetch-metadata.test.ts`           | `BOOK_FETCH_METADATA` worker: Hardcover lookup, promote to review                                   |
-| `src/workers/book-parse-file.test.ts`               | `BOOK_PARSE_FILE` worker: metadata extraction orchestration                                         |
-| `src/workers/cleanup-orphaned-files.test.ts`        | Scheduled orphan-file cleanup worker                                                                |
-| `tests/last-admin-lock.postgres.test.ts`            | The last-admin row lock under real contention (needs PostgreSQL)                                    |
-| `tests/admin-subtree-http.postgres.test.ts`         | `/api/auth/admin/*` over HTTP: last-admin 409s and remove-user book reassignment (needs PostgreSQL) |
-| `tests/reading-status.test.ts`                      | Per-user `/api/reading-status/counts` and `/{status}` over HTTP                                     |
-| `tests/reading-status-isolation.postgres.test.ts`   | The same two endpoints on the postgres-js driver's result shape (needs PostgreSQL)                  |
-| `tests/redis-increment.test.ts`                     | Atomicity of both rate-limit increments (needs Redis)                                               |
+| File                                                | Coverage                                                                                               |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `src/db/db.test.ts`                                 | Database schema, migrations, and query helpers                                                         |
+| `src/db/rows.test.ts`                               | `rowsOf()` / `rowCount()`: the postgres-js vs PGlite `db.execute()` result shapes                      |
+| `src/env.test.ts`                                   | Environment variable parsing (Redis URL, required vars, defaults)                                      |
+| `src/lib/epub/embed-metadata.test.ts`               | EPUB metadata embedding (OPF rewriting)                                                                |
+| `src/lib/hardcover/client.test.ts`                  | Hardcover GraphQL client (request shaping, response mapping)                                           |
+| `src/lib/hardcover/matching.test.ts`                | Hardcover ISBN / title matching for sync linkage                                                       |
+| `src/lib/hardcover/pull-status.test.ts`             | Pulling existing Hardcover reading statuses (DNF → paused mapping)                                     |
+| `src/lib/languages.test.ts`                         | Canonical ISO 639-1 language normalization (aliases, BCP-47, 639-2/3)                                  |
+| `src/lib/metadata/clients/metadata-clients.test.ts` | External metadata API clients (MSW mocked)                                                             |
+| `src/lib/metadata/detect-language.test.ts`          | Content-based language detection (tinyld)                                                              |
+| `src/lib/metadata/extractors/epub.test.ts`          | EPUB metadata extraction (OPF parsing, cover detection)                                                |
+| `src/lib/metadata/sanitize.test.ts`                 | HTML stripping and metadata field sanitization                                                         |
+| `src/lib/progress-aggregate.test.ts`                | Per-device reading-progress aggregation                                                                |
+| `src/lib/reading-aggregate.test.ts`                 | Per-(user, book) reading aggregate derivation                                                          |
+| `src/lib/reading-status.test.ts`                    | Reading status derivation from KoSync progress                                                         |
+| `src/lib/socket-guard.test.ts`                      | WebSocket connection auth guard                                                                        |
+| `src/middleware/rate-limit.test.ts`                 | Per-IP tiered rate limiting (auth / keyCreation / general)                                             |
+| `src/routes/api/books.test.ts`                      | `/api/books/*` approve, delete, candidates (integration)                                               |
+| `src/routes/api/dashboard.test.ts`                  | `/api/dashboard` owner scoping of inbox count, byte volume and pipeline                                |
+| `src/routes/api/events.test.ts`                     | `/api/events` upgrade guard, connection cap, and closing sockets on revocation                         |
+| `src/routes/api/hardcover.test.ts`                  | `/api/hardcover/*` search, sync status, trigger, log (integration)                                     |
+| `src/routes/api/inbox.test.ts`                      | `/api/inbox/*` list, detail, approve, delete (integration)                                             |
+| `src/routes/api/library.test.ts`                    | `/api/library/*` list, detail, covers, downloads (integration)                                         |
+| `src/routes/api/settings.test.ts`                   | `/api/settings/*` get/update including combined status endpoint                                        |
+| `src/routes/opds.test.ts`                           | OPDS feed endpoints (integration, Hono test client + PGlite)                                           |
+| `src/services/cache.test.ts`                        | Route cache invalidation degrading, deferring and retrying when the KV store is down                   |
+| `src/services/cache-invalidation.test.ts`           | A real mutation evicts the cached OPDS/stats entry, and cached mounts still match invalidated prefixes |
+| `src/services/queue-diagnostics.test.ts`            | BullMQ aggregation for home/settings diagnostics                                                       |
+| `src/services/rate-limit.test.ts`                   | Tier limits, window anchoring, and the in-memory fallback used when Redis is down                      |
+| `src/services/settings.test.ts`                     | App settings service CRUD                                                                              |
+| `src/shared/checksum.test.ts`                       | File checksum helpers used by the ingestion pipeline                                                   |
+| `src/shared/kosync-auth.test.ts`                    | KoSync header-based auth (`x-auth-user` / `x-auth-key`)                                                |
+| `src/shared/request-ip.test.ts`                     | Trusted-proxy chain validation, IPv6 `/64` buckets, and auth IP injection                              |
+| `src/shared/route-policy.test.ts`                   | Route auth policy lookup table (public/api-key/admin/opds/kosync)                                      |
+| `src/workers/book-detected.test.ts`                 | `BOOK_DETECTED` worker: checksum, format detect, dedup                                                 |
+| `src/workers/book-fetch-metadata.test.ts`           | `BOOK_FETCH_METADATA` worker: Hardcover lookup, promote to review                                      |
+| `src/workers/book-parse-file.test.ts`               | `BOOK_PARSE_FILE` worker: metadata extraction orchestration                                            |
+| `src/workers/cleanup-orphaned-files.test.ts`        | Scheduled orphan-file cleanup worker                                                                   |
+| `tests/last-admin-lock.postgres.test.ts`            | The last-admin row lock under real contention (needs PostgreSQL)                                       |
+| `tests/admin-subtree-http.postgres.test.ts`         | `/api/auth/admin/*` over HTTP: last-admin 409s and remove-user book reassignment (needs PostgreSQL)    |
+| `tests/reading-status.test.ts`                      | Per-user `/api/reading-status/counts` and `/{status}` over HTTP                                        |
+| `tests/reading-status-isolation.postgres.test.ts`   | The same two endpoints on the postgres-js driver's result shape (needs PostgreSQL)                     |
+| `tests/redis-increment.test.ts`                     | Atomicity of both rate-limit increments (needs Redis)                                                  |
 
 ### Web Unit Test Files
 

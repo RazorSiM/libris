@@ -2,6 +2,26 @@ import { createMiddleware } from "hono/factory";
 import type { AppVariables } from "../context.js";
 
 /**
+ * Brand stamped on every middleware {@link cachedRoute} returns.
+ *
+ * Hono keeps each registered handler in `app.routes`, so this makes the set of
+ * genuinely cached paths discoverable from the assembled router rather than
+ * something a reader has to reconstruct by grepping. `cache-invalidation.test.ts`
+ * walks that list and checks it against `CACHED_ROUTE_PREFIXES`, which is what
+ * stops "what is cached" and "what is invalidated" drifting apart again
+ * (libris-kej).
+ */
+export const CACHED_ROUTE_MARKER: unique symbol = Symbol.for("libris.cachedRoute");
+
+/** True when `handler` is a middleware produced by {@link cachedRoute}. */
+export function isCachedRouteHandler(handler: unknown): boolean {
+  return (
+    typeof handler === "function" &&
+    (handler as unknown as Record<symbol, unknown>)[CACHED_ROUTE_MARKER] === true
+  );
+}
+
+/**
  * Route-level caching middleware backed by KVStore.
  * Replaces Nitro's `defineCachedHandler`.
  *
@@ -9,7 +29,7 @@ import type { AppVariables } from "../context.js";
  * to prevent cross-user data leakage.
  */
 export function cachedRoute(opts: { maxAge: number }) {
-  return createMiddleware<{ Variables: AppVariables }>(async (c, next) => {
+  const middleware = createMiddleware<{ Variables: AppVariables }>(async (c, next) => {
     // Skip caching when userId is missing to prevent cross-user cache sharing
     const userId = c.get("userId");
     if (!userId) {
@@ -73,4 +93,6 @@ export function cachedRoute(opts: { maxAge: number }) {
       headers: newHeaders,
     });
   });
+
+  return Object.assign(middleware, { [CACHED_ROUTE_MARKER]: true as const });
 }
