@@ -16,9 +16,9 @@ The home dashboard is the landing page after login. It summarizes the library, s
 Four cards sit at the top of the page:
 
 - **Total Books** -- The number of organized books in the library. The catalog is shared, so this is the count across all users.
-- **Awaiting Review** -- The number of inbox books waiting for review. This card is a link to `/inbox`.
-- **Processing** -- Books currently moving through the ingestion pipeline. The icon spins while the count is above zero.
-- **Library Size** -- Total disk space used by the organized book files.
+- **Awaiting Review** -- The number of inbox books waiting for review. Books you uploaded, not everyone's; admins see the whole install. This card is a link to `/inbox`.
+- **Processing** -- Books currently moving through the ingestion pipeline. Your own books only, matching Awaiting Review; admins see the install-wide count. The icon spins while the count is above zero.
+- **Library Size** -- Total disk space used by the organized book files. Inbox and review uploads are excluded: they are private to whoever uploaded them, so their size is not published to everyone.
 
 ### Currently Reading
 
@@ -34,7 +34,7 @@ The section is hidden when no books have been added.
 
 ### Pipeline Status
 
-The Pipeline Status section appears only when there is pipeline or failed-job activity -- that is, when any ingestion queue has active, waiting, delayed, or failed jobs. It is hidden when the pipeline is idle.
+The Pipeline Status section is **admin-only**, and appears only when there is pipeline or failed-job activity -- that is, when any ingestion queue has active, waiting, delayed, or failed jobs. It is hidden when the pipeline is idle, and always hidden for non-admins: queue counts describe the whole install, including work on books another person uploaded and has not yet approved.
 
 A summary row shows counts for **Active**, **Waiting**, **Delayed**, and **Failed** jobs. Below it, a per-queue breakdown lists each queue (Detection, Parsing, Metadata, Organize) that has active or failed jobs.
 

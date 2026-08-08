@@ -1,9 +1,13 @@
 /**
- * Owner-scoping of the dashboard's pre-approval counts.
+ * Owner-scoping of everything on the dashboard that describes pre-approval work.
  *
- * The organized library is shared — `recentlyAdded` and `stats` are deliberately
- * install-wide. Inbox and review books are not: they are pre-approval uploads,
- * and every other inbox surface refuses to show one the caller does not own.
+ * The organized library is shared — `recentlyAdded`, `totalBooks`,
+ * `totalAuthors`, `topGenre` and `totalFileSize` are deliberately install-wide,
+ * because organized books belong to everyone. Inbox and review books are not:
+ * they are pre-approval uploads, and every other inbox surface refuses to show
+ * one the caller does not own. `inboxCount`, `totalFileSize`'s exclusion of
+ * inbox/review files, `processingCount` and `pipeline` all follow from that
+ * split.
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import type { PGlite } from "@electric-sql/pglite";
@@ -18,8 +22,43 @@ vi.mock("../../services/redis.js", () => ({
   getSharedRedis: () => null,
 }));
 
+/**
+ * Queue doubles whose per-queue counts and in-flight book ids the tests drive.
+ *
+ * The install-wide counts and the job payloads have to come from the same
+ * fixture, because the whole point of libris-44c is that the first is not a
+ * safe substitute for the second when the caller is not an admin.
+ */
+const queueFixture = vi.hoisted(() => {
+  const zero = { waiting: 0, active: 0, completed: 0, failed: 0, delayed: 0, paused: 0 };
+  const state: Record<string, { counts: typeof zero; bookIds: string[] }> = {};
+
+  return {
+    reset() {
+      for (const key of Object.keys(state)) delete state[key];
+    },
+    set(name: string, opts: { counts?: Partial<typeof zero>; bookIds?: string[] }) {
+      state[name] = { counts: { ...zero, ...opts.counts }, bookIds: opts.bookIds ?? [] };
+    },
+    queue(name: string) {
+      return {
+        name,
+        add: async () => ({}),
+        getJobCounts: async () => state[name]?.counts ?? zero,
+        getJobs: async () => (state[name]?.bookIds ?? []).map((bookId) => ({ data: { bookId } })),
+      };
+    },
+  };
+});
+
 vi.mock("../../services/queue.js", () => ({
-  getQueues: () => ({ close: async () => {} }),
+  getQueues: () => ({
+    bookDetected: queueFixture.queue("book-detected"),
+    bookParseFile: queueFixture.queue("book-parse-file"),
+    bookFetchMetadata: queueFixture.queue("book-fetch-metadata"),
+    bookOrganize: queueFixture.queue("book-organize"),
+    close: async () => {},
+  }),
   getAllQueues: () => new Map(),
   registerQueue: () => {},
 }));
@@ -66,17 +105,21 @@ function seedUserKey(name: string, role: "user" | "admin" = "user") {
 }
 
 function createTestApp() {
+  // Same doubles the module mock hands to getPipelineQueues(), so the
+  // owner-scoped path and the install-wide path see one consistent world.
+  const queues = {
+    bookDetected: queueFixture.queue("book-detected"),
+    bookParseFile: queueFixture.queue("book-parse-file"),
+    bookFetchMetadata: queueFixture.queue("book-fetch-metadata"),
+    bookOrganize: queueFixture.queue("book-organize"),
+    close: async () => {},
+  };
+
   return createApp({
     services: {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       db: db as any,
-      queues: {
-        bookDetected: { add: async () => ({}) },
-        bookParseFile: { add: async () => ({}) },
-        bookFetchMetadata: { add: async () => ({}) },
-        bookOrganize: { add: async () => ({}) },
-        close: async () => {},
-      },
+      queues,
       redisStorage: createMemoryKVStore(),
       cacheStorage: createMemoryKVStore(),
       auth: createTestAuth(db, TEST_ENV),
@@ -99,6 +142,7 @@ afterAll(async () => {
 beforeEach(async () => {
   await db.delete(schema.bookFiles);
   await db.delete(schema.books);
+  queueFixture.reset();
 });
 
 describe("GET /api/dashboard", () => {
@@ -157,5 +201,103 @@ describe("GET /api/dashboard", () => {
 
     expect(response.status).toBe(200);
     expect((await response.json()).inboxCount).toBe(2);
+  });
+
+  it("leaves other users' pre-approval uploads out of the byte total", async () => {
+    const alice = await seedUserKey("Bytes Alice");
+    const bob = await seedUserKey("Bytes Bob");
+    const admin = await seedUserKey("Bytes Admin", "admin");
+
+    const [pending, shared] = await db
+      .insert(schema.books)
+      .values([
+        { status: "review", title: "Alice Pending Upload", createdBy: alice.userId },
+        { status: "organized", title: "Shared Organized", createdBy: alice.userId },
+      ])
+      .returning({ id: schema.books.id });
+
+    await db.insert(schema.bookFiles).values([
+      {
+        bookId: pending!.id,
+        format: "epub",
+        originalName: "pending.epub",
+        fileSize: 5_000_000,
+      },
+      {
+        bookId: shared!.id,
+        format: "epub",
+        originalName: "shared.epub",
+        fileSize: 1_000_000,
+      },
+    ]);
+
+    const { app } = createTestApp();
+    const read = async (key: string) =>
+      (await (
+        await app.request("/api/dashboard", { headers: { Authorization: `Bearer ${key}` } })
+      ).json()) as {
+        stats: { totalFileSize: number; totalBooks: number };
+      };
+
+    // Pre-fix this was 6_000_000 for everyone: a bare sum over book_files told
+    // Bob exactly how many bytes of unapproved uploads Alice was sitting on.
+    expect((await read(bob.rawKey)).stats.totalFileSize).toBe(1_000_000);
+
+    // "The shared library", not "mine": the number means the same thing for
+    // the owner of the pending upload and for an admin, and it stays coherent
+    // with totalBooks beside it, which has always counted organized rows only.
+    expect((await read(alice.rawKey)).stats.totalFileSize).toBe(1_000_000);
+    expect((await read(admin.rawKey)).stats.totalFileSize).toBe(1_000_000);
+    expect((await read(bob.rawKey)).stats.totalBooks).toBe(1);
+  });
+
+  it("counts only the caller's own books as processing, and hides the queue breakdown", async () => {
+    const alice = await seedUserKey("Pipeline Alice");
+    const bob = await seedUserKey("Pipeline Bob");
+    const admin = await seedUserKey("Pipeline Admin", "admin");
+
+    const [aliceOne, aliceTwo, bobBook] = await db
+      .insert(schema.books)
+      .values([
+        { status: "review", title: "Alice In Flight One", createdBy: alice.userId },
+        { status: "inbox", title: "Alice In Flight Two", createdBy: alice.userId },
+        { status: "inbox", title: "Bob In Flight", createdBy: bob.userId },
+      ])
+      .returning({ id: schema.books.id });
+
+    // Three books in flight install-wide: two of Alice's, one of Bob's.
+    queueFixture.set("book-parse-file", {
+      counts: { waiting: 1, active: 1 },
+      bookIds: [aliceOne!.id, bobBook!.id],
+    });
+    queueFixture.set("book-fetch-metadata", {
+      counts: { delayed: 1 },
+      // Also re-lists Alice's first book: one book queued at two stages must
+      // not be counted twice.
+      bookIds: [aliceOne!.id, aliceTwo!.id],
+    });
+
+    const { app } = createTestApp();
+    const read = async (key: string) =>
+      (await (
+        await app.request("/api/dashboard", { headers: { Authorization: `Bearer ${key}` } })
+      ).json()) as {
+        stats: { processingCount: number };
+        pipeline: Record<string, { waiting: number; active: number; failed: number }>;
+      };
+
+    const bobBody = await read(bob.rawKey);
+    // Pre-fix: the full per-queue breakdown, including other users' failures.
+    expect(bobBody.pipeline).toEqual({});
+    // Pre-fix: 3 — the install-wide sum of waiting + active + delayed, which
+    // told Bob that two books he cannot see were being processed.
+    expect(bobBody.stats.processingCount).toBe(1);
+
+    expect((await read(alice.rawKey)).stats.processingCount).toBe(2);
+
+    // The admin still gets the install-wide diagnostics the settings page needs.
+    const adminBody = await read(admin.rawKey);
+    expect(adminBody.stats.processingCount).toBe(3);
+    expect(adminBody.pipeline["book-parse-file"]).toMatchObject({ waiting: 1, active: 1 });
   });
 });
