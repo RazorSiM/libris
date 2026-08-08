@@ -108,10 +108,28 @@ Sign-in, sign-out, password and email changes, the admin plugin and app-password
 
 Request-path Redis commands have a 250 ms bound. If Redis is unavailable, the
 `auth` and `keyCreation` tiers fall back to an in-memory limiter and the `general`
-tier fails open. Existing browser sessions fail closed until Redis recovers;
-`/api/health` remains responsive and reports the degraded dependency. Set
+tier fails open. Existing browser sessions keep working: session reads degrade to
+a miss and Better Auth falls through to the `sessions` table in Postgres. Cached
+route responses degrade to a miss too, and the cache invalidation that follows a
+write is deferred rather than raised, so a mutation still returns success — see
+_Route cache_ below. `/api/health` remains responsive and reports the degraded
+dependency. Set
 `TRUST_PROXY_HEADERS=1` with `LIBRIS_TRUSTED_PROXIES` behind a reverse proxy so
 limits key off the real client IP. See _Reverse Proxy_ below.
+
+### Route Cache
+
+OPDS feeds and `/api/stats` are cached in Redis per user for 60-120 seconds, and
+routes that mutate the library clear the affected prefixes after their database
+write commits.
+
+Because that write has already committed, a failed invalidation is never
+reported to the caller — it would turn a successful mutation into a 500, and a
+client that retried would apply the change twice. The failure is compensated
+instead: the prefix is remembered and retried by the next invalidation on the
+same store and by a 5-second timer, and every entry carries a TTL, so the worst
+case is a response up to `maxAge` (at most 120 s) stale. Each deferral logs at
+`warn` under the `cache` component.
 
 ### OpenTelemetry
 
