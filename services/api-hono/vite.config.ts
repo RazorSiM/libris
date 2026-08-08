@@ -107,6 +107,19 @@ export default defineConfig({
       test: {
         command: "vp test run",
         dependsOn: ["generate:version"],
+        // Vite Task passes only a whitelist of environment variables through to
+        // a task (HOME/PATH/CI/NODE_OPTIONS and a few more); anything else is
+        // dropped so the cache fingerprint stays deterministic. Without this
+        // line the CI job's LIBRIS_TEST_POSTGRES_URL / LIBRIS_TEST_REDIS_URL
+        // never reached vitest, tests/backing-services.ts fell back to the
+        // local docker-compose ports (5433/6380), and the six suites that need
+        // a real server failed with "unreachable" on a runner where the service
+        // containers were healthy the whole time.
+        //
+        // Declared under `env` rather than `untrackedEnv` on purpose: pointing
+        // the suite at a different database changes what it proves, so it must
+        // invalidate the cache.
+        env: ["LIBRIS_TEST_POSTGRES_URL", "LIBRIS_TEST_REDIS_URL"],
         // Tests touch /tmp/libris-test-* paths configured in test.env above;
         // those are absolute so they're outside auto-tracking, but exclude
         // generated/ for cleanliness.
