@@ -670,6 +670,65 @@ describe("closing event sockets when the credential behind them dies", () => {
     expect(koboSocket.closedFor).toContain("account removed");
   });
 
+  it("closes the caller's own socket on a password change, and re-issues their cookie", async () => {
+    /**
+     * The trap behind the pwchange regression, pinned where it actually lives.
+     *
+     * `POST /change-password` with `revokeOtherSessions` is NOT "delete the
+     * others" — Better Auth 1.6.25 (`dist/api/routes/update-user.mjs`) deletes
+     * EVERY session for the user, the caller's included, and then creates a
+     * replacement and rotates the cookie:
+     *
+     *     await ctx.context.internalAdapter.deleteUserSessions(session.user.id);
+     *     const newSession = await ctx.context.internalAdapter.createSession(...);
+     *     await setSessionCookie(ctx, { session: newSession, user: session.user });
+     *
+     * `deleteUserSessions` goes through `deleteManyWithHooks`, which fires
+     * `session.delete.after` once per deleted row — so the hook above closes the
+     * CALLER'S socket as "session revoked" alongside everybody else's, while the
+     * same response hands that caller a perfectly good new cookie.
+     *
+     * That is why the SPA cannot read a 4401 as a verdict on the user
+     * (`~/lib/session-rotation`): here is the proof that the close and a live
+     * session arrive together. If a Better Auth upgrade ever makes "revoke
+     * others" mean only the others, this test is what says so.
+     */
+    const here = cookieFrom(await signUp("rotating@example.com"));
+    const elsewhere = cookieFrom(
+      await auth.api.signInEmail({
+        body: { email: "rotating@example.com", password: PASSWORD },
+        asResponse: true,
+      }),
+    );
+    const userId = (await auth.api.getSession({ headers: new Headers({ cookie: here }) }))!.user.id;
+    const hereSocket = fakeSocket(userId, tokenFrom(here));
+    const elsewhereSocket = fakeSocket(userId, tokenFrom(elsewhere));
+
+    const response = await auth.api.changePassword({
+      body: {
+        currentPassword: PASSWORD,
+        newPassword: "rotated-password-please",
+        revokeOtherSessions: true,
+      },
+      headers: new Headers({ cookie: here }),
+      asResponse: true,
+    });
+
+    // Both devices lose their socket, and the caller's loss says "revoked" —
+    // exactly what a ban says. Nothing on the wire distinguishes them.
+    expect(elsewhereSocket.closedFor).toEqual(["session revoked"]);
+    expect(hereSocket.closedFor).toEqual(["session revoked"]);
+
+    // And yet the caller is still signed in, on the cookie this very response
+    // set. The old one is gone; the new one resolves to the same person.
+    const rotated = cookieFrom(response);
+    expect(tokenFrom(rotated)).not.toBe(tokenFrom(here));
+    expect(await auth.api.getSession({ headers: new Headers({ cookie: here }) })).toBeNull();
+    expect(
+      (await auth.api.getSession({ headers: new Headers({ cookie: rotated }) }))?.user.id,
+    ).toBe(userId);
+  });
+
   it("leaves the sockets alone when the revocation itself is refused", async () => {
     // The libris-59m.5 trap, restated for this hook: after-hooks run for a
     // REJECTED call too. Database hooks fire on the write rather than on the

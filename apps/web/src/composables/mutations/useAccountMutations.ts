@@ -1,5 +1,6 @@
 import { useMutation, useQueryCache } from "@pinia/colada";
 import { authClient, unwrapAuthResult } from "~/lib/auth-client";
+import { trackSessionRotation } from "~/lib/session-rotation";
 import { SESSIONS_KEY } from "./useSessionMutations";
 
 /**
@@ -48,15 +49,34 @@ export function useChangePassword() {
   const queryCache = useQueryCache();
 
   return useMutation({
-    mutation: async (vars: ChangePasswordVars) =>
-      unwrapAuthResult(await authClient.changePassword(vars)),
+    /**
+     * Wrapped in trackSessionRotation() because this request DELETES THIS TAB'S
+     * OWN SESSION ROW and issues a replacement in the same breath (see
+     * `~/lib/session-rotation`). The server's `session.delete` hook closes this
+     * tab's event socket with 4401 on the way out, and without the marker the
+     * socket plugin reads that as "you have been signed out" and signs the user
+     * out of the browser they just changed their password in.
+     *
+     * Marked for both settings of `revokeOtherSessions`, deliberately. Which
+     * flag values rotate the token is Better Auth's business and has changed
+     * before; "changing your password is the app's own credential rotation" is
+     * the rule that stays true across upgrades, and a marker set for a request
+     * that turns out not to rotate anything costs nothing.
+     *
+     * `authClient.changePassword(vars)` is called first and the resulting
+     * promise handed over, so the marker is set while the request is on the
+     * wire — which is the only moment it can be set, since the close frame
+     * arrives before the response.
+     */
+    mutation: (vars: ChangePasswordVars) =>
+      trackSessionRotation(authClient.changePassword(vars).then(unwrapAuthResult)),
     /**
      * The device list is rendered directly below this form, so it is on screen
      * at the moment it becomes wrong.
      *
-     * A password change rotates the current session's token even without
-     * `revokeOtherSessions`, and with it every other session is deleted. Both
-     * halves of the card go stale: the rows, and the "This browser" badge,
+     * With `revokeOtherSessions`, every session is deleted and this browser's
+     * is re-issued on a new token. Both halves of the card go stale: the rows,
+     * and the "This browser" badge,
      * which is derived by comparing listed tokens against the current one.
      * Leaving it means offering "Sign out" buttons for devices that are already
      * out — which then fail, and the user cannot tell whether the revocation

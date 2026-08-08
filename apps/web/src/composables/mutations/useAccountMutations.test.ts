@@ -7,13 +7,17 @@
  *
  * - updateUser answers `{ status: true }`, so the sidebar and the settings
  *   badge keep the old name until the session is read again;
- * - changePassword rotates the current session's token and, with
- *   revokeOtherSessions, deletes every other session — while the device list
- *   sits on screen directly below the form, still offering "Sign out" buttons
- *   for devices that are already out.
+ * - changePassword with revokeOtherSessions deletes every session the account
+ *   has and re-issues this one on a new token — while the device list sits on
+ *   screen directly below the form, still offering "Sign out" buttons for
+ *   devices that are already out.
  *
  * These assert the invalidation, not the request, because the invalidation is
  * the part that was missing.
+ *
+ * They also assert that the request declares itself a session rotation
+ * (`~/lib/session-rotation`), which is what keeps the event socket's 4401 from
+ * signing the user out of the browser they changed their password in.
  */
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
@@ -43,7 +47,13 @@ vi.mock("~/lib/auth-client", () => ({
     changePassword: (...args: unknown[]) => changePassword(...args),
     updateUser: (...args: unknown[]) => updateUser(...args),
   },
-  unwrapAuthResult: (result: { data: unknown }) => result.data,
+  // Faithful to the real one: a Better Auth client call resolves with
+  // `{ data, error }` rather than throwing, and unwrapping is what turns a
+  // refused request into a rejected mutation.
+  unwrapAuthResult: (result: { data: unknown; error?: { message?: string } | null }) => {
+    if (result.error) throw new Error(result.error.message ?? "Request failed");
+    return result.data;
+  },
 }));
 
 const refresh = vi.fn();
@@ -51,6 +61,8 @@ Object.assign(globalThis, { useAuth: () => ({ refresh }) });
 
 const { useChangePassword, useUpdateProfile } = await import("./useAccountMutations");
 const { SESSIONS_KEY } = await import("./useSessionMutations");
+const { isRotatingSession, sessionRotationSettled, resetSessionRotation } =
+  await import("~/lib/session-rotation");
 
 /** The options the composable handed useMutation. */
 function optionsOf(composable: () => unknown): MutationOptions {
@@ -63,6 +75,7 @@ function optionsOf(composable: () => unknown): MutationOptions {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  resetSessionRotation();
   changePassword.mockResolvedValue({ data: { status: true } });
   updateUser.mockResolvedValue({ data: { status: true } });
 });
@@ -92,6 +105,47 @@ describe("useChangePassword()", () => {
 
     expect(invalidateQueries).toHaveBeenCalledWith({ key: ["account", "sessions"] });
     expect(SESSIONS_KEY).toEqual(["account", "sessions"]);
+  });
+
+  it("declares the request a session rotation while it is still on the wire", async () => {
+    // The server deletes this tab's own session row to re-issue it, and the
+    // event socket's 4401 arrives BEFORE the response that carries the
+    // replacement cookie. Unless the marker is already set by then, the socket
+    // plugin reads that close as a revocation and signs the user out of the
+    // browser they just changed their password in.
+    let answer: (value: unknown) => void = () => {};
+    changePassword.mockReturnValue(
+      new Promise((resolve) => {
+        answer = resolve;
+      }),
+    );
+    const options = optionsOf(useChangePassword);
+
+    const inFlight = options.mutation({
+      currentPassword: "old",
+      newPassword: "new",
+      revokeOtherSessions: true,
+    });
+
+    expect(isRotatingSession()).toBe(true);
+
+    answer({ data: { status: true } });
+    await inFlight;
+
+    await expect(sessionRotationSettled()).resolves.toBe(true);
+  });
+
+  it("claims no rotation when the change is refused", async () => {
+    // A wrong current password rotates nothing, so a 4401 arriving around it is
+    // a real revocation and must still sign the tab out.
+    changePassword.mockResolvedValue({ data: null, error: { message: "Invalid password" } });
+    const options = optionsOf(useChangePassword);
+
+    await expect(
+      options.mutation({ currentPassword: "wrong", newPassword: "new", revokeOtherSessions: true }),
+    ).rejects.toBeInstanceOf(Error);
+
+    await expect(sessionRotationSettled()).resolves.toBe(false);
   });
 
   it("invalidates even when the change fails", () => {

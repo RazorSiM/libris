@@ -5,6 +5,7 @@ import { useWebSocket } from "@vueuse/core";
 import { useAuthStore } from "~/stores/auth";
 import { reportSessionInvalidated } from "~/lib/session-invalidation";
 import { reportSessionRescoped } from "~/lib/session-rescope";
+import { isRotatingSession, sessionRotationSettled } from "~/lib/session-rotation";
 import type { ServerEvent, EventHandler, ServerEventsApi } from "~/types/server-events";
 import type { AppConfig } from "~/composables/useLibrisConfig";
 
@@ -72,13 +73,20 @@ function createServerEventsApi(config: AppConfig): ServerEventsApi {
    * out". Only the application-range 4401 is a verdict on the credential, and
    * it is the only thing that latches this.
    *
+   * A 4401 is latched here BEFORE it is interpreted, because @vueuse/core reads
+   * the retries predicate on the next line of its own onclose and there is no
+   * later moment at which the dial can be claimed. The one interpretation that
+   * releases it again is a rotation this tab asked for — see
+   * resolveOwnRotation().
+   *
    * Cleared by the identity watcher below: the next identity to sign in on this
    * tab gets a socket that reconnects like any other.
    */
   let revoked = false;
 
   /**
-   * Set between a 4409 and the refreshed session that answers it (libris-cxy).
+   * Set between a 4409 — or a 4401 this tab's own rotation caused — and the
+   * refreshed session that answers it (libris-cxy).
    *
    * While it is set, @vueuse/core's own reconnect is switched off and THIS
    * module owns the re-dial. That is the whole double-dial fix, and it is not
@@ -181,10 +189,59 @@ function createServerEventsApi(config: AppConfig): ServerEventsApi {
         return;
       }
       if (event.code !== SESSION_REVOKED_CLOSE_CODE) return;
+      // Latched first either way: whichever branch runs, @vueuse/core must not
+      // schedule a dial of its own from the next line of its onclose. The
+      // rotation branch clears it again once it knows what it is dialling with.
       revoked = true;
+
+      // The one 4401 that is not a revocation: this tab is in the middle of
+      // replacing its own credential, and the row the server just deleted is
+      // the one it is replacing (~/lib/session-rotation). Deciding here would
+      // sign the user out of the browser they changed their password in.
+      if (isRotatingSession()) {
+        // Same one-at-a-time rule as the re-scope path, and the same flag,
+        // because from here on this IS the re-scope path.
+        if (rescoping) return;
+        rescoping = true;
+        void resolveOwnRotation();
+        return;
+      }
+
       reportSessionInvalidated();
     },
   });
+
+  /**
+   * Answer a 4401 that landed while this tab was rotating its own credential.
+   *
+   * Waiting on the rotation rather than probing the session: the close frame is
+   * written before the response that carries the new cookie, so a probe fired
+   * from the close handler would ask with the dead cookie and be told, quite
+   * correctly, that there is no session. The rotation's own promise is the only
+   * thing that resolves after the browser has applied the replacement.
+   *
+   * If the rotation FAILED there is no new cookie, so the 4401 stands and goes
+   * down the ordinary sign-out path with the store untouched — which matters,
+   * because installSessionRecovery() declines to act for someone it already
+   * believes is signed out.
+   */
+  async function resolveOwnRotation(): Promise<void> {
+    const rotated = await sessionRotationSettled();
+    if (!rotated) {
+      rescoping = false;
+      reportSessionInvalidated();
+      return;
+    }
+
+    // The credential this tab holds is the NEW one. Nothing about it is
+    // revoked, and leaving the latch set would suppress the reconnect for an
+    // ordinary dropped connection on every socket after this.
+    revoked = false;
+    // From here it is exactly a re-scope: catch the store up with the session
+    // the server re-issued, then dial once — or not at all, if the refresh
+    // finds nobody. resyncThenRedial() owns clearing `rescoping`.
+    await resyncThenRedial();
+  }
 
   /**
    * Catch the app up with the session the server just re-scoped against, then

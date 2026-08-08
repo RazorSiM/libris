@@ -151,7 +151,7 @@ The socket is **keyed on `userId`**, not opened once per tab. The server binds a
 
 Reconnection is unbounded (`retries` never gives up, backoff doubles to a 30s ceiling) with **two** exceptions, decided by the close code the plugin reads in `onDisconnected`:
 
-- **`4401` — terminal.** The credential behind the socket is gone: banned, revoked from another device, expired. The plugin stops re-dialling and reports into `reportSessionInvalidated()`, so the user gets the same sign-out-and-redirect as a 401 from either HTTP transport instead of a page that quietly stops updating. Without this a banned tab re-dialled every 30s for as long as it stayed open and explained nothing.
+- **`4401` — terminal, unless this tab caused it.** The credential behind the socket is gone: banned, revoked from another device, expired. The plugin stops re-dialling and reports into `reportSessionInvalidated()`, so the user gets the same sign-out-and-redirect as a 401 from either HTTP transport instead of a page that quietly stops updating. Without this a banned tab re-dialled every 30s for as long as it stayed open and explained nothing. The exception is a tab rotating its own session token — see below.
 - **`4409` — refresh, then re-dial, and the plugin owns the dial.** The session is fine; only this socket's scope is stale (the account was promoted or demoted, or the cookie now resolves to somebody else). The server wants a fresh socket it can rebind, not a sign-out. This is handled explicitly rather than by falling through, because "any 4xxx means signed out" is precisely the shortcut that made a promotion log the user out. See below.
 - **Everything else — reconnect.** 1006 from a dropped connection, 1001/1012 from a restart or proxy timeout, 1000 from a missed heartbeat. Treating any of these as terminal would sign people out over a flaky network, which is worse than the bug the 4401 handling fixes.
 
@@ -171,6 +171,22 @@ Adding that refresh introduces a race, and the fix for it is the `rescoping` fla
 `retries: () => !revoked && !rescoping` therefore hands the dial to the plugin for this one close, and the plugin dials **once**, after the refresh, and only if it is the one that should: not when the identity moved (the watcher's dial covers it), not when the refresh found no session, and not when a `4401` overtook it. A re-scope re-dial is consequently immediate rather than waiting out the 1s first backoff step — the delay curve still governs ordinary transport drops, where `retries` resets to 0 on every successful open and the 30s ceiling is only reached after six consecutive failed dials.
 
 Still uncovered, and deliberately: the Pinia Colada query cache is not purged on an identity change detected this way, and an identity swap that never touches the socket (a second tab signing in as someone else) leaves the first tab's HTTP requests succeeding as the new user with no signal at all. Only the socket-triggered case is handled here.
+
+### The `4401` a tab causes itself
+
+Changing your password with "sign out everywhere else" ticked is not implemented as "revoke the others". Better Auth's `POST /change-password` deletes **every** session for the account — the caller's included — and then creates a replacement and rotates the cookie in the same response. The delete fires the API's `session.delete` database hooks, so the server closes the socket of the browser that made the request, as `session revoked`. Read at face value that signed the user out of the tab they had just changed their password in: the account panel vanished and the form was left disabled with the new password still in it.
+
+Nothing on the wire distinguishes that close from a ban, and the client cannot find out by asking. The close frame is written while the queued after-hooks drain, which happens **before** the HTTP response is returned (`runWithAdapter` in Better Auth's `dist/auth/base.mjs`), so a session probe fired from the close handler goes out carrying the old cookie and is told, correctly, that there is no session. Every evidence-based check races the rotation it is trying to observe.
+
+What is unambiguous is causation: the tab asked for this. `src/lib/session-rotation.ts` is the third seam beside `session-invalidation.ts` and `session-rescope.ts`, and it records exactly that. `useChangePassword()` wraps its request in `trackSessionRotation()` — with the request already on the wire, since the close arrives before the response — and the plugin, on a `4401`, checks `isRotatingSession()` first:
+
+- **No rotation in flight** — the `4401` means what it says. Unchanged: stop dialling, `reportSessionInvalidated()`.
+- **A rotation in flight** — wait for it (`sessionRotationSettled()`), then treat the close as a re-scope: refresh the session, and dial once on the new cookie. The `revoked` latch is set synchronously first, so `@vueuse/core` never schedules a competing dial, and released once the replacement is known.
+- **A rotation that failed** — a refused change rotates nothing, so there is no new cookie coming. The `4401` stands and goes down the ordinary sign-out path with the store untouched, which matters because `installSessionRecovery()` declines to act for someone it already believes is signed out.
+
+The direction of failure is deliberate. A rotation that forgets to register produces a spurious sign-out — visible and harmless. Nothing here can make a genuine revocation be ignored beyond the window of a request the tab itself issued. `SESSION_ROTATION_GRACE_MS` (2s) keeps the window open just past the response for the pathological case where the browser dispatches the fetch resolution before the close event; a real revocation landing inside it is still resolved correctly, because the refresh finds no session and the plugin stops.
+
+The server-side half is pinned in `services/api-hono/src/lib/auth.integration.test.ts` ("closes the caller's own socket on a password change, and re-issues their cookie"), which asserts that the close and a working replacement cookie arrive together. If a Better Auth upgrade ever makes "revoke others" mean only the others, that test is what says so.
 
 ## Keyboard Shortcuts
 

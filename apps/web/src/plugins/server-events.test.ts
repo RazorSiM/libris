@@ -45,6 +45,7 @@ const {
 const { useAuthStore } = await import("~/stores/auth");
 const { setSessionRecovery } = await import("~/lib/session-invalidation");
 const { setSessionRescope } = await import("~/lib/session-rescope");
+const { trackSessionRotation, resetSessionRotation } = await import("~/lib/session-rotation");
 
 /** Run setupServerEvents and hand back whatever it provided. */
 function mount(): ServerEventsApi {
@@ -103,6 +104,7 @@ beforeEach(() => {
   setDisabled(false);
   setSessionRecovery(null);
   setSessionRescope(null);
+  resetSessionRotation();
 });
 
 describe("the socket's identity", () => {
@@ -313,6 +315,114 @@ describe("a socket the server refuses", () => {
 
     expect(willReconnect()).toBe(false);
     expect(recovery).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * The 4401 a tab causes itself (pwchange).
+   *
+   * `POST /change-password` with `revokeOtherSessions` is revoke-ALL then
+   * re-issue-mine in Better Auth 1.6.25, so the caller's own session row is
+   * deleted — which fires the API's `session.delete` hook, which closes this
+   * very socket as revoked. The response carrying the replacement cookie has
+   * not arrived yet; the close frame is written first. Read at face value, a
+   * user who changed their password was signed out of the browser they changed
+   * it in, with the form left disabled and the account panel gone.
+   */
+  describe("while this tab is rotating its own credential", () => {
+    /** A rotation that is on the wire and has not answered yet. */
+    function rotationInFlight() {
+      let settle!: (ok: boolean) => void;
+      const work = new Promise<boolean>((resolve, reject) => {
+        settle = (ok) => (ok ? resolve(true) : reject(new Error("wrong password")));
+      });
+      // The rejection is consumed by the tracker; keep the returned copy quiet.
+      void trackSessionRotation(work).catch(() => {});
+      return settle;
+    }
+
+    it("waits for the new cookie instead of signing the user out", async () => {
+      const rescope = vi.fn(async () => {});
+      setSessionRescope(rescope);
+      const { recovery } = await signedIn();
+      open.mockClear();
+      const finish = rotationInFlight();
+
+      disconnect(SESSION_REVOKED_CLOSE_CODE, "session revoked");
+      await settle();
+
+      // Nothing is decided while the replacement is still on the wire, and no
+      // dial is scheduled by @vueuse/core — this module owns it.
+      expect(recovery).not.toHaveBeenCalled();
+      expect(willReconnect()).toBe(false);
+      expect(open).not.toHaveBeenCalled();
+
+      finish(true);
+      await settle();
+
+      // The store catches up with the re-issued session, then one dial.
+      expect(rescope).toHaveBeenCalledTimes(1);
+      expect(open).toHaveBeenCalledTimes(1);
+      expect(recovery).not.toHaveBeenCalled();
+    });
+
+    it("hands the socket back to @vueuse/core once the rotation is answered", async () => {
+      // The latch is released, not just skipped: an ordinary dropped connection
+      // on the socket that follows the rotation must retry like any other.
+      setSessionRescope(async () => {});
+      await signedIn();
+      const finish = rotationInFlight();
+
+      disconnect(SESSION_REVOKED_CLOSE_CODE, "session revoked");
+      finish(true);
+      await settle();
+
+      expect(willReconnect()).toBe(true);
+    });
+
+    it("signs out anyway when the change it was waiting for failed", async () => {
+      // A refused change rotates nothing, so there is no new cookie coming and
+      // the 4401 meant what it said.
+      const { recovery } = await signedIn();
+      const finish = rotationInFlight();
+
+      disconnect(SESSION_REVOKED_CLOSE_CODE, "session revoked");
+      finish(false);
+      await settle();
+
+      expect(recovery).toHaveBeenCalledTimes(1);
+    });
+
+    it("still reads a 4401 as the rotation's aftermath just after it settles", async () => {
+      // Belt and braces for the ordering: the close frame is written before the
+      // response, but nothing in the browser promises the events are dispatched
+      // in that order.
+      setSessionRescope(async () => {});
+      const { recovery } = await signedIn();
+      open.mockClear();
+      await trackSessionRotation(Promise.resolve(true));
+      await settle();
+
+      disconnect(SESSION_REVOKED_CLOSE_CODE, "session revoked");
+      await settle();
+
+      expect(recovery).not.toHaveBeenCalled();
+      expect(open).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not swallow a revocation once the window has passed", async () => {
+      // The marker is scoped to a request this tab issued. Anything after it is
+      // an ordinary revocation, and treating it softly would be the bug this
+      // whole file exists to keep out.
+      const { recovery } = await signedIn();
+      await trackSessionRotation(Promise.resolve(true));
+      resetSessionRotation();
+
+      disconnect(SESSION_REVOKED_CLOSE_CODE, "account banned");
+      await settle();
+
+      expect(recovery).toHaveBeenCalledTimes(1);
+      expect(willReconnect()).toBe(false);
+    });
   });
 
   it("re-dials normally for the next identity on the tab", async () => {
