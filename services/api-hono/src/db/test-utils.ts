@@ -18,7 +18,10 @@ import * as schema from "./schema";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const migrationsFolder = resolve(__dirname, "../../migrations");
 
-export type TestDb = ReturnType<typeof drizzle<typeof schema, typeof relations>>;
+// Single type parameter since 1.0.0-rc: relational-queries v1 is gone, so the
+// driver is parameterised by the relations config alone (the old first slot was
+// the schema). Mirrors `createDb` in ./client.ts.
+export type TestDb = ReturnType<typeof drizzle<typeof relations>>;
 
 export interface MigrationFile {
   name: string;
@@ -61,7 +64,7 @@ export async function applyMigration(pglite: PGlite, migration: MigrationFile): 
  */
 export async function createTestDb(): Promise<{ pglite: PGlite; db: TestDb }> {
   const pglite = new PGlite({ extensions: { pg_trgm } });
-  const db = drizzle({ client: pglite, schema, relations });
+  const db = drizzle({ client: pglite, relations });
 
   const migrations = readMigrationDirs();
 

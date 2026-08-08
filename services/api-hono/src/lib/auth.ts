@@ -123,6 +123,11 @@ export function createAuth({ db, secondaryStorage, env, secret, baseURL }: Creat
   return betterAuth({
     baseURL,
     secret,
+    // The explicit `schema` is load-bearing, not decoration. The adapter reads
+    // `config.schema || db._.fullSchema`, and since drizzle 1.0.0-rc dropped
+    // relational-queries v1 the driver no longer carries `_.fullSchema` at all.
+    // Drop this argument and Better Auth throws at construction:
+    // "Drizzle adapter failed to initialize. Schema not found."
     database: drizzleAdapter(db, { provider: "pg", schema }),
 
     // Sessions and rate-limit counters go to Redis; session rows are still

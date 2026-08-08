@@ -14,6 +14,13 @@ const PG_UNIQUE_VIOLATION = "23505";
  * top-level object therefore always yields undefined, which is why the checks
  * below unwrap before looking. The chain is bounded so a self-referential
  * `cause` cannot spin.
+ *
+ * Re-verified at drizzle-orm 1.0.0-rc.4: still exactly one wrapping layer,
+ * `DrizzleQueryError { query, params, cause }` over the driver error that
+ * actually carries `code`/`constraint`. Re-check on every drizzle bump — the
+ * tripwire is "returns 409, not 500, when a unique constraint rejects the
+ * write" in routes/api/credentials.test.ts, which drives a real 23505 through
+ * this code against PGlite.
  */
 function* errorChain(err: unknown): Generator<Record<string, unknown>> {
   let current = err;
