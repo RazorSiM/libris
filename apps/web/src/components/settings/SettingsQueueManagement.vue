@@ -20,7 +20,7 @@ const queueEntries = computed(() => {
         completed: number;
         failed: number;
         delayed: number;
-        paused: number;
+        isPaused: boolean;
       }
     >,
   ).sort(([a], [b]) => a.localeCompare(b));
@@ -149,7 +149,7 @@ const confirmMessage = computed(() => {
           <div class="flex items-center gap-2">
             <span class="text-sm font-medium">{{ formatQueueName(queueName) }}</span>
             <UBadge
-              v-if="counts.paused > 0"
+              v-if="counts.isPaused"
               label="PAUSED"
               color="warning"
               variant="subtle"
@@ -157,19 +157,19 @@ const confirmMessage = computed(() => {
             />
           </div>
           <div class="flex items-center gap-1">
-            <UTooltip :text="counts.paused > 0 ? 'Resume queue' : 'Pause queue'">
+            <UTooltip :text="counts.isPaused ? 'Resume queue' : 'Pause queue'">
               <UButton
-                :icon="counts.paused > 0 ? 'i-lucide-play' : 'i-lucide-pause'"
-                :aria-label="counts.paused > 0 ? 'Resume queue' : 'Pause queue'"
+                :icon="counts.isPaused ? 'i-lucide-play' : 'i-lucide-pause'"
+                :aria-label="counts.isPaused ? 'Resume queue' : 'Pause queue'"
                 size="xs"
-                :color="counts.paused > 0 ? 'success' : 'warning'"
+                :color="counts.isPaused ? 'success' : 'warning'"
                 variant="ghost"
                 :loading="
                   loadingActions.get(queueName) === 'pause' ||
                   loadingActions.get(queueName) === 'resume'
                 "
                 :data-testid="`queue-toggle-pause-${queueName}`"
-                @click="togglePause(queueName, counts.paused > 0)"
+                @click="togglePause(queueName, counts.isPaused)"
               />
             </UTooltip>
             <UTooltip text="Clean failed jobs">

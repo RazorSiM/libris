@@ -211,7 +211,7 @@ const settingsStatusRoute = createRoute({
                   completed: z.number().int(),
                   failed: z.number().int(),
                   delayed: z.number().int(),
-                  paused: z.number().int(),
+                  isPaused: z.boolean(),
                 }),
               )
               .nullable()

@@ -154,6 +154,7 @@ type FakeQueue = {
   name: string;
   getJobCounts: (...statuses: string[]) => Promise<Record<string, number>>;
   getJobs: (statuses: string[]) => Promise<unknown[]>;
+  isPaused: () => Promise<boolean>;
 };
 
 function makeFakeQueue(name: string, overrides?: Partial<FakeQueue>): FakeQueue {
@@ -165,9 +166,9 @@ function makeFakeQueue(name: string, overrides?: Partial<FakeQueue>): FakeQueue 
       completed: 0,
       failed: 0,
       delayed: 0,
-      paused: 0,
     }),
     getJobs: async () => [],
+    isPaused: async () => false,
     ...overrides,
   };
 }
@@ -216,7 +217,6 @@ describe("GET /api/settings/status", () => {
         completed: 0,
         failed: 0,
         delayed: 0,
-        paused: 0,
       }),
     });
     const hardcoverSync = makeFakeQueue("hardcover-sync", {

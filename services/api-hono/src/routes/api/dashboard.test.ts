@@ -30,7 +30,7 @@ vi.mock("../../services/redis.js", () => ({
  * for the second when the caller is not an admin.
  */
 const queueFixture = vi.hoisted(() => {
-  const zero = { waiting: 0, active: 0, completed: 0, failed: 0, delayed: 0, paused: 0 };
+  const zero = { waiting: 0, active: 0, completed: 0, failed: 0, delayed: 0 };
   const state: Record<string, { counts: typeof zero; bookIds: string[] }> = {};
 
   return {
@@ -46,6 +46,7 @@ const queueFixture = vi.hoisted(() => {
         add: async () => ({}),
         getJobCounts: async () => state[name]?.counts ?? zero,
         getJobs: async () => (state[name]?.bookIds ?? []).map((bookId) => ({ data: { bookId } })),
+        isPaused: async () => false,
       };
     },
   };

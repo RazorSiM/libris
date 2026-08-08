@@ -37,7 +37,10 @@ const statusRoute = createRoute({
   path: "/status",
   tags: ["jobs"],
   summary: "Job queue status",
-  description: "Return job counts per queue (waiting, active, completed, failed, delayed, paused)",
+  description:
+    "Return job counts per queue (waiting, active, completed, failed, delayed) plus whether " +
+    "the queue itself is paused. A paused queue keeps its jobs in `waiting` — `isPaused` is a " +
+    "queue-level flag, not a job count.",
   responses: {
     200: {
       description: "Queue status counts",
@@ -52,7 +55,7 @@ const statusRoute = createRoute({
                 completed: z.number().int(),
                 failed: z.number().int(),
                 delayed: z.number().int(),
-                paused: z.number().int(),
+                isPaused: z.boolean(),
               }),
             ),
           }),
@@ -114,7 +117,7 @@ const listRoute = createRoute({
         .optional()
         .openapi({ description: "Filter by queue name (e.g. book-detected)" }),
       status: z
-        .enum(["completed", "active", "waiting", "failed", "delayed", "paused"])
+        .enum(["completed", "active", "waiting", "failed", "delayed"])
         .optional()
         .openapi({ description: "Filter by job status" }),
       page: z.coerce.number().int().min(1).default(1).openapi({ description: "Page number" }),
@@ -427,7 +430,7 @@ export const jobsRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
     }
 
     // Determine statuses to query
-    type JobStatus = "completed" | "active" | "waiting" | "failed" | "delayed" | "paused";
+    type JobStatus = "completed" | "active" | "waiting" | "failed" | "delayed";
     const statuses: JobStatus[] = status
       ? [status]
       : ["completed", "active", "waiting", "failed", "delayed"];

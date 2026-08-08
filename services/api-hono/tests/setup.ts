@@ -40,12 +40,13 @@ export async function createTestApp() {
   // compatible at runtime — cast so the rest of the app accepts it.
   const db = testDb.db as unknown as Db;
 
-  const zeroCounts = { waiting: 0, active: 0, completed: 0, failed: 0, delayed: 0, paused: 0 };
+  const zeroCounts = { waiting: 0, active: 0, completed: 0, failed: 0, delayed: 0 };
   const mockQueue = () => ({
     add: async () => ({}),
     name: "mock",
     getJobCounts: async () => zeroCounts,
     getJobs: async () => [],
+    isPaused: async () => false,
   });
   const mockQueues = {
     bookDetected: mockQueue(),

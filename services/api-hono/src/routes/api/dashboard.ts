@@ -219,7 +219,7 @@ export const dashboardRoutes = createOpenApiRouter<{ Variables: AppVariables }>(
     // breakdown is admin-only, and a non-admin's `processingCount` is derived
     // the way /api/inbox/processing derives its map: from the book ids in
     // flight, intersected with the ones they own.
-    let pipeline: Record<string, Omit<QueueCounts, "paused">> = {};
+    let pipeline: Record<string, Omit<QueueCounts, "isPaused">> = {};
     let processingCount = 0;
 
     try {
@@ -227,7 +227,7 @@ export const dashboardRoutes = createOpenApiRouter<{ Variables: AppVariables }>(
         const counts = await collectQueueCounts(getPipelineQueues());
         pipeline = Object.fromEntries(
           Object.entries(counts).map(([name, queue]) => {
-            const { paused: _, ...pipelineCounts } = queue;
+            const { isPaused: _, ...pipelineCounts } = queue;
             return [name, pipelineCounts];
           }),
         );

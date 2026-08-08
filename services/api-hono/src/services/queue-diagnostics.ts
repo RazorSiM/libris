@@ -11,7 +11,15 @@ export type QueueCounts = {
   completed: number;
   failed: number;
   delayed: number;
-  paused: number;
+  /**
+   * Whether the queue itself is paused — not a job count.
+   *
+   * BullMQ 5 parked a paused queue's jobs in a separate `paused` list, so
+   * `getJobCounts("paused")` doubled as the paused flag. BullMQ 6 removed that
+   * list: pausing only sets a `paused` field on the queue's meta hash and the
+   * jobs stay in `wait`. The count is gone, so the flag has to be read directly.
+   */
+  isPaused: boolean;
 };
 
 export type FailedJob = {
@@ -25,7 +33,7 @@ export type FailedJob = {
   maxAttempts: number;
 };
 
-const COUNT_STATUSES = ["waiting", "active", "completed", "failed", "delayed", "paused"] as const;
+const COUNT_STATUSES = ["waiting", "active", "completed", "failed", "delayed"] as const;
 
 export function getPipelineQueues(): Queue[] {
   const { close: _, ...queues } = getQueues();
@@ -79,8 +87,11 @@ export async function collectInFlightBookIds(queues: Queues): Promise<string[]> 
 export async function collectQueueCounts(queues: Queue[]): Promise<Record<string, QueueCounts>> {
   const entries = await Promise.all(
     queues.map(async (queue) => {
-      const counts = await queue.getJobCounts(...COUNT_STATUSES);
-      return [queue.name, counts as QueueCounts] as const;
+      const [counts, isPaused] = await Promise.all([
+        queue.getJobCounts(...COUNT_STATUSES),
+        queue.isPaused(),
+      ]);
+      return [queue.name, { ...(counts as Omit<QueueCounts, "isPaused">), isPaused }] as const;
     }),
   );
 
