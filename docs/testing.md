@@ -299,12 +299,14 @@ Paths relative to `services/api-hono/`. Test DB uses in-memory PGlite with mocke
 | `src/lib/socket-guard.test.ts`                      | WebSocket connection auth guard                                                                     |
 | `src/middleware/rate-limit.test.ts`                 | Per-IP tiered rate limiting (auth / keyCreation / general)                                          |
 | `src/routes/api/books.test.ts`                      | `/api/books/*` approve, delete, candidates (integration)                                            |
+| `src/routes/api/dashboard.test.ts`                  | `/api/dashboard` owner scoping of inbox count, byte volume and pipeline                             |
 | `src/routes/api/events.test.ts`                     | `/api/events` upgrade guard, connection cap, and closing sockets on revocation                      |
 | `src/routes/api/hardcover.test.ts`                  | `/api/hardcover/*` search, sync status, trigger, log (integration)                                  |
 | `src/routes/api/inbox.test.ts`                      | `/api/inbox/*` list, detail, approve, delete (integration)                                          |
 | `src/routes/api/library.test.ts`                    | `/api/library/*` list, detail, covers, downloads (integration)                                      |
 | `src/routes/api/settings.test.ts`                   | `/api/settings/*` get/update including combined status endpoint                                     |
 | `src/routes/opds.test.ts`                           | OPDS feed endpoints (integration, Hono test client + PGlite)                                        |
+| `src/services/cache.test.ts`                        | Route cache invalidation degrading, deferring and retrying when the KV store is down                |
 | `src/services/queue-diagnostics.test.ts`            | BullMQ aggregation for home/settings diagnostics                                                    |
 | `src/services/rate-limit.test.ts`                   | Tier limits, window anchoring, and the in-memory fallback used when Redis is down                   |
 | `src/services/settings.test.ts`                     | App settings service CRUD                                                                           |

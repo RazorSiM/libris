@@ -169,7 +169,10 @@ scheduler queues (`hardcover-sync`, `progress-history-cleanup`), and the
 `db-maintenance` queue. The same aggregation backs `/api/settings/status` for
 the admin diagnostics panel. The home dashboard's "pipeline" indicator is
 intentionally scoped to the ingestion queues only, since it reports on book
-ingestion flow rather than overall queue health.
+ingestion flow rather than overall queue health — and, because per-queue counts
+are a property of the install rather than of a person, it is sent to admins
+only. A non-admin's dashboard derives its `processingCount` from the book ids
+carrying in-flight jobs, intersected with the ones they own.
 
 | Method | Path                             | Purpose                                              |
 | ------ | -------------------------------- | ---------------------------------------------------- |
@@ -328,8 +331,9 @@ Per-user data is scoped by user id:
 - **KoSync credentials** — one row per user in `kosync_credentials`
 - **Hardcover token and sync state** — `service_credentials` and `hardcover_sync_log`, per user
 - **Stats and streaks** — dashboard reading stats and streak counts are computed per user
+- **Pre-approval uploads** — books in `inbox` or `review` status are filtered by `books.created_by` everywhere they are counted or listed, admins excepted. That includes `GET /api/inbox`, `/api/inbox/count`, `/api/inbox/processing`, and on `GET /api/dashboard` the `inboxCount` and `stats.processingCount` fields. `stats.totalFileSize` counts only organized books' files for the same reason, and `pipeline` — install-wide queue counts, which cannot be attributed to an owner — is admin-only
 
-Shared data (the book catalog, library organization, metadata) is visible to all authenticated users.
+Shared data (the book catalog, library organization, metadata) is visible to all authenticated users. Once a book reaches `organized` status it is shared, which is why `totalBooks`, `totalAuthors`, `topGenre`, `totalFileSize` and `recentlyAdded` are deliberately install-wide.
 
 ### Rate Limiting
 
