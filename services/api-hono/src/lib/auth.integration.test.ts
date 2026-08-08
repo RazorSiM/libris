@@ -7,6 +7,7 @@ import * as schema from "../db/schema.js";
 import type { Env } from "../env.js";
 import { createMemorySecondaryStorage } from "../services/auth-secondary-storage.js";
 import { createAuth, type Auth } from "./auth.js";
+import { eventSocketRegistry } from "./event-socket-registry.js";
 
 /**
  * Drives Better Auth against a real (PGlite) database with the project's own
@@ -440,6 +441,195 @@ describe("banning a user", () => {
 
     expect(rejection).toMatchObject({ statusCode: 401 });
     expect(await keysFor(target.user.id)).toMatchObject([{ enabled: true }]);
+  });
+});
+
+/**
+ * libris-e0p: a live /api/events WebSocket must not outlive the credential it
+ * was upgraded with.
+ *
+ * A socket authenticates once, at upgrade, and then never asks again. Every
+ * HTTP path re-checks per request — libris-59m.6 made a ban bind to cookies,
+ * app passwords and KoSync alike — so a banned user's downloads stopped dead
+ * while their event stream carried on.
+ *
+ * These drive the REAL revocation endpoints against a real database and assert
+ * on what the registry did, which is the only way to know the wiring holds. The
+ * hooks are database hooks (createAuth's `databaseHooks`), so what is being
+ * pinned is that every one of these endpoints funnels through
+ * `internalAdapter.deleteSession` / `updateUser` / `deleteUser` — not that
+ * somebody remembered to list the endpoint.
+ */
+describe("closing event sockets when the credential behind them dies", () => {
+  const openSockets: (() => void)[] = [];
+
+  /** A stand-in for an upgraded WebSocket, recording why it was closed. */
+  function fakeSocket(userId: string, sessionToken: string | null) {
+    const closedFor: string[] = [];
+    const unregister = eventSocketRegistry.register({
+      userId,
+      sessionToken,
+      close: (reason) => {
+        closedFor.push(reason);
+      },
+    });
+    openSockets.push(unregister);
+    return { closedFor, unregister };
+  }
+
+  beforeEach(() => {
+    // The registry is a process-wide singleton; a socket left behind by a
+    // failed assertion would be closed by the next test's revocation.
+    while (openSockets.length > 0) openSockets.pop()!();
+  });
+
+  async function signedInAdmin(email: string): Promise<Headers> {
+    await auth.api.createUser({
+      body: { email, password: PASSWORD, name: "Admin", role: "admin" },
+    });
+    return new Headers({
+      cookie: cookieFrom(
+        await auth.api.signInEmail({ body: { email, password: PASSWORD }, asResponse: true }),
+      ),
+    });
+  }
+
+  it("closes the socket whose own session was revoked, and leaves the sibling open", async () => {
+    // THE FAILING ASSERTION. Before the fix nothing closed either socket:
+    // `closedFor` stayed empty for both, and the revoked device kept receiving
+    // events for a principal whose next HTTP request would have been a 401.
+    const staying = cookieFrom(await signUp("two-devices@example.com"));
+    const going = cookieFrom(
+      await auth.api.signInEmail({
+        body: { email: "two-devices@example.com", password: PASSWORD },
+        asResponse: true,
+      }),
+    );
+    const userId = (await auth.api.getSession({ headers: new Headers({ cookie: staying }) }))!.user
+      .id;
+    const stayingSocket = fakeSocket(userId, tokenFrom(staying));
+    const goingSocket = fakeSocket(userId, tokenFrom(going));
+
+    await auth.api.revokeSession({
+      body: { token: tokenFrom(going) },
+      headers: new Headers({ cookie: staying }),
+    });
+
+    expect(goingSocket.closedFor).toEqual(["session revoked"]);
+    // Per-session, not per-user: revoking one device must not sign the other
+    // one's event stream out too.
+    expect(stayingSocket.closedFor).toEqual([]);
+  });
+
+  it("closes the socket when the user signs out", async () => {
+    const cookie = cookieFrom(await signUp("signing-out@example.com"));
+    const session = await auth.api.getSession({ headers: new Headers({ cookie }) });
+    const socket = fakeSocket(session!.user.id, session!.session.token);
+
+    await auth.api.signOut({ headers: new Headers({ cookie }) });
+
+    expect(socket.closedFor).toEqual(["session revoked"]);
+  });
+
+  it("closes the socket when an admin resets the password out from under it", async () => {
+    const headers = await signedInAdmin("reset-admin@example.com");
+    const target = await auth.api.createUser({
+      body: { email: "reset-target@example.com", password: PASSWORD, name: "Target" },
+    });
+    const cookie = cookieFrom(
+      await auth.api.signInEmail({
+        body: { email: "reset-target@example.com", password: PASSWORD },
+        asResponse: true,
+      }),
+    );
+    const socket = fakeSocket(target.user.id, tokenFrom(cookie));
+
+    await auth.api.setUserPassword({
+      body: { userId: target.user.id, newPassword: "replacement-password" },
+      headers,
+    });
+
+    expect(socket.closedFor).toEqual(["session revoked"]);
+  });
+
+  it("closes a banned user's sockets, app-password ones included", async () => {
+    // libris-59m.6 is why this one is called out separately. A ban deletes the
+    // session ROWS, which reaches a browser socket through the session hook —
+    // but an app-password socket has no session row at all (the apiKey plugin
+    // synthesises one per request), so nothing session-shaped can ever reach
+    // it. The user-level hook on the ban write is what does.
+    const headers = await signedInAdmin("ban-socket-admin@example.com");
+    const target = await auth.api.createUser({
+      body: { email: "ban-socket@example.com", password: PASSWORD, name: "Bannable" },
+    });
+    const bystander = await auth.api.createUser({
+      body: { email: "ban-bystander@example.com", password: PASSWORD, name: "Bystander" },
+    });
+    const cookie = cookieFrom(
+      await auth.api.signInEmail({
+        body: { email: "ban-socket@example.com", password: PASSWORD },
+        asResponse: true,
+      }),
+    );
+    const browserSocket = fakeSocket(target.user.id, tokenFrom(cookie));
+    const koboSocket = fakeSocket(target.user.id, null);
+    const bystanderSocket = fakeSocket(bystander.user.id, null);
+
+    await auth.api.banUser({ body: { userId: target.user.id }, headers });
+
+    expect(koboSocket.closedFor).toEqual(["account banned"]);
+    expect(browserSocket.closedFor.length).toBeGreaterThan(0);
+    expect(bystanderSocket.closedFor).toEqual([]);
+  });
+
+  it("closes a banned user's sockets when the ban arrives through admin/update-user", async () => {
+    // The libris-59m.12 lesson: /admin/update-user sets `banned` too, and an
+    // enumeration of endpoints that only knew about /admin/ban-user would miss
+    // it. Hooking the database write covers both without listing either.
+    const headers = await signedInAdmin("update-ban-admin@example.com");
+    const target = await auth.api.createUser({
+      body: { email: "update-ban@example.com", password: PASSWORD, name: "Bannable" },
+    });
+    const koboSocket = fakeSocket(target.user.id, null);
+
+    await auth.api.adminUpdateUser({
+      body: { userId: target.user.id, data: { banned: true } },
+      headers,
+    });
+
+    expect(koboSocket.closedFor).toEqual(["account banned"]);
+  });
+
+  it("closes every socket of a removed account", async () => {
+    const headers = await signedInAdmin("remove-admin@example.com");
+    const target = await auth.api.createUser({
+      body: { email: "removed@example.com", password: PASSWORD, name: "Gone" },
+    });
+    const koboSocket = fakeSocket(target.user.id, null);
+
+    await auth.api.removeUser({ body: { userId: target.user.id }, headers });
+
+    expect(koboSocket.closedFor).toContain("account removed");
+  });
+
+  it("leaves the sockets alone when the revocation itself is refused", async () => {
+    // The libris-59m.5 trap, restated for this hook: after-hooks run for a
+    // REJECTED call too. Database hooks fire on the write rather than on the
+    // request, so an unauthenticated ban attempt must not close anybody's
+    // stream — which would otherwise be a credential-free denial of service
+    // against every signed-in user's event feed.
+    const target = await auth.api.createUser({
+      body: { email: "unrevoked@example.com", password: PASSWORD, name: "Safe" },
+    });
+    const socket = fakeSocket(target.user.id, null);
+
+    const rejection = await auth.api
+      .banUser({ body: { userId: target.user.id } })
+      .then(() => null)
+      .catch((err: { statusCode?: number }) => err);
+
+    expect(rejection).toMatchObject({ statusCode: 401 });
+    expect(socket.closedFor).toEqual([]);
   });
 });
 

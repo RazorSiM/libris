@@ -16,6 +16,8 @@ import type { Env } from "../env.js";
 // package.json — which in web's case has no #db mapping.
 import * as schema from "../db/schema.js";
 import { betterAuthClientIpHeader } from "../shared/request-ip.js";
+import { isUserBanned, type BannableUser } from "../shared/user-ban.js";
+import { eventSocketRegistry } from "./event-socket-registry.js";
 
 type SecondaryStorage = NonNullable<BetterAuthOptions["secondaryStorage"]>;
 
@@ -176,6 +178,71 @@ export function createAuth({ db, secondaryStorage, env, secret, baseURL }: Creat
       // No SMTP transport yet, so there is nowhere to send a
       // verification or reset mail. Admins reset passwords on a user's behalf.
       requireEmailVerification: false,
+    },
+
+    /**
+     * Close live /api/events WebSockets when the credential behind them dies
+     * (libris-e0p).
+     *
+     * A socket authenticates once, at upgrade, and then lives for as long as
+     * the tab is open. Every HTTP path re-checks on each request; the socket
+     * checked nothing, so a signed-out, banned or password-reset principal kept
+     * receiving events.
+     *
+     * THESE ARE DATABASE HOOKS, NOT ENDPOINT HOOKS, and that is the whole
+     * point. Enumerating revocation endpoints is how this bug happens: there
+     * are eleven of them in the plugins this app installs alone (/sign-out,
+     * /revoke-session, /revoke-sessions, /revoke-other-sessions,
+     * /change-password with revokeOtherSessions, /delete-user,
+     * /admin/ban-user, /admin/update-user with banned:true,
+     * /admin/set-user-password, /admin/revoke-user-session,
+     * /admin/revoke-user-sessions, /admin/remove-user), plus expiry cleanup
+     * inside /get-session, and a Better Auth upgrade can add more. Every one of
+     * them funnels through `internalAdapter.deleteSession` / `deleteSessions` /
+     * `deleteUserSessions` / `updateUser` / `deleteUser`, and those funnel
+     * through `deleteWithHooks` / `updateWithHooks` (db/with-hooks.mjs), which
+     * is where these fire. One choke point instead of a list to keep current.
+     *
+     * It also sidesteps the libris-59m.5 trap below: a database hook fires on
+     * an actual write, so it cannot run for a call that was refused.
+     *
+     * NOT SUFFICIENT ON ITS OWN, by construction — hooks are in-process, a
+     * session that merely expires is never deleted, and an app-password socket
+     * has no session row to delete. routes/api/events.ts re-validates every
+     * open socket on a timer as the backstop; see
+     * EVENT_SOCKET_REVALIDATE_INTERVAL_MS.
+     */
+    databaseHooks: {
+      session: {
+        delete: {
+          after: async (session) => {
+            eventSocketRegistry.closeForSession(session.token, "session revoked");
+          },
+        },
+      },
+      user: {
+        update: {
+          after: async (user) => {
+            // The ban paths delete the session rows too, so the hook above
+            // already reaches a browser socket. An app-password socket carries
+            // no session row at all (the apiKey plugin synthesises one per
+            // request), and libris-59m.6 made a ban bind to the person on every
+            // other credential path — this is what makes it bind here as well.
+            //
+            // The cast is the price of a hook typed against the BASE user
+            // model: `banned`/`banExpires` are fields the admin plugin adds to
+            // the schema, so they arrive on the row but not on the signature.
+            if (isUserBanned(user as BannableUser)) {
+              eventSocketRegistry.closeForUser(user.id, "account banned");
+            }
+          },
+        },
+        delete: {
+          after: async (user) => {
+            eventSocketRegistry.closeForUser(user.id, "account removed");
+          },
+        },
+      },
     },
 
     hooks: {
