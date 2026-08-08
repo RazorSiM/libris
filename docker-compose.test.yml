@@ -46,7 +46,9 @@ services:
   # `n` before installing. CI gets the same result a different way — its
   # playwright container runs setup-vp with node-version-file.
   playwright:
-    image: mcr.microsoft.com/playwright:v1.60.0-noble
+    # Keep in step with the catalog's @playwright/test — a mismatched client
+    # fails at launch with "Executable doesn't exist at /ms-playwright/...".
+    image: mcr.microsoft.com/playwright:v1.62.1-noble
     profiles: ["e2e"]
     working_dir: /repo
     environment:

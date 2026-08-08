@@ -6,7 +6,13 @@ packages:
 
 allowBuilds:
   "@parcel/watcher": true
-  better-sqlite3: true
+  # Deliberately false. 13.x dropped the `prebuild-install || node-gyp rebuild`
+  # install script and ships N-API prebuilds instead, but it still carries a
+  # binding.gyp — and pnpm auto-runs `node-gyp rebuild` for an allowed package
+  # that has one and no install script. That compile is pure waste when a
+  # working prebuild is already in the tarball, and it needs `make`, which the
+  # Playwright images the e2e jobs run in do not have.
+  better-sqlite3: false
   esbuild: true
   lefthook: true
   msgpackr-extract: true

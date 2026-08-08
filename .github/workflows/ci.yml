@@ -169,7 +169,11 @@ jobs:
   # definition so the service/container/env setup can't drift between them.
   e2e:
     runs-on: ubuntu-latest
-    container: mcr.microsoft.com/playwright:v1.60.0-jammy
+    # Must match the `@playwright/test` version in the pnpm-workspace catalog
+    # exactly: the image ships only the browser build its own version pins, and
+    # a mismatched client fails at launch with "Executable doesn't exist at
+    # /ms-playwright/...". Nothing enforces this, so bump both together.
+    container: mcr.microsoft.com/playwright:v1.62.1-jammy
     needs: [build]
     strategy:
       fail-fast: false
@@ -308,7 +312,8 @@ jobs:
   # value is actually sufficient to sign in, sign out and revoke with.
   e2e-prod-config:
     runs-on: ubuntu-latest
-    container: mcr.microsoft.com/playwright:v1.60.0-jammy
+    # Keep in step with the catalog's @playwright/test — see the `e2e` job.
+    container: mcr.microsoft.com/playwright:v1.62.1-jammy
     needs: [build]
     services:
       postgres:
