@@ -1,5 +1,5 @@
 import { and, eq, isNotNull } from "drizzle-orm";
-import { hardcoverSyncLog, serviceCredentials } from "#db";
+import { hardcoverSyncLog, serviceCredentials, users } from "#db";
 import type { Job } from "bullmq";
 import {
   computeReadingStatus,
@@ -31,10 +31,46 @@ interface ValidatedUser {
   userId: string;
   token: string;
   username: string;
+  /** Libris role, from the Better Auth admin plugin. Nullable upstream. */
+  role: string | null;
+  /** Account creation time — the tiebreak that keeps the pick stable. */
+  accountCreatedAt: Date;
 }
 
 export function shouldRunGlobalMetadata(metadataEnabled: boolean, manual: boolean): boolean {
   return metadataEnabled && !manual;
+}
+
+/**
+ * Whose Hardcover quota funds the scheduled install-wide phase.
+ *
+ * ISBN matching and the page-count backfill run once per scheduled sync over
+ * the whole catalog, not over one person's shelf, so their cost has no natural
+ * owner. It used to fall on `validUsers[0]` — whichever connected user the
+ * credential query happened to return first — which billed install-wide work to
+ * an arbitrary member and moved between runs as rows were added or removed.
+ *
+ * An admin is the closest thing a self-hosted install has to an owner, so the
+ * phase spends an admin's quota. The oldest admin account wins, with the user
+ * id as a tiebreak, so the same token is picked every run rather than shifting
+ * under concurrent signups.
+ *
+ * Returns null when no admin has connected Hardcover. The caller must then skip
+ * the phase: falling back to any other token would put the cost straight back
+ * on an arbitrary member in exactly the case this exists to prevent.
+ */
+export function selectGlobalMetadataUser<
+  T extends { userId: string; role: string | null; accountCreatedAt: Date },
+>(candidates: readonly T[]): T | null {
+  // Matches shared/auth.ts isAdmin() and the admin plugin's adminRoles config.
+  const admins = candidates.filter((candidate) => candidate.role === "admin");
+  if (admins.length === 0) return null;
+
+  return admins.reduce((oldest, candidate) => {
+    const delta = candidate.accountCreatedAt.getTime() - oldest.accountCreatedAt.getTime();
+    if (delta !== 0) return delta < 0 ? candidate : oldest;
+    return candidate.userId < oldest.userId ? candidate : oldest;
+  });
 }
 
 export async function processHardcoverSync(job: Job): Promise<void> {
@@ -48,8 +84,13 @@ export async function processHardcoverSync(job: Job): Promise<void> {
     .select({
       userId: serviceCredentials.userId,
       passwordHash: serviceCredentials.passwordHash,
+      // Joined in because the scheduled install-wide phase is funded by an
+      // admin's Hardcover quota — see selectGlobalMetadataUser.
+      role: users.role,
+      accountCreatedAt: users.createdAt,
     })
     .from(serviceCredentials)
+    .innerJoin(users, eq(users.id, serviceCredentials.userId))
     .where(
       targetApiKeyId
         ? and(
@@ -84,7 +125,13 @@ export async function processHardcoverSync(job: Job): Promise<void> {
     }
 
     log.info(`Authenticated userId=${cred.userId} as ${verify.data.username}`);
-    validUsers.push({ userId: cred.userId, token: token, username: verify.data.username });
+    validUsers.push({
+      userId: cred.userId,
+      token: token,
+      username: verify.data.username,
+      role: cred.role,
+      accountCreatedAt: cred.accountCreatedAt,
+    });
   }
 
   if (validUsers.length === 0) {
@@ -103,23 +150,49 @@ export async function processHardcoverSync(job: Job): Promise<void> {
     return;
   }
 
-  // 3. Phase 1: ISBN matching + backfill — runs once globally using the first valid token
-  const globalToken = validUsers[0].token;
-
+  // 3. Phase 1: ISBN matching + backfill — runs once globally, over the whole
+  // catalog, on an admin's Hardcover quota. Never on whichever user's
+  // credential the query happened to return first: that billed install-wide
+  // work to an arbitrary member and moved between runs.
   if (!metadataEnabled) {
     log.info("Hardcover metadata disabled, skipping ISBN matching phase");
   }
-  const runGlobalMetadata = shouldRunGlobalMetadata(metadataEnabled, manual);
   if (manual && metadataEnabled) {
     log.info("Manual sync: skipping global ISBN matching and page-count backfill");
   }
-  const matchResult = runGlobalMetadata
-    ? await matchBooksToHardcover(db, globalToken, {
-        onProgress: (matched, total) => {
-          void job.updateProgress({ phase: "matching", matched, total });
-        },
-      })
+
+  const globalUser = shouldRunGlobalMetadata(metadataEnabled, manual)
+    ? selectGlobalMetadataUser(validUsers)
     : null;
+
+  if (shouldRunGlobalMetadata(metadataEnabled, manual) && !globalUser) {
+    // Deliberately no fallback. The failure path is exactly where an arbitrary
+    // user's quota would get spent, so the phase stops instead.
+    log.warn(
+      "No admin has connected Hardcover; skipping the global ISBN matching and page-count backfill phase. " +
+        "This install-wide phase spends an admin's Hardcover quota and never falls back to another user's token — " +
+        "connect Hardcover on an admin account to re-enable it.",
+    );
+  }
+
+  if (globalUser) {
+    log.info(
+      `Global ISBN matching and page-count backfill will spend the Hardcover quota of admin ` +
+        `${globalUser.username} (userId=${globalUser.userId})`,
+    );
+  }
+
+  const runGlobalMetadata = globalUser !== null;
+  const globalToken = globalUser?.token;
+
+  const matchResult =
+    runGlobalMetadata && globalToken
+      ? await matchBooksToHardcover(db, globalToken, {
+          onProgress: (matched, total) => {
+            void job.updateProgress({ phase: "matching", matched, total });
+          },
+        })
+      : null;
   if (matchResult) {
     log.info(
       `ISBN matching: ${matchResult.matched} matched, ${matchResult.skipped} skipped, ${matchResult.failed} failed`,
@@ -127,7 +200,7 @@ export async function processHardcoverSync(job: Job): Promise<void> {
   }
 
   // 3b. Backfill page counts from Hardcover editions for already-matched books
-  if (runGlobalMetadata) {
+  if (runGlobalMetadata && globalToken) {
     const backfillResult = await backfillEditionPageCounts(db, globalToken);
     if (backfillResult.updated > 0) {
       log.info(

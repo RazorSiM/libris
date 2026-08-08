@@ -4,6 +4,7 @@ import type { AppVariables } from "../context.js";
 import type { Env } from "../env.js";
 import { createMemoryKVStore } from "../services/kv-store.js";
 import type { KVStore } from "../services/kv-store.js";
+import { bodyLimitMiddleware } from "./body-limit.js";
 import { rateLimitMiddleware, resolveRateLimitTiers } from "./rate-limit.js";
 
 /** Every operation fails, the way the Redis-backed store does when Redis is down. */
@@ -203,12 +204,20 @@ describe("resolveRateLimitTiers", () => {
     expect(res.status).toBe(200);
   });
 
-  it("falls back to IP-only limiting instead of parsing an oversized body", async () => {
-    // bodyLimitMiddleware caps every body at 1 MB before this middleware runs,
-    // but the limiter refuses to buffer anything large on its own account too.
-    // The request must still be served, not thrown out of the limiter.
+  it("refuses an oversized sign-in body instead of letting it skip the bucket", async () => {
+    // The escape this closes: the limiter declines to parse a body over 8 KB,
+    // and used to fall back to the per-IP tiers. On /api/auth/sign-in/email
+    // there are none — resolveRateLimitTiers stands aside for the whole prefix
+    // — so a padded attempt left the per-credential bucket for nothing at all,
+    // and three sources in a row were all served (this test asserted 200).
+    // bodyLimitMiddleware does not cover it: its ceiling is 1 MB, and 20 KB
+    // sails through, pinned by the full-stack test below.
     const { app } = buildLimitedApp();
-    const body = JSON.stringify({ email: "reader@example.com", pad: "x".repeat(20_000) });
+    const body = JSON.stringify({
+      email: "reader@example.com",
+      password: "wrong",
+      pad: "x".repeat(20_000),
+    });
 
     for (const source of ["192.0.2.1", "192.0.2.2", "192.0.2.3"]) {
       const res = await app.request("/api/auth/sign-in/email", {
@@ -220,7 +229,87 @@ describe("resolveRateLimitTiers", () => {
         },
         body,
       });
-      expect(res.status, source).toBe(200);
+      expect(res.status, source).toBe(413);
     }
+  });
+
+  it("refuses an oversized body even behind the real 1 MB body limit", async () => {
+    // The residual is exactly the 8 KB .. 1 MB window: bodyLimitMiddleware
+    // answers 413 above 1 MB and waves everything below it through, so the two
+    // guards do not overlap and the padded request really did reach the limiter
+    // unbucketed. Full stack, in app.ts order.
+    const app = new Hono<{ Variables: AppVariables }>();
+    const storage = createMemoryKVStore();
+    const env = {
+      NODE_ENV: "production",
+      E2E_TEST: "",
+      LIBRIS_RATELIMIT_GENERAL_LIMIT: 100,
+      LIBRIS_RATELIMIT_GENERAL_WINDOW_SECONDS: 60,
+      LIBRIS_RATELIMIT_AUTH_LIMIT: 2,
+      LIBRIS_RATELIMIT_AUTH_WINDOW_SECONDS: 60,
+      LIBRIS_RATELIMIT_KEY_CREATION_LIMIT: 100,
+      LIBRIS_RATELIMIT_KEY_CREATION_WINDOW_SECONDS: 60,
+    } as Env;
+    app.use("*", async (c, next) => {
+      c.set("env", env);
+      c.set("redisStorage", storage);
+      c.set("clientIp", "203.0.113.7");
+      await next();
+    });
+    app.use("*", bodyLimitMiddleware);
+    app.use("*", rateLimitMiddleware);
+    app.all("*", (c) => c.json({ ok: true }));
+
+    const body = JSON.stringify({ email: "reader@example.com", pad: "x".repeat(20_000) });
+    const res = await app.request("/api/auth/sign-in/email", {
+      method: "POST",
+      headers: { "content-type": "application/json", "content-length": String(body.length) },
+      body,
+    });
+    expect(res.status).toBe(413);
+  });
+
+  it("refuses an oversized KoSync auth body too", async () => {
+    // KoSync does have a per-IP auth tier behind it, so the escape was narrower
+    // here — but it is still an escape from the per-username budget, and no
+    // KOReader login body is 8 KB.
+    const { app } = buildLimitedApp();
+    const body = JSON.stringify({ username: "reader", password: "x".repeat(20_000) });
+
+    const res = await app.request("/kosync/users/auth", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "content-length": String(body.length),
+        "x-test-source": "198.51.100.9",
+      },
+      body,
+    });
+    expect(res.status).toBe(413);
+  });
+
+  it("measures the body rather than trusting content-length", async () => {
+    // The old guard consulted the declared header alone. A request that sends
+    // no content-length (chunked) never met the ceiling at all.
+    const { app } = buildLimitedApp();
+    const body = JSON.stringify({ email: "reader@example.com", pad: "x".repeat(20_000) });
+
+    const res = await app.request("/api/auth/sign-in/email", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-test-source": "198.51.100.10" },
+      body,
+    });
+    expect(res.status).toBe(413);
+  });
+
+  it("still serves an ordinary sign-in body", async () => {
+    // The refusal must not become a new way to turn away legitimate traffic.
+    const { app } = buildLimitedApp();
+    const res = await app.request("/api/auth/sign-in/email", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-test-source": "198.51.100.11" },
+      body: JSON.stringify({ email: "reader@example.com", password: "correct horse" }),
+    });
+    expect(res.status).toBe(200);
   });
 });

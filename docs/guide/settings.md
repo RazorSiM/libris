@@ -64,6 +64,10 @@ Get your token at [hardcover.app/account/api](https://hardcover.app/account/api)
 Each user connects their own Hardcover account. Your token is scoped to your account and is not visible to other users.
 :::
 
+::: warning For admins
+The nightly sync also runs an install-wide maintenance pass (ISBN matching and edition page counts) across the whole library, and that pass **spends an admin's Hardcover API quota** -- specifically, the oldest admin account that has connected Hardcover. It is skipped entirely if no admin has connected, so if you want it running, connect Hardcover on an admin account. A member's token is never used for it.
+:::
+
 Once a token is configured, the section shows a connection status indicator (Connected / Not connected, with the Hardcover username) and the last sync time, plus these controls:
 
 - **Use as metadata source** -- toggle whether Hardcover is queried for book metadata during ingestion.
