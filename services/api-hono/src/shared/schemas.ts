@@ -411,18 +411,13 @@ export const CredentialDeletedSchema = z
 
 // ── Books (approve / candidates) schemas ─────────────────────────────
 
-export const BookApprovedResponseSchema = z
-  .object({
-    id: z.string().uuid(),
-    status: z.string(),
-    title: z.string().nullable().optional(),
-    author: z.string().nullable().optional(),
-    genres: z.array(z.string()).optional(),
-    tags: z.array(z.string()).optional(),
-    createdAt: z.coerce.date().optional(),
-    updatedAt: z.coerce.date().optional(),
-  })
-  .openapi("BookApprovedResponse");
+// `BookApprovedResponse` used to live here: a hand-written seven-field summary
+// of the approved book, declared by POST /api/books/{id}/approve and fulfilled
+// by a bare `.returning()` that answered with the whole row. Nothing reconciled
+// the two, so the response leaked `search_vector` AND left the fields callers
+// genuinely read off it (isbn13, publisher, language, approvedAt) undocumented.
+// The route now declares `BookUpdatedSchema` — the same derived-from-the-table
+// shape the library edit routes use — and returns `bookColumns` (libris-dnx).
 
 export const BookCandidatesResponseSchema = z
   .object({

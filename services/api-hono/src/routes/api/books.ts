@@ -4,7 +4,7 @@ import { HTTPException } from "hono/http-exception";
 import { and, eq } from "drizzle-orm";
 import { unlink } from "node:fs/promises";
 import { join } from "node:path";
-import { books, bookFiles, bookMetadataCandidates } from "#db";
+import { books, bookColumns, bookFiles, bookMetadataCandidates } from "#db";
 import type { AppVariables } from "../../context.js";
 import { normalizeLanguage } from "../../lib/languages.js";
 import { requireBookOwnership } from "../../shared/auth.js";
@@ -14,7 +14,7 @@ import { isUniqueViolation, uniqueViolationMessage } from "../../shared/db-error
 import { IdParamSchema } from "../../shared/validation.js";
 import {
   ApproveBookBodySchema,
-  BookApprovedResponseSchema,
+  BookUpdatedSchema,
   BookCandidatesResponseSchema,
 } from "../../shared/schemas.js";
 
@@ -65,7 +65,13 @@ const approveRoute = createRoute({
       description: "Book approved and organize job enqueued",
       content: {
         "application/json": {
-          schema: BookApprovedResponseSchema,
+          // The updated book row, same shape PATCH /api/library/{id} returns.
+          // This used to declare a seven-field summary while the handler's bare
+          // `.returning()` answered with the entire row — so the response
+          // carried `search_vector`, and the fields callers actually read off
+          // it (isbn13, publisher, language, approvedAt) were undocumented
+          // (libris-dnx).
+          schema: BookUpdatedSchema,
         },
       },
     },
@@ -235,7 +241,10 @@ export const booksRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
           .update(books)
           .set(bookUpdates)
           .where(and(eq(books.id, id), eq(books.status, "review")))
-          .returning();
+          // `bookColumns` — the list BookUpdatedSchema above is derived from,
+          // so the query and the declared response are two views of one thing
+          // (libris-dnx).
+          .returning(bookColumns);
 
         if (!result) {
           const [currentBook] = await tx

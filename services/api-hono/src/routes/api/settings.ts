@@ -1,6 +1,7 @@
 import { createRoute, z } from "@hono/zod-openapi";
 import { createOpenApiRouter } from "../../shared/openapi.js";
 import { and, eq, sql } from "drizzle-orm";
+import type { Context } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { kosyncCredentials, serviceCredentials } from "#db";
 import type { AppVariables } from "../../context.js";
@@ -26,30 +27,93 @@ const logger = getLogger("settings");
 
 // --- GET / ---
 
+/**
+ * The half of `GET /api/settings` that only administrators receive
+ * (libris-n2j).
+ *
+ * These are host filesystem paths. `GET /api/settings` is the one endpoint on
+ * this prefix a non-admin may call, so the role branch that withholds them
+ * lived as an inline `...(isAdmin(c) ? {…} : {})` spread inside the handler's
+ * return statement — invisible to anyone auditing which surfaces disclose
+ * paths, and invisible to the OpenAPI document, which declared both as plain
+ * optionals with no stated authority.
+ *
+ * Naming the projection fixes both: the fields are declared in one place that
+ * states their authority in the spec itself, and `adminOnlySettings()` below is
+ * the only code that can produce them. Adding a field here without granting it
+ * there is a type error; granting it without a description naming the authority
+ * fails the contract test in `settings.test.ts`.
+ *
+ * Why optional-with-stated-authority rather than a discriminated union of an
+ * admin and a non-admin response: OpenAPI discriminates on a value IN the
+ * payload, and there is no such value here — the variance is in the caller's
+ * role, which the body does not carry. Modelling it as a union would mean
+ * inventing a `role` discriminant field purely to satisfy the document, i.e.
+ * changing the API to describe it. `oneOf` without a discriminator would say
+ * "one of these two shapes" and leave the reader no better off than "optional".
+ * So: optional fields, but every one of them says whose they are.
+ */
+const AdminOnlySettingsSchema = z.object({
+  libraryPath: z.string().openapi({
+    description:
+      "Absolute host path of the organized library root. Administrators only — the field is absent entirely for non-admin callers.",
+  }),
+  inboxPath: z.string().openapi({
+    description:
+      "Absolute host path of the ingestion inbox. Administrators only — the field is absent entirely for non-admin callers.",
+  }),
+});
+
+export const SettingsResponseSchema = z
+  .object({
+    kosyncConfigured: z.boolean(),
+    hardcoverMetadataEnabled: z.boolean(),
+    hardcoverSyncEnabled: z.boolean(),
+  })
+  .extend(AdminOnlySettingsSchema.partial().shape)
+  .openapi("SettingsResponse");
+
 const getSettingsRoute = createRoute({
   method: "get",
   path: "/",
   tags: ["settings"],
   summary: "Get settings",
   description:
-    "Return application settings. Filesystem paths are included only for administrators.",
+    "Return application settings. The response varies by the caller's role: `libraryPath` and " +
+    "`inboxPath` are host filesystem paths and are present only for administrators, absent for " +
+    "everyone else. The remaining fields are returned to every authenticated caller.",
   responses: {
     200: {
-      description: "Current settings",
+      description:
+        "Current settings. Admin callers additionally receive `libraryPath` and `inboxPath`.",
       content: {
         "application/json": {
-          schema: z.object({
-            libraryPath: z.string().optional(),
-            inboxPath: z.string().optional(),
-            kosyncConfigured: z.boolean(),
-            hardcoverMetadataEnabled: z.boolean(),
-            hardcoverSyncEnabled: z.boolean(),
-          }),
+          schema: SettingsResponseSchema,
         },
       },
     },
   },
 });
+
+/**
+ * The admin-only fields of `GET /api/settings`, or nothing.
+ *
+ * The single place `AdminOnlySettingsSchema`'s fields are produced. Keep it
+ * that way: an audit of "what discloses filesystem paths" should be able to
+ * stop at this function.
+ */
+export function adminOnlySettings(
+  c: Context<{ Variables: AppVariables }>,
+  env: { LIBRIS_LIBRARY_PATH: string; LIBRIS_INBOX_PATH: string },
+): z.infer<typeof AdminOnlySettingsSchema> | Record<string, never> {
+  if (!isAdmin(c)) return {};
+  return { libraryPath: env.LIBRIS_LIBRARY_PATH, inboxPath: env.LIBRIS_INBOX_PATH };
+}
+
+/** Exported for the contract test — the fields this route withholds by role. */
+export const ADMIN_ONLY_SETTINGS_FIELDS = Object.keys(
+  AdminOnlySettingsSchema.shape,
+) as (keyof z.infer<typeof AdminOnlySettingsSchema>)[];
 
 // --- PATCH / ---
 
@@ -124,6 +188,10 @@ const settingsStatusRoute = createRoute({
       content: {
         "application/json": {
           schema: z.object({
+            // Four admin-only sections, each null rather than absent for a
+            // non-admin caller. Unlike GET / (libris-n2j) the variance IS in the
+            // declared shape here — but nullable alone does not say WHY, so each
+            // one names the authority that decides it.
             health: z
               .object({
                 status: z.enum(["ok", "degraded", "error"]),
@@ -133,7 +201,8 @@ const settingsStatusRoute = createRoute({
                   eventBus: CheckSchema,
                 }),
               })
-              .nullable(),
+              .nullable()
+              .openapi({ description: "Administrators only — null for every other caller." }),
             queues: z
               .record(
                 z.string(),
@@ -146,7 +215,8 @@ const settingsStatusRoute = createRoute({
                   paused: z.number().int(),
                 }),
               )
-              .nullable(),
+              .nullable()
+              .openapi({ description: "Administrators only — null for every other caller." }),
             failedJobs: z
               .object({
                 jobs: z.array(
@@ -163,7 +233,12 @@ const settingsStatusRoute = createRoute({
                 ),
                 total: z.number().int(),
               })
-              .nullable(),
+              .nullable()
+              .openapi({
+                description:
+                  "Administrators only — null for every other caller. Job payloads may quote " +
+                  "filesystem paths and request bodies.",
+              }),
             // No `kosyncConfigured` here on purpose. It used to be a second,
             // independently-computed copy of `credentials.kosync.configured`
             // in the very same payload, and the two disagreed: this one read
@@ -177,7 +252,12 @@ const settingsStatusRoute = createRoute({
                 hardcoverMetadataEnabled: z.boolean(),
                 hardcoverSyncEnabled: z.boolean(),
               })
-              .nullable(),
+              .nullable()
+              .openapi({
+                description:
+                  "Administrators only — null for every other caller. Carries the same host " +
+                  "filesystem paths GET /api/settings withholds from non-admins.",
+              }),
             credentials: z.object({
               opds: CredentialStatusItemSchema,
               kosync: CredentialStatusItemSchema,
@@ -400,9 +480,11 @@ export const settingsRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
     ]);
 
     return c.json({
-      ...(isAdmin(c)
-        ? { libraryPath: env.LIBRIS_LIBRARY_PATH, inboxPath: env.LIBRIS_INBOX_PATH }
-        : {}),
+      // Everything below this line goes to every authenticated caller. The
+      // role-varying half is `adminOnlySettings` and only `adminOnlySettings` —
+      // see AdminOnlySettingsSchema above for why it is spelled that way
+      // (libris-n2j).
+      ...adminOnlySettings(c, env),
       kosyncConfigured,
       hardcoverMetadataEnabled,
       hardcoverSyncEnabled,

@@ -292,7 +292,17 @@ export const kosyncRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
           updatedAt: new Date(),
         },
       })
-      .returning();
+      // Only the fields the KoSync response carries. A bare `.returning()`
+      // drags `raw_payload` — the whole client request, as jsonb — back out of
+      // the DB on every progress push for nothing (libris-dnx).
+      .returning({
+        document: readingProgress.document,
+        progress: readingProgress.progress,
+        percentage: readingProgress.percentage,
+        device: readingProgress.device,
+        deviceId: readingProgress.deviceId,
+        timestamp: readingProgress.timestamp,
+      });
 
     // Append to history (fire-and-forget, don't block the response)
     void db
