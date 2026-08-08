@@ -10,7 +10,7 @@ browse the library and download books directly over HTTP, without going through
 the web UI.
 
 The catalog is served from `<host>/opds`. Access uses HTTP Basic
-authentication with the realm `libris-opds`. Clients that support OPDS send the
+authentication with the realm `Libris OPDS`. Clients that support OPDS send the
 credentials automatically on every browse and download request.
 
 ## Supported Readers
@@ -23,20 +23,38 @@ Any reader that speaks OPDS can connect, including:
 - **Thorium** — desktop reader (Windows, macOS, Linux).
 - **Foliate** — Linux reader.
 
-Other OPDS clients work the same way: point them at the catalog URL and supply
-your OPDS credentials.
+Other OPDS clients work the same way: point them at the catalog URL and sign in
+with your account email and an app password.
 
 ## Connecting a Reader
 
-1. Go to **Settings > Connections** in the Libris web UI.
-2. In the **OPDS Catalog** section, note the catalog URL (`<host>/opds`).
-3. Set a username and password for OPDS access. These credentials are stored
-   per user (hashed with bcrypt) and are independent of your web session.
-4. In your reader, add a new OPDS catalog and enter the URL and the username and
-   password you set.
+There is no separate OPDS username and password. You sign a reader in with your
+own account email and an **app password** — a per-device credential you mint
+yourself, so your account password never goes onto a device.
 
-Each user has their own OPDS credentials. The credentials are the only per-user
-part of OPDS — see [The catalog is shared](#the-catalog-is-shared) below.
+1. Go to **Settings → Connections** in the Libris web UI.
+2. In **App Passwords**, name the device (for example `Kobo Clara`) and click
+   **Create app password**. Copy the value; it is shown once and cannot be
+   retrieved later.
+3. In the **OPDS Catalog** section just below, copy the catalog URL
+   (`<host>/opds`).
+4. In your reader, add a new OPDS catalog. Enter the URL, your **account email**
+   as the username, and the **app password** as the password.
+
+Only the password component is checked, so the username is informational — but
+put your real address there anyway, because it is what makes the entry readable
+when you come back to it.
+
+Mint one app password per device. Revoking a row from the Connections tab
+unpairs exactly that device, on its very next request, and leaves your browser
+sessions and every other reader alone. Losing a device therefore costs you one
+credential rather than all of them.
+
+::: warning A banned account's devices stop too
+Banning a user disables every app password they hold, and unbanning does **not**
+re-enable them. A reader that was paired at ban time needs a fresh app password
+afterwards. See [Banning](./getting-started.md#banning).
+:::
 
 ## What You Can Browse
 
@@ -72,6 +90,6 @@ The OPDS catalog serves the shared organized library. Every authenticated OPDS
 user sees the entire catalog, regardless of who uploaded each book. The feed is
 filtered only by status (organized books), not by uploader.
 
-Only the OPDS credentials are per user. Reading progress, manual reading-status
-overrides, and other service credentials remain per user, but the set of books
-available over OPDS is the same for everyone.
+Only the credential is per user. Reading progress, manual reading-status
+overrides, and the other per-account connections remain private, but the set of
+books available over OPDS is the same for everyone.

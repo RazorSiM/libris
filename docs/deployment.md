@@ -199,6 +199,25 @@ volumes:
   library:
 ```
 
+## First Run: Create the Admin Account
+
+There is no seeded account and no default password. The first admin is created through the UI, once, on a running server.
+
+1. Bring the stack up and wait for the API to answer. Migrations apply on boot.
+2. Open the origin you set in `BETTER_AUTH_URL` in a browser. Any path redirects to `/login`.
+3. Because nobody on this install can sign in yet, `/login` offers the **first-run setup form** instead of the sign-in form. Enter a display name, an email address, and a password of at least 8 characters.
+4. Submit. That creates the first user with the `admin` role and signs you in immediately.
+
+The endpoint behind the form (`POST /api/setup`) is public by necessity — there is no account to authenticate with yet — and self-guarding: it answers `409` the moment any account has a password, and the form stops being offered. It is safe to leave mounted.
+
+Everyone else is created by an admin from **Settings → Users**. Self-registration is disabled outright, so `POST /api/auth/sign-up/email` is not exposed.
+
+::: warning Keep one admin credential recoverable
+There is no mail transport, so there is no password-reset email. Password recovery is an admin setting someone else's password from **Settings → Users**. If the only admin password is lost, and no admin session survives anywhere, there is no supported way back in short of writing to the database by hand — `POST /api/setup` will not reopen while any credential exists.
+:::
+
+If the setup form does not appear on a server you believe is fresh, some account already has a password. Sign in with it.
+
 ## Reverse Proxy
 
 When the proxy terminates TLS, `BETTER_AUTH_URL` must name the origin the browser uses:
