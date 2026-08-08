@@ -840,8 +840,10 @@ export const libraryRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
       });
     }
 
-    // Invalidate library list and detail caches
-    await invalidateRouteCache(cacheStorage, "/api/library");
+    // Title, author, series, language and genres are all rendered into the OPDS
+    // feeds, and genres feed the /api/stats distribution. `/api/library` itself
+    // is not cached, so it needs no invalidation.
+    await invalidateRouteCache(cacheStorage, "/opds", "/api/stats");
 
     return c.json(updated, 200);
   })
@@ -916,7 +918,6 @@ export const libraryRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
     const { id } = c.req.valid("param");
     const db = c.get("db");
     const queues = c.get("queues");
-    const cacheStorage = c.get("cacheStorage");
 
     // Ownership check (owner or admin)
     await requireBookOwnership(c, db, id);
@@ -956,8 +957,10 @@ export const libraryRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
       skipStatusChange: true,
     });
 
-    // Invalidate candidates cache
-    await invalidateRouteCache(cacheStorage, `/api/books/${id}/candidates`);
+    // No invalidation: this deletes candidates and enqueues a refetch, and the
+    // candidates endpoint is not cached. The book row itself is untouched, so
+    // the OPDS feeds still describe it correctly. (The worker's later write is
+    // the worker's to invalidate — see cache.ts.)
 
     return c.json({ status: "refetching" as const, bookId: id, searchQuery }, 200);
   })
@@ -967,7 +970,6 @@ export const libraryRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
     const { id } = c.req.valid("param");
     const db = c.get("db");
     const queues = c.get("queues");
-    const cacheStorage = c.get("cacheStorage");
 
     // Ownership check (owner or admin)
     await requireBookOwnership(c, db, id);
@@ -985,8 +987,9 @@ export const libraryRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
     // Enqueue organize job — the worker handles re-organize when inboxPath is null
     await enqueueUserReorganize(queues.bookOrganize, id, getUserId(c));
 
-    // Invalidate caches since the book's file locations may change
-    await invalidateRouteCache(cacheStorage, "/api/library");
+    // No invalidation: nothing this handler changes is visible in a cached
+    // response. A re-organize moves files on disk, but OPDS acquisition links
+    // address them by bookFiles.id, which the move does not change.
 
     return c.json({ message: "Reorganize job enqueued" as const, bookId: id }, 200);
   })
@@ -1082,8 +1085,9 @@ export const libraryRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
       forceRedownloadCover: coverUrlChanged,
     });
 
-    // Invalidate caches
-    await invalidateRouteCache(cacheStorage, "/api/library", `/api/books/${id}/candidates`);
+    // Applying a candidate rewrites the same fields the OPDS feeds render, and
+    // the genres behind /api/stats.
+    await invalidateRouteCache(cacheStorage, "/opds", "/api/stats");
 
     return c.json(updated, 200);
   })
@@ -1161,7 +1165,10 @@ export const libraryRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
 
     const aggregate = await buildProgressAggregateForBook(db, id, userId);
 
-    await invalidateRouteCache(cacheStorage, "/api/library", "/api/reading-status");
+    // A manual reading status feeds the finished counts and streaks on
+    // /api/stats, whose cache key is per user. The OPDS feeds carry no reading
+    // state, and neither /api/library nor /api/reading-status is cached.
+    await invalidateRouteCache(cacheStorage, "/api/stats");
 
     return c.json(aggregate, 200);
   })
@@ -1193,7 +1200,10 @@ export const libraryRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
 
     const aggregate = await buildProgressAggregateForBook(db, id, userId);
 
-    await invalidateRouteCache(cacheStorage, "/api/library", "/api/reading-status");
+    // A manual reading status feeds the finished counts and streaks on
+    // /api/stats, whose cache key is per user. The OPDS feeds carry no reading
+    // state, and neither /api/library nor /api/reading-status is cached.
+    await invalidateRouteCache(cacheStorage, "/api/stats");
 
     return c.json(aggregate, 200);
   })

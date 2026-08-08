@@ -5,7 +5,6 @@ import { HTTPException } from "hono/http-exception";
 import { kosyncCredentials, serviceCredentials } from "#db";
 import type { AppVariables } from "../../context.js";
 import { getUserId, isAdmin, requireAdmin } from "../../shared/auth.js";
-import { invalidateRouteCache } from "../../services/cache.js";
 import { isRedisHealthy } from "../../services/redis.js";
 import { isEventBusHealthy } from "../../services/event-bus.js";
 import {
@@ -412,7 +411,6 @@ export const settingsRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
   .openapi(patchSettingsRoute, async (c) => {
     requireAdmin(c);
     const db = c.get("db");
-    const cacheStorage = c.get("cacheStorage");
     const body = c.req.valid("json");
     const updated: string[] = [];
 
@@ -433,8 +431,9 @@ export const settingsRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
       throw new HTTPException(400, { message: "No valid settings provided" });
     }
 
-    // Invalidate cached settings response
-    await invalidateRouteCache(cacheStorage, "/api/settings");
+    // No invalidation: GET /api/settings is not cached (nor is any other route
+    // these toggles affect), so the call this used to make could never match a
+    // key. The Hardcover toggles change no OPDS feed and no /api/stats figure.
 
     return c.json({ updated }, 200);
   });

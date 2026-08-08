@@ -4,6 +4,40 @@ import { getLogger } from "../lib/logger.js";
 const logger = getLogger("cache");
 
 /**
+ * The only path roots `cachedRoute` is mounted under (libris-kej).
+ *
+ * Every cached entry's key is `routes:<pathname>[:<query>][:user:<id>]`, so a
+ * prefix can only match something if a `cachedRoute` mount lives under it.
+ * Before this list existed, every call site invalidated `/api/library`,
+ * `/api/inbox`, `/api/settings` or `/api/books/{id}/candidates` — none of which
+ * is cached — while `/opds`, which is, was never invalidated by anything. The
+ * two lists were disjoint, so approving or editing a book left an e-reader
+ * refreshing its catalogue on a stale feed until the entry's TTL ran out.
+ *
+ * Keep it in sync with the mounts: `cache-invalidation.test.ts` derives the real
+ * mount list from the assembled router and fails if the two disagree in either
+ * direction.
+ */
+export const CACHED_ROUTE_PREFIXES = ["/opds", "/api/stats"] as const;
+
+type CachedRoot = (typeof CACHED_ROUTE_PREFIXES)[number];
+
+/**
+ * A path prefix that can actually match a cached key — a cached root, or
+ * anything below one (`/opds/books/{id}`).
+ *
+ * This is the compile-time half of the guard: passing `/api/library` to
+ * {@link invalidateRouteCache} is now a type error rather than a call that
+ * quietly does nothing.
+ */
+export type CachedRoutePrefix = CachedRoot | `${CachedRoot}/${string}`;
+
+/** Runtime form of {@link CachedRoutePrefix}, for tests and dynamic callers. */
+export function isCachedRoutePrefix(prefix: string): prefix is CachedRoutePrefix {
+  return CACHED_ROUTE_PREFIXES.some((root) => prefix === root || prefix.startsWith(`${root}/`));
+}
+
+/**
  * How long to wait before retrying invalidations a KV outage deferred.
  *
  * Short enough that recovery is prompt on an idle install, long enough that a
@@ -145,10 +179,16 @@ async function drain(
  * is cached during the outage either, since `setItem` fails too and the
  * middleware treats a read error as a miss, so the exposure is limited to
  * entries written before the outage began.
+ *
+ * Prefixes are restricted to {@link CachedRoutePrefix} so a call cannot name a
+ * path nothing caches (libris-kej). Over-invalidating is fine — `/opds` clears
+ * the whole catalogue, which is a handful of small feed entries — but naming a
+ * path that holds no entries is not, because it reads as coverage while doing
+ * nothing.
  */
 export async function invalidateRouteCache(
   cacheStorage: KVStore,
-  ...pathPrefixes: string[]
+  ...pathPrefixes: CachedRoutePrefix[]
 ): Promise<void> {
   const state = pendingFor(cacheStorage);
   // A caller that finds the store healthy again is the cheapest recovery

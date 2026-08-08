@@ -119,9 +119,25 @@ limits key off the real client IP. See _Reverse Proxy_ below.
 
 ### Route Cache
 
-OPDS feeds and `/api/stats` are cached in Redis per user for 60-120 seconds, and
-routes that mutate the library clear the affected prefixes after their database
-write commits.
+Exactly two surfaces are cached in Redis, per user, for 60-120 seconds:
+
+- **`/opds/*`** — the catalogue an e-reader browses (root, books, authors,
+  genres, series, languages, new arrivals). Covers, downloads and OPDS search
+  are not cached.
+- **`/api/stats`** — the reading statistics page.
+
+Nothing else is. `/api/library`, `/api/inbox`, `/api/settings` and the book
+candidates endpoints answer from Postgres on every request.
+
+Routes that mutate the library clear the prefixes they affect after their
+database write commits: editing, approving or deleting a book clears `/opds` and
+`/api/stats`; setting or clearing a manual reading status clears `/api/stats`.
+Handlers that change nothing a cached response contains — a rescan, a metadata
+refetch, a re-organize, a settings toggle — deliberately clear nothing.
+
+Invalidation prefixes are restricted at the type level to paths under a real
+`cachedRoute` mount, and a test derives the mounted set from the assembled
+router, so the two lists cannot drift apart into a catalogue nothing clears.
 
 Because that write has already committed, a failed invalidation is never
 reported to the caller — it would turn a successful mutation into a 500, and a

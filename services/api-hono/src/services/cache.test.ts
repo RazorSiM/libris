@@ -9,14 +9,15 @@
  */
 import { Hono } from "hono";
 import type { PGlite } from "@electric-sql/pglite";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vite-plus/test";
 import { createApp } from "../app.js";
 import type { AppVariables } from "../context.js";
-import { createTestAuth, createTestDb, type TestDb } from "../db/test-utils.js";
+import { createTestAuth, createTestDb, seedAppPassword, type TestDb } from "../db/test-utils.js";
 import * as schema from "../db/schema.js";
 import type { Env } from "../env.js";
 import { cachedRoute } from "../middleware/cache.js";
 import {
+  type CachedRoutePrefix,
   getDeferredInvalidations,
   invalidateRouteCache,
   resetDeferredInvalidations,
@@ -109,13 +110,13 @@ function createFlakyKVStore(): KVStore & { down: boolean } {
 describe("invalidateRouteCache", () => {
   it("removes matching route keys and leaves the rest alone", async () => {
     const store = createMemoryKVStore();
-    await store.setItem("routes:/api/library:user:alice", { body: "x" });
-    await store.setItem("routes:/api/library?page=2:user:alice", { body: "y" });
-    await store.setItem("routes:/opds/new:user:alice", { body: "z" });
+    await store.setItem("routes:/opds/books:user:alice", { body: "x" });
+    await store.setItem("routes:/opds/books?page=2:user:alice", { body: "y" });
+    await store.setItem("routes:/api/stats:user:alice", { body: "z" });
 
-    await invalidateRouteCache(store, "/api/library");
+    await invalidateRouteCache(store, "/opds");
 
-    expect(await store.getKeys()).toEqual(["routes:/opds/new:user:alice"]);
+    expect(await store.getKeys()).toEqual(["routes:/api/stats:user:alice"]);
   });
 
   it("does not reject when the KV store is down", async () => {
@@ -125,7 +126,7 @@ describe("invalidateRouteCache", () => {
 
     // Pre-fix this rejected with ECONNREFUSED, which routes turned into a 500
     // on a mutation whose database write had already committed.
-    await expect(invalidateRouteCache(store, "/api/library")).resolves.toBeUndefined();
+    await expect(invalidateRouteCache(store, "/opds")).resolves.toBeUndefined();
   });
 
   it("defers the failed prefix rather than dropping it", async () => {
@@ -133,28 +134,28 @@ describe("invalidateRouteCache", () => {
     resetDeferredInvalidations(store);
     store.down = true;
 
-    await invalidateRouteCache(store, "/api/library", "/api/inbox");
+    await invalidateRouteCache(store, "/opds", "/api/stats");
 
     // The compensation: a swallowed invalidation is remembered, so the stale
     // entry cannot survive the outage unnoticed.
-    expect(getDeferredInvalidations(store)).toEqual(["/api/library", "/api/inbox"]);
+    expect(getDeferredInvalidations(store)).toEqual(["/opds", "/api/stats"]);
   });
 
   it("drains the deferred backlog on the next call once the store recovers", async () => {
     const store = createFlakyKVStore();
     resetDeferredInvalidations(store);
-    await store.setItem("routes:/api/library:user:alice", { body: "stale" });
+    await store.setItem("routes:/opds/new:user:alice", { body: "stale" });
 
     store.down = true;
-    await invalidateRouteCache(store, "/api/library");
+    await invalidateRouteCache(store, "/opds");
     // The entry written before the outage is still there — that is the staleness.
     store.down = false;
-    expect(await store.getItem("routes:/api/library:user:alice")).not.toBeNull();
+    expect(await store.getItem("routes:/opds/new:user:alice")).not.toBeNull();
 
     // A later, unrelated mutation is enough to clear it.
-    await invalidateRouteCache(store, "/api/settings");
+    await invalidateRouteCache(store, "/api/stats");
 
-    expect(await store.getItem("routes:/api/library:user:alice")).toBeNull();
+    expect(await store.getItem("routes:/opds/new:user:alice")).toBeNull();
     expect(getDeferredInvalidations(store)).toEqual([]);
   });
 
@@ -163,21 +164,21 @@ describe("invalidateRouteCache", () => {
     try {
       const store = createFlakyKVStore();
       resetDeferredInvalidations(store);
-      await store.setItem("routes:/api/library:user:alice", { body: "stale" });
+      await store.setItem("routes:/opds/new:user:alice", { body: "stale" });
 
       store.down = true;
-      await invalidateRouteCache(store, "/api/library");
-      expect(getDeferredInvalidations(store)).toEqual(["/api/library"]);
+      await invalidateRouteCache(store, "/opds");
+      expect(getDeferredInvalidations(store)).toEqual(["/opds"]);
 
       // Still failing after the first retry tick: the backlog is kept.
       await vi.advanceTimersByTimeAsync(5_000);
-      expect(getDeferredInvalidations(store)).toEqual(["/api/library"]);
+      expect(getDeferredInvalidations(store)).toEqual(["/opds"]);
 
       store.down = false;
       await vi.advanceTimersByTimeAsync(5_000);
 
       expect(getDeferredInvalidations(store)).toEqual([]);
-      expect(await store.getItem("routes:/api/library:user:alice")).toBeNull();
+      expect(await store.getItem("routes:/opds/new:user:alice")).toBeNull();
     } finally {
       vi.useRealTimers();
     }
@@ -188,14 +189,19 @@ describe("invalidateRouteCache", () => {
     resetDeferredInvalidations(store);
     store.down = true;
 
-    const prefixes = Array.from({ length: 300 }, (_, i) => `/api/books/book-${i}/candidates`);
+    // Per-book prefixes are the unbounded case: not a fixed set, so a bulk
+    // import during an outage could grow the backlog without a cap.
+    const prefixes = Array.from(
+      { length: 300 },
+      (_, i): CachedRoutePrefix => `/opds/books/book-${i}`,
+    );
     await invalidateRouteCache(store, ...prefixes);
 
     const deferred = getDeferredInvalidations(store);
     expect(deferred).toHaveLength(256);
     // The oldest are evicted first; those fall back to the entry TTL.
-    expect(deferred[0]).toBe("/api/books/book-44/candidates");
-    expect(deferred.at(-1)).toBe("/api/books/book-299/candidates");
+    expect(deferred[0]).toBe("/opds/books/book-44");
+    expect(deferred.at(-1)).toBe("/opds/books/book-299");
 
     resetDeferredInvalidations(store);
   });
@@ -245,33 +251,21 @@ describe("a mutating route under a KV outage", () => {
     await pglite.close();
   });
 
-  beforeEach(async () => {
-    await db.delete(schema.appSettings);
-  });
-
-  it("still applies and reports success (PATCH /api/settings)", async () => {
+  it("still applies and reports success (PATCH /api/library/{id})", async () => {
     const cacheStorage = createFlakyKVStore();
     resetDeferredInvalidations(cacheStorage);
 
     const auth = createTestAuth(db, TEST_ENV);
-    // The settings prefix refuses app-password credentials (59m.13), so this
-    // has to be a real session cookie.
-    await auth.api.createUser({
-      body: {
-        email: "cache-admin@example.test",
-        password: "cache-admin-password-1234",
-        name: "Cache Admin",
-        role: "admin",
-      },
-    });
-    const { headers: signInHeaders } = await auth.api.signInEmail({
-      body: { email: "cache-admin@example.test", password: "cache-admin-password-1234" },
-      returnHeaders: true,
-    });
-    const cookie = signInHeaders
-      .getSetCookie()
-      .map((value) => value.split(";")[0])
-      .join("; ");
+    // This test used to drive PATCH /api/settings, which no longer invalidates
+    // anything: nothing under /api/settings is cached, so the call was a no-op
+    // and could not exercise the outage path (libris-kej). PATCH
+    // /api/library/{id} does invalidate — /opds and /api/stats — so it is the
+    // route that actually puts a KV write in the way of a committed DB write.
+    const { userId, rawKey } = await seedAppPassword(auth, db, { name: "Cache Outage" });
+    const [book] = await db
+      .insert(schema.books)
+      .values({ status: "organized", title: "Before", createdBy: userId })
+      .returning({ id: schema.books.id });
 
     const { app } = createApp({
       services: {
@@ -294,19 +288,19 @@ describe("a mutating route under a KV outage", () => {
 
     cacheStorage.down = true;
 
-    const response = await app.request("/api/settings", {
+    const response = await app.request(`/api/library/${book.id}`, {
       method: "PATCH",
-      headers: { cookie, "content-type": "application/json" },
-      body: JSON.stringify({ hardcoverMetadataEnabled: true }),
+      headers: { Authorization: `Bearer ${rawKey}`, "content-type": "application/json" },
+      body: JSON.stringify({ title: "After" }),
     });
 
-    // Pre-fix: 500. The setting was written to Postgres and the caller was told
+    // Pre-fix: 500. The title was written to Postgres and the caller was told
     // the request failed.
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ updated: ["hardcoverMetadataEnabled"] });
+    expect((await response.json()).title).toBe("After");
 
-    // ...and the invalidation it could not perform is queued for retry.
-    expect(getDeferredInvalidations(cacheStorage)).toEqual(["/api/settings"]);
+    // ...and the invalidations it could not perform are queued for retry.
+    expect(getDeferredInvalidations(cacheStorage)).toEqual(["/opds", "/api/stats"]);
     resetDeferredInvalidations(cacheStorage);
   });
 });

@@ -19,7 +19,6 @@ const coverLogger = getLogger("inbox:cover");
 
 const COVER_PROXY_TIMEOUT_MS = 10_000;
 import { computeChecksumFromBuffer } from "../../shared/checksum.js";
-import { invalidateRouteCache } from "../../services/cache.js";
 import { InboxListQuerySchema, IdParamSchema } from "../../shared/validation.js";
 import {
   InboxListResponseSchema,
@@ -495,7 +494,6 @@ export const inboxRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
     const { id } = c.req.valid("param");
     const db = c.get("db");
     const queues = c.get("queues");
-    const cacheStorage = c.get("cacheStorage");
 
     // Ownership check (owner or admin)
     await requireBookOwnership(c, db, id);
@@ -541,8 +539,10 @@ export const inboxRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
     // Enqueue metadata fetch job AFTER the transaction commits successfully
     await queues.bookFetchMetadata.add("fetch-metadata", { bookId: id, searchQuery });
 
-    // Invalidate caches: status changed, candidates deleted
-    await invalidateRouteCache(cacheStorage, "/api/inbox", `/api/books/${id}/candidates`);
+    // No invalidation: a rescan moves the book between "review" and "inbox",
+    // and neither status appears in the OPDS catalogue (organized only) or in
+    // the /api/stats aggregates. The inbox and candidates endpoints it used to
+    // name are not cached at all.
 
     return c.json({ status: "rescanning", bookId: id, searchQuery });
   })

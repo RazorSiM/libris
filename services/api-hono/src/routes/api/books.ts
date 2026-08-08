@@ -164,13 +164,9 @@ export const booksRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
       }
     }
 
-    // Invalidate caches
-    await invalidateRouteCache(
-      cacheStorage,
-      "/api/library",
-      "/api/inbox",
-      `/api/books/${id}/candidates`,
-    );
+    // The book is gone from every OPDS feed that listed it, and from the genre
+    // counts on /api/stats. Nothing else the API serves is cached.
+    await invalidateRouteCache(cacheStorage, "/opds", "/api/stats");
 
     return c.body(null, 204);
   })
@@ -272,13 +268,11 @@ export const booksRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
     // Enqueue organize job AFTER transaction commits successfully
     await enqueueBookOrganize(queues.bookOrganize, { bookId: id });
 
-    // Invalidate caches
-    await invalidateRouteCache(
-      cacheStorage,
-      "/api/library",
-      "/api/inbox",
-      `/api/books/${id}/candidates`,
-    );
+    // The transaction already set status to "organized", so the book is in the
+    // OPDS catalogue as of now — that is exactly the feed an e-reader refreshes
+    // right after an approval, so it must not keep serving the pre-approval
+    // copy. Its genres also move the /api/stats distribution.
+    await invalidateRouteCache(cacheStorage, "/opds", "/api/stats");
 
     return c.json(updated, 200);
   })
