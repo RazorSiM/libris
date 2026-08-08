@@ -157,20 +157,22 @@ const route = createRoute({
 - All schemas use Zod with `.openapi()` extensions for OpenAPI metadata.
 - Verify at `http://localhost:3000/_docs/scalar` after changes.
 
-## Issue Tracking (bd/beads)
+## Issue Tracking
 
-This project uses **bd (beads)** for ALL issue tracking. Do NOT use markdown TODOs or task lists.
+**GitHub Issues is where issues live.** File bugs and feature requests there and
+reference them from commits and PRs — it is the only tracker every contributor
+can see.
 
-> **Beads is local & per-user.** The `.beads/` directory is git-ignored — issues and config are never committed or shared. Each contributor runs their own tracker. Fresh setup: `bd init --stealth` (configures `.git/info/exclude` so beads stays invisible to the repo).
+Some of us additionally run [beads](https://github.com/gastownhall/beads) (`bd`)
+locally, to give coding agents dependency-aware task tracking across sessions. It
+is optional and entirely local: `.beads/` is excluded from the repository, so
+those issues are never shared through git and nobody needs it to contribute. If
+you want it, `bd init --stealth` sets it up without touching any tracked file,
+and `bd prime` prints the workflow for your agent.
 
-```bash
-bd ready                    # Show unblocked issues
-bd update <id> --claim      # Claim work
-bd close <id>               # Mark complete
-bd create --title="..." --description="..." --type=task --priority=2
-```
-
-See `bd --help` for full usage. Types: `bug`, `feature`, `task`, `epic`, `chore`. Priorities: 0 (critical) to 4 (backlog).
+Because a beads id only resolves on the machine that created it, **do not put one
+in committed code, comments, or commit messages.** Give the reason instead — a
+dangling `libris-1a2` helps nobody reading this repository.
 
 ## Git Forge (GitHub)
 
@@ -188,14 +190,13 @@ gh pr merge <id>                                     # Merge PR
 
 ## Feature Workflow
 
-When an agent picks up a new bead or feature-sized task, use this workflow by default.
+When an agent picks up an issue or a feature-sized task, use this workflow by default.
 
 ### 1. Start From The Issue
 
-- Claim the bead with `bd update <id> --claim`.
-- Read the bead fully before changing code.
-- Prefer one branch per bead or tightly related fix.
-- Branch naming should be short and issue-oriented, for example `fix/r6p-settings-tab-query`.
+- Read the issue fully before changing code, and claim it so nobody duplicates the work.
+- Prefer one branch per issue, or per tightly related fix.
+- Branch naming should be short and issue-oriented, for example `fix/settings-tab-query`.
 
 ### 2. Work On A Dedicated Branch
 
@@ -267,7 +268,7 @@ gh pr create --title "title" --body "description"
 PR body should include:
 
 - a short summary
-- the bead or issue ID it fixes
+- the GitHub issue it closes, if there is one
 - the exact validation commands that passed locally
 
 ### 10. Wait For CI Before Hand-Off
@@ -277,61 +278,15 @@ PR body should include:
 
 ## Session Completion
 
-Work is NOT complete until `git push` succeeds.
+Run the quality gates, commit locally, and leave the branch ready.
 
 ```bash
-git pull --rebase
-bd dolt push
-git push
-git status   # Must show "up to date with origin"
+vp run check
+vp run test --no-cache   # --no-cache: a cached run replays a skip as if it passed
+git status               # working tree clean, everything committed
 ```
 
-<!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:ca08a54f -->
-
-## Beads Issue Tracker
-
-This project uses **bd (beads)** for issue tracking. Run `bd prime` to see full workflow context and commands.
-
-### Quick Reference
-
-```bash
-bd ready              # Find available work
-bd show <id>          # View issue details
-bd update <id> --claim  # Claim work
-bd close <id>         # Complete work
-```
-
-### Rules
-
-- Use `bd` for ALL task tracking — do NOT use TodoWrite, TaskCreate, or markdown TODO lists
-- Run `bd prime` for detailed command reference and session close protocol
-- Use `bd remember` for persistent knowledge — do NOT use MEMORY.md files
-
-## Session Completion
-
-**When ending a work session**, you MUST complete ALL steps below. Work is NOT complete until `git push` succeeds.
-
-**MANDATORY WORKFLOW:**
-
-1. **File issues for remaining work** - Create issues for anything that needs follow-up
-2. **Run quality gates** (if code changed) - Tests, linters, builds
-3. **Update issue status** - Close finished work, update in-progress items
-4. **PUSH TO REMOTE** - This is MANDATORY:
-   ```bash
-   git pull --rebase
-   bd dolt push
-   git push
-   git status  # MUST show "up to date with origin"
-   ```
-5. **Clean up** - Clear stashes, prune remote branches
-6. **Verify** - All changes committed AND pushed
-7. **Hand off** - Provide context for next session
-
-**CRITICAL RULES:**
-
-- Work is NOT complete until `git push` succeeds
-- NEVER stop before pushing - that leaves work stranded locally
-- NEVER say "ready to push when you are" - YOU must push
-- If push fails, resolve and retry until it succeeds
-
-<!-- END BEADS INTEGRATION -->
+**Do not push, open a PR, publish an image or push tags unless you are explicitly
+asked to.** Those are outward-facing and are the maintainer's call every time.
+Finish by reporting what changed, what you validated, and the exact command you
+would run next.
