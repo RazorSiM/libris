@@ -17,6 +17,7 @@ import * as schema from "../db/schema.js";
 import type { AppVariables } from "../context.js";
 import type { Env } from "../env.js";
 import { createAuth } from "./auth.js";
+import { lastAdminMiddleware } from "../middleware/last-admin.js";
 import { reassignBooksOnRemoveUser } from "./user-deletion.js";
 import { createMemorySecondaryStorage } from "../services/auth-secondary-storage.js";
 import { createMemoryKVStore } from "../services/kv-store.js";
@@ -213,6 +214,56 @@ describe("POST /api/auth/admin/remove-user — target owns books", () => {
     expect(
       await db.select().from(schema.accounts).where(eq(schema.accounts.userId, housemate.id)),
     ).toHaveLength(0);
+  });
+
+  /**
+   * libris-cyg, first half: the guard's own refusal never moves a book.
+   *
+   * `reassignBooksOnRemoveUser` writes through `c.get("db")`, so it commits on
+   * its own connection while `lastAdminMiddleware`'s `FOR UPDATE` transaction
+   * is still open — a shape that reads as "the books escape the guard's
+   * atomicity". They do not, because `withLastAdminLock` throws its 409 BEFORE
+   * calling its action, so on the refusal path `next()` never runs and the
+   * reassignment is never reached. That, not the compensating update, is what
+   * covers the guard's own verdict.
+   *
+   * PGlite-safe precisely because it is the refusal path: the transaction is
+   * closed by the throw rather than held across a `next()` that would need a
+   * second connection (libris-8mx).
+   */
+  it("never reaches the reassignment when the guard refuses the removal", async () => {
+    const { auth } = createTestApp();
+    const soleAdmin = await createUser(auth, "sole-admin@example.test", "admin");
+    const [book] = await db
+      .insert(schema.books)
+      .values({ createdBy: soleAdmin.id, title: "Never moves" })
+      .returning();
+
+    let reassignmentRan = false;
+    const app = new Hono<{ Variables: AppVariables }>();
+    app.use("*", async (c, next) => {
+      c.set("db", db as never);
+      c.set("env", TEST_ENV);
+      c.set("auth", auth);
+      c.set("clientIp", "127.0.0.1");
+      await next();
+    });
+    app.use("/api/auth/admin/remove-user", lastAdminMiddleware);
+    app.use("/api/auth/admin/remove-user", async (c, next) => {
+      reassignmentRan = true;
+      await reassignBooksOnRemoveUser(c, next);
+    });
+    app.post("/api/auth/admin/remove-user", (c) => c.json({ ok: true }, 200));
+
+    const res = await removeUser(app, soleAdmin.cookie, soleAdmin.id);
+
+    expect(res.status).toBe(409);
+    // The assertion that distinguishes "never moved" from "moved and moved
+    // back": with the middlewares registered the other way round this is true,
+    // and the book's ownership alone could not tell the two apart.
+    expect(reassignmentRan).toBe(false);
+    const [stored] = await db.select().from(schema.books).where(eq(schema.books.id, book!.id));
+    expect(stored!.createdBy).toBe(soleAdmin.id);
   });
 
   it("leaves the account able to sign in when the removal is refused", async () => {
