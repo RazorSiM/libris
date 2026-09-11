@@ -45,7 +45,10 @@ const toast = useToast();
 const queryCache = useQueryCache();
 const { isAdmin, userId: currentUserId } = useAuth();
 
-const id = route.params.id;
+// Reactive: the component is reused when only the route param changes
+// (`/inbox/A` → `/inbox/B`, e.g. through a duplicate link), so a snapshot would
+// leave every mutation and subscription pointed at the previously viewed book.
+const id = computed(() => route.params.id);
 
 const { data: book, status, refetch } = useInboxDetailLoader();
 
@@ -69,6 +72,15 @@ const { mutateAsync: deleteBook } = useDeleteBook();
 // Rescan keeps a manual loading ref because the spinner should stay
 // until the WebSocket metadata-ready event fires, not just when the HTTP call returns.
 const rescanning = ref(false);
+
+// A→B navigation reuses this component: clear the previous book's field
+// selections and transient UI state so B cannot be approved with A's values.
+watch(id, () => {
+  selections.value = {};
+  rescanning.value = false;
+  showDeleteConfirm.value = false;
+  showHardcoverSearch.value = false;
+});
 
 // WebSocket: listen for events filtered to this book
 const { on } = useServerEvents({ bookId: id });
@@ -100,14 +112,14 @@ on("book:organized", () => {
 async function handleRescan() {
   rescanning.value = true;
   try {
-    await rescanBook(id);
+    await rescanBook(id.value);
     toast.add({ title: "Metadata rescan queued", color: "info" });
   } catch (err) {
     rescanning.value = false;
     toast.add({ title: err instanceof Error ? err.message : "Failed to rescan", color: "error" });
   } finally {
     queryCache.invalidateQueries({ key: ["library"] });
-    queryCache.invalidateQueries({ key: ["book", id] });
+    queryCache.invalidateQueries({ key: inboxKeys.detail(id.value) });
     queryCache.invalidateQueries({ key: inboxKeys.list() });
   }
 }
@@ -122,7 +134,7 @@ async function handleApprove() {
     const body: ApproveBookBody = {
       fields: selections.value as ApproveBookBody["fields"],
     };
-    await approveBook({ id, body });
+    await approveBook({ id: id.value, body });
     toast.add({ title: "Book approved and organized", color: "success" });
     router.push("/inbox");
   } catch (err) {
@@ -145,7 +157,7 @@ function onHardcoverPick(hit: { normalized: Record<string, unknown> }) {
 
 async function handleDelete() {
   try {
-    await deleteBook(id);
+    await deleteBook(id.value);
     toast.add({ title: "Book deleted", color: "success" });
     queryCache.invalidateQueries({ key: inboxKeys.count() });
     router.push("/inbox");
@@ -169,7 +181,7 @@ const isUrl = (v: unknown): v is string => typeof v === "string" && v.startsWith
 const extractedCoverUrl = computed(() => {
   const b = book.value as (typeof book.value & { coverUrl?: string | null }) | null;
   if (b?.files?.some((f: { format: string }) => f.format === "epub")) {
-    return inboxCoverUrl(id);
+    return inboxCoverUrl(id.value);
   }
   return null;
 });
@@ -415,6 +427,7 @@ const fieldCount = computed(() => Object.keys(selections.value).length);
           />
           <ErrorBoundary>
             <MetadataFieldPicker
+              :key="id"
               ref="pickerRef"
               v-model="selections"
               :candidates="book.candidates"

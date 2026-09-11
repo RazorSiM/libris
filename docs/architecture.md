@@ -408,14 +408,14 @@ flowchart TD
     C --> |"Extract metadata from EPUB/PDF\n(Dublin Core, XMP, PDF Info)"| D["BOOK_FETCH_METADATA"]
     D --> |"Query Hardcover\nInsert candidates, detect duplicates\nSet status → review"| E["👤 User reviews candidates"]
     E --> |"Pick fields from sources, approve"| F["BOOK_ORGANIZE"]
-    F --> |"Move to /library/Author/Title/\nDownload cover, embed metadata in EPUB\nCompute MD5, set status → organized"| G["✅ Organized"]
+    F --> |"Move to /library/Author/Title (book id)/ with no-clobber naming\nDownload cover, embed metadata in EPUB\nCompute MD5, set status → organized"| G["✅ Organized"]
     G -.-> |"Refetch metadata\n(POST /api/library/id/refetch)"| D
     G -.-> |"Re-organize\n(POST /api/library/id/reorganize)"| F
 ```
 
 `BOOK_FETCH_METADATA` queries Hardcover, the sole external metadata source. A Hardcover miss is not fatal: the book is still promoted to review using the file-derived candidate. The chain ends at `status = 'review'` — `BOOK_ORGANIZE` is a manual gate and is never auto-enqueued. It runs only when a user approves the book (the approve endpoint enqueues it). EPUB is the only ingested format; other formats are silently ignored.
 
-Queue payloads are treated as untrusted input. The detect and parse workers require absolute, existing file paths whose canonical targets remain inside `LIBRIS_INBOX_PATH`; invalid paths fail without retrying or writing database rows. Organization sanitizes metadata-derived author and title components, including dot segments and reserved filesystem names, and validates the complete destination inside `LIBRIS_LIBRARY_PATH` before creating directories. File-serving routes apply the same canonical boundary check, returning 404 for a missing file and 403 for an attempted escape.
+Queue payloads are treated as untrusted input. The detect and parse workers require absolute, existing file paths whose canonical targets remain inside `LIBRIS_INBOX_PATH`; invalid paths fail without retrying or writing database rows. Organization sanitizes metadata-derived author and title components, including dot segments and reserved filesystem names, validates the complete destination inside `LIBRIS_LIBRARY_PATH` before creating directories, and places each book in its own id-suffixed directory under that author/title. Files move with a no-clobber operation, so an existing file is never silently replaced; a retry after a crash between the move and the database update adopts the destination only when its checksum matches the recorded one. File-serving routes apply the same canonical boundary check, returning 404 for a missing file and 403 for an attempted escape.
 
 Uploads are rejected before writing unless the content is a structurally valid EPUB ZIP whose first entry is the uncompressed `mimetype` file containing `application/epub+zip`. EPUB ZIP processing then enforces a 16 MiB uncompressed limit per entry and a 64 MiB total archive budget. DEFLATE runs asynchronously with an output ceiling, so a lying central directory cannot bypass the declared-size check or synchronously block the HTTP process. OPF documents have a tighter 2 MiB input limit and bounded, linear metadata element scanning. When approved metadata is embedded, the rebuilt EPUB preserves the original compression method for existing entries; the required first `mimetype` entry remains uncompressed.
 

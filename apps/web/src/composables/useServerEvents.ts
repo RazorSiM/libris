@@ -1,4 +1,5 @@
-import { inject, onScopeDispose } from "vue";
+import { inject, onScopeDispose, toValue } from "vue";
+import type { MaybeRefOrGetter } from "vue";
 import { serverEventsKey } from "~/plugins/server-events";
 import type { EventHandler } from "~/types/server-events";
 
@@ -15,8 +16,12 @@ export type { EventHandler, ServerEvent } from "~/types/server-events";
  *
  * With book filter:
  *   const { on, close } = useServerEvents({ bookId: '123' })
+ *
+ * The filter accepts a ref or getter so a page whose route parameter can change
+ * without remounting (e.g. `/inbox/[id]` navigating A→B) filters on the book
+ * currently on screen, not the one that was there at setup time.
  */
-export function useServerEvents(opts?: { bookId?: string }) {
+export function useServerEvents(opts?: { bookId?: MaybeRefOrGetter<string | undefined> }) {
   const injected = inject(serverEventsKey);
   if (!injected) {
     throw new Error("useServerEvents() called before setupServerEvents() ran in main.ts");
@@ -30,7 +35,8 @@ export function useServerEvents(opts?: { bookId?: string }) {
 
   function on(type: string, handler: EventHandler): () => void {
     const wrapped: EventHandler = (event) => {
-      if (opts?.bookId && event.bookId && event.bookId !== opts.bookId) return;
+      const bookId = toValue(opts?.bookId);
+      if (bookId && event.bookId && event.bookId !== bookId) return;
       if (type !== "*" && event.type !== type) return;
       handler(event);
     };

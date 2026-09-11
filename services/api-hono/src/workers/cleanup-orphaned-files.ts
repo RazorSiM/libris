@@ -8,6 +8,15 @@ import { getLogger } from "../lib/logger.js";
 
 const logger = getLogger("worker:cleanup-orphaned-files");
 
+/**
+ * Errno codes that positively mean "there is no file at this path".
+ *
+ * Only these justify deleting the database row. Every other failure —
+ * EACCES on a parent directory, EIO on a failing mount, ELOOP — leaves the
+ * file possibly present, so the row must be kept for the next run.
+ */
+const MISSING_PATH_CODES = new Set(["ENOENT", "ENOTDIR"]);
+
 /** Default page size for keyset-paginated scan of book_files. */
 export const DEFAULT_BATCH_SIZE = 500;
 
@@ -42,6 +51,7 @@ export function createCleanupOrphanedFilesProcessor(
     let lastId: string | null = null;
     let totalChecked = 0;
     let totalOrphaned = 0;
+    let totalUnreadable = 0;
 
     while (true) {
       const conditions = [isNotNull(bookFiles.storagePath)];
@@ -62,8 +72,18 @@ export function createCleanupOrphanedFilesProcessor(
         const fullPath = join(libraryRoot, row.storagePath);
         try {
           await lstat(fullPath);
-        } catch {
-          orphanIds.push(row.id);
+        } catch (err) {
+          const code = (err as NodeJS.ErrnoException).code;
+          if (code && MISSING_PATH_CODES.has(code)) {
+            orphanIds.push(row.id);
+          } else {
+            // The file may still be there — a permission or I/O fault says
+            // nothing about existence. Keep the association and surface it.
+            totalUnreadable += 1;
+            logger
+              .withMetadata({ path: fullPath, code: code ?? "unknown" })
+              .warn("Could not read library file; keeping its database record");
+          }
         }
       }
 
@@ -78,7 +98,10 @@ export function createCleanupOrphanedFilesProcessor(
       if (rows.length < batchSize) break;
     }
 
-    const message = `Checked ${totalChecked} files, removed ${totalOrphaned} orphaned`;
+    const message =
+      totalUnreadable > 0
+        ? `Checked ${totalChecked} files, removed ${totalOrphaned} orphaned, kept ${totalUnreadable} unreadable`
+        : `Checked ${totalChecked} files, removed ${totalOrphaned} orphaned`;
     await job.log(message);
     logger.info(message);
     return { result: message };
