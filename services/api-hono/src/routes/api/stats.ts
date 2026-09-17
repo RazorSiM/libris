@@ -297,29 +297,53 @@ export const statsRoutes = router.openapi(statsRoute, async (c) => {
         AND finished_at > started_at
     `),
 
-    // Pages-read heatmap for the requested calendar year
+    // Pages-read heatmap for the requested calendar year.
+    //
+    // The first sample of the year needs last year's last sample as its LAG
+    // baseline, otherwise its whole percentage counts as pages read (a book at
+    // 50% on Dec 31 and 51% on Jan 1 reported 51 pages, not 1). Each
+    // (document, device) stream therefore carries its latest pre-year sample
+    // through the window and only in-period rows are aggregated.
     db.execute<{ day: string; pages: string }>(sql`
-      WITH deltas AS (
+      WITH prior_samples AS (
+        SELECT DISTINCT ON (rph.document, rph.device)
+          rph.document, rph.device, rph.percentage, rph.created_at, rph.book_id
+        FROM ${readingProgressHistory} rph
+        WHERE rph.user_id = ${userId}
+          AND rph.created_at < ${heatmapYearStart}::date
+        ORDER BY rph.document, rph.device, rph.created_at DESC
+      ),
+      samples AS (
+        SELECT rph.document, rph.device, rph.percentage, rph.created_at, rph.book_id,
+          TRUE AS in_period
+        FROM ${readingProgressHistory} rph
+        WHERE rph.user_id = ${userId}
+          AND rph.created_at >= ${heatmapYearStart}::date
+          AND rph.created_at < ${heatmapYearEnd}::date
+        UNION ALL
+        SELECT document, device, percentage, created_at, book_id, FALSE
+        FROM prior_samples
+      ),
+      deltas AS (
         SELECT
-          DATE(rph.created_at) AS day,
+          DATE(s.created_at) AS day,
+          s.in_period,
           GREATEST(0,
-            CAST(rph.percentage AS numeric) -
+            CAST(s.percentage AS numeric) -
             COALESCE(
-              LAG(CAST(rph.percentage AS numeric)) OVER (
-                PARTITION BY rph.document, rph.device
-                ORDER BY rph.created_at
+              LAG(CAST(s.percentage AS numeric)) OVER (
+                PARTITION BY s.document, s.device
+                ORDER BY s.created_at
               ),
               0
             )
           ) * COALESCE(b.page_count, 0) AS page_delta
-        FROM ${readingProgressHistory} rph
-        INNER JOIN ${books} b ON b.id = rph.book_id
-        WHERE rph.user_id = ${userId}
-          AND rph.created_at >= ${heatmapYearStart}::date
-          AND rph.created_at < ${heatmapYearEnd}::date
+        FROM samples s
+        INNER JOIN ${books} b ON b.id = s.book_id
       )
       SELECT day::text, ROUND(SUM(page_delta))::text AS pages
       FROM deltas
+      WHERE in_period
       GROUP BY day
       HAVING ROUND(SUM(page_delta)) > 0
       ORDER BY day
@@ -352,29 +376,49 @@ export const statsRoutes = router.openapi(statsRoute, async (c) => {
       ORDER BY m.month
     `),
 
-    // Reading velocity — 7-day moving avg of pages/day for the last 90 days
+    // Reading velocity — 7-day moving avg of pages/day for the last 90 days.
+    // The 97-day lookback exists so the moving window is full at its left
+    // edge; the `prior_samples` baseline does the same for the delta itself.
     db.execute<{ day: string; avg_pages: string }>(sql`
-      WITH deltas AS (
+      WITH prior_samples AS (
+        SELECT DISTINCT ON (rph.document, rph.device)
+          rph.document, rph.device, rph.percentage, rph.created_at, rph.book_id
+        FROM ${readingProgressHistory} rph
+        WHERE rph.user_id = ${userId}
+          AND rph.created_at < NOW() - INTERVAL '97 days'
+        ORDER BY rph.document, rph.device, rph.created_at DESC
+      ),
+      samples AS (
+        SELECT rph.document, rph.device, rph.percentage, rph.created_at, rph.book_id,
+          TRUE AS in_period
+        FROM ${readingProgressHistory} rph
+        WHERE rph.user_id = ${userId}
+          AND rph.created_at >= NOW() - INTERVAL '97 days'
+        UNION ALL
+        SELECT document, device, percentage, created_at, book_id, FALSE
+        FROM prior_samples
+      ),
+      deltas AS (
         SELECT
-          DATE(rph.created_at) AS day,
+          DATE(s.created_at) AS day,
+          s.in_period,
           GREATEST(0,
-            CAST(rph.percentage AS numeric) -
+            CAST(s.percentage AS numeric) -
             COALESCE(
-              LAG(CAST(rph.percentage AS numeric)) OVER (
-                PARTITION BY rph.document, rph.device
-                ORDER BY rph.created_at
+              LAG(CAST(s.percentage AS numeric)) OVER (
+                PARTITION BY s.document, s.device
+                ORDER BY s.created_at
               ),
               0
             )
           ) * COALESCE(b.page_count, 0) AS page_delta
-        FROM ${readingProgressHistory} rph
-        INNER JOIN ${books} b ON b.id = rph.book_id
-        WHERE rph.user_id = ${userId}
-          AND rph.created_at >= NOW() - INTERVAL '97 days'
+        FROM samples s
+        INNER JOIN ${books} b ON b.id = s.book_id
       ),
       daily AS (
         SELECT day, SUM(page_delta) AS pages
         FROM deltas
+        WHERE in_period
         GROUP BY day
       ),
       windowed AS (

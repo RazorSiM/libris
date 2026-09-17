@@ -1484,4 +1484,111 @@ describe("GET /api/stats", () => {
       "Genre 06:4",
     ]);
   });
+
+  it("heatmap uses the last pre-year sample as the first delta baseline", async () => {
+    // 100-page book: 50% on Dec 31, 51% on Jan 1. The Jan 1 delta is 1 page,
+    // not 51 — the baseline has to come from the previous year's last sample.
+    await $fetchRaw("/__test/seed-books", {
+      method: "POST",
+      headers: auth(),
+      body: {
+        books: [{ title: "Year Boundary", author: "Boundary Author", status: "organized" }],
+      },
+    });
+    const [book] = await testDb
+      .select({ id: books.id })
+      .from(books)
+      .where(eq(books.title, "Year Boundary"));
+    expect(book).toBeDefined();
+    await testDb.update(books).set({ pageCount: 100 }).where(eq(books.id, book!.id));
+
+    const atNoon = (day: string) => new Date(`${day}T12:00:00.000Z`);
+    await testDb.insert(readingProgressHistory).values([
+      {
+        userId,
+        bookId: book!.id,
+        document: "year-boundary.epub",
+        device: "kobo",
+        progress: "/body/p[50]",
+        percentage: "0.50",
+        timestamp: 0n,
+        createdAt: atNoon("2024-12-31"),
+      },
+      {
+        userId,
+        bookId: book!.id,
+        document: "year-boundary.epub",
+        device: "kobo",
+        progress: "/body/p[51]",
+        percentage: "0.51",
+        timestamp: 0n,
+        createdAt: atNoon("2025-01-01"),
+      },
+      {
+        userId,
+        bookId: book!.id,
+        document: "year-boundary.epub",
+        device: "kobo",
+        progress: "/body/p[55]",
+        percentage: "0.55",
+        timestamp: 0n,
+        createdAt: atNoon("2025-01-05"),
+      },
+    ]);
+
+    const { data, status } = await $fetchRaw("/api/stats?year=2025", { headers: auth() });
+    expect(status).toBe(200);
+    expect(data.pagesHeatmap.days).toEqual([
+      { day: "2025-01-01", pages: 1 },
+      { day: "2025-01-05", pages: 4 },
+    ]);
+  });
+
+  it("velocity uses the pre-window sample as the first delta baseline", async () => {
+    await $fetchRaw("/__test/seed-books", {
+      method: "POST",
+      headers: auth(),
+      body: {
+        books: [{ title: "Velocity Baseline", author: "Boundary Author", status: "organized" }],
+      },
+    });
+    const [book] = await testDb
+      .select({ id: books.id })
+      .from(books)
+      .where(eq(books.title, "Velocity Baseline"));
+    expect(book).toBeDefined();
+    await testDb.update(books).set({ pageCount: 100 }).where(eq(books.id, book!.id));
+
+    const dayString = (daysAgo: number) =>
+      new Date(Date.now() - daysAgo * 86_400_000).toISOString().slice(0, 10);
+    const inWindowDay = dayString(80);
+    await testDb.insert(readingProgressHistory).values([
+      {
+        userId,
+        bookId: book!.id,
+        document: "velocity-baseline.epub",
+        device: "kobo",
+        progress: "/body/p[10]",
+        percentage: "0.10",
+        timestamp: 0n,
+        createdAt: new Date(`${dayString(100)}T12:00:00.000Z`),
+      },
+      {
+        userId,
+        bookId: book!.id,
+        document: "velocity-baseline.epub",
+        device: "kobo",
+        progress: "/body/p[20]",
+        percentage: "0.20",
+        timestamp: 0n,
+        createdAt: new Date(`${inWindowDay}T12:00:00.000Z`),
+      },
+    ]);
+
+    const { data, status } = await $fetchRaw("/api/stats", { headers: auth() });
+    expect(status).toBe(200);
+    const entry = data.readingVelocity.find((row: { day: string }) => row.day === inWindowDay);
+    // 10 pages of delta, so the day's average is 10.0 — 20.0 without the baseline.
+    expect(entry?.avgPages).toBe(10);
+  });
 });
