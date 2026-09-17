@@ -4,6 +4,7 @@ import type { MiddlewareHandler } from "hono";
 import { appSettings, users } from "#db";
 import type { Db } from "#db";
 import type { AppVariables } from "../context.js";
+import { roleHasAdmin, roleHasAdminSql } from "../shared/auth.js";
 import { sessionHeaders } from "../shared/request-ip.js";
 
 const LAST_ADMIN_LOCK_KEY = "auth:last-admin-lock";
@@ -100,7 +101,7 @@ export async function withLastAdminLock(
 ): Promise<void> {
   const now = new Date();
   const isActiveAdmin = and(
-    eq(users.role, "admin"),
+    roleHasAdminSql(users.role),
     or(isNull(users.banned), ne(users.banned, true), lte(users.banExpires, now)),
   );
 
@@ -141,19 +142,14 @@ function hasKey(value: unknown, key: string): boolean {
 }
 
 /**
- * Whether a role value still carries admin.
- *
- * Better Auth stores multiple roles as a comma-joined string and accepts either
- * a string or an array on the wire, so both shapes have to be understood. A
- * value that does not mention admin is a demotion.
+ * Normalizes the JSON body's `role` field into the shapes `roleHasAdmin`
+ * understands. Non-string array entries are ignored, exactly as before: a
+ * malformed value must not be read as "still admin".
  */
-function grantsAdminRole(role: unknown): boolean {
-  const values = Array.isArray(role) ? role : [role];
-  return values.some((value) => typeof value === "string" && value.split(",").includes("admin"));
-}
-
-function hasAdminRole(role: unknown): boolean {
-  return typeof role === "string" && role.split(",").includes("admin");
+function roleFromBody(value: unknown): string | string[] | undefined {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) return value.filter((part): part is string => typeof part === "string");
+  return undefined;
 }
 
 /**
@@ -191,7 +187,7 @@ export function reducesAdminAuthority(pluginPath: string, body: AdminActionBody)
   if (banned.present && banned.value === true) return true;
 
   const role = readAdminField(body, "role");
-  if (role.present && !grantsAdminRole(role.value)) return true;
+  if (role.present && !roleHasAdmin(roleFromBody(role.value))) return true;
 
   return false;
 }
@@ -251,7 +247,7 @@ export const lastAdminMiddleware: MiddlewareHandler<{ Variables: AppVariables }>
   // HANDLER, which runs after this middleware. Passing c.req.raw.headers here
   // handed Better Auth whatever the client sent.
   const session = await c.get("auth").api.getSession({ headers: sessionHeaders(c) });
-  if (!hasAdminRole(session?.user.role)) {
+  if (!roleHasAdmin(session?.user.role)) {
     await next();
     return;
   }

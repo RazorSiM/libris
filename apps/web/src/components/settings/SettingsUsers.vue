@@ -8,6 +8,7 @@ import {
   useUsersQuery,
   type ManagedUser,
 } from "~/composables/mutations/useUserMutations";
+import { roleHasAdmin } from "~/lib/roles";
 
 /**
  * Household account management.
@@ -47,9 +48,9 @@ const newPassword = ref("");
  * Otherwise one click locks everybody out of user management permanently, and
  * the only way back is SQL — the exact situation this page exists to avoid.
  */
-const adminCount = computed(() => (users.value ?? []).filter((u) => u.role === "admin").length);
+const adminCount = computed(() => (users.value ?? []).filter((u) => roleHasAdmin(u.role)).length);
 function isLastAdmin(user: ManagedUser): boolean {
-  return user.role === "admin" && adminCount.value <= 1;
+  return roleHasAdmin(user.role) && adminCount.value <= 1;
 }
 function isSelf(user: ManagedUser): boolean {
   return user.id === currentUserId.value;
@@ -73,7 +74,7 @@ async function handleCreate() {
 }
 
 async function toggleRole(user: ManagedUser) {
-  const role = user.role === "admin" ? "user" : "admin";
+  const role = roleHasAdmin(user.role) ? "user" : "admin";
   try {
     await setRole({ userId: user.id, role });
     toast.add({ title: `${user.name} is now ${role}`, color: "success" });

@@ -31,7 +31,9 @@ export type AppVariables = HonoLogLayerVariables & {
   /** Display name, for logs and responses. */
   userName: string | undefined;
   /**
-   * Admin plugin role — "admin" or "user", undefined when anonymous.
+   * Admin plugin role — "admin" or "user", comma-joined when a user holds
+   * several (`"admin,user"`), undefined when anonymous. Parse membership with
+   * `roleHasAdmin`; never compare it for equality.
    *
    * The single source of truth for privilege. There is deliberately no derived
    * `isAdmin` boolean beside it: two variables holding the same fact can drift,

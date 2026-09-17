@@ -3,16 +3,13 @@ import type { MiddlewareHandler } from "hono";
 import { books } from "#db";
 import type { AppVariables } from "../context.js";
 import { sessionHeaders } from "../shared/request-ip.js";
+import { roleHasAdmin } from "../shared/auth.js";
 import { getLogger } from "./logger.js";
 
 const logger = getLogger("user-deletion");
 
 interface RemoveUserBody {
   userId?: unknown;
-}
-
-function hasAdminRole(role: unknown): boolean {
-  return typeof role === "string" && role.split(",").includes("admin");
 }
 
 /**
@@ -116,7 +113,7 @@ export const reassignBooksOnRemoveUser: MiddlewareHandler<{ Variables: AppVariab
   // Auth here and became the address its records and its limiter saw.
   const session = await c.get("auth").api.getSession({ headers: sessionHeaders(c) });
   const actingUserId = session?.user.id;
-  if (!actingUserId || !hasAdminRole(session?.user.role)) {
+  if (!actingUserId || !roleHasAdmin(session?.user.role)) {
     await next();
     return;
   }

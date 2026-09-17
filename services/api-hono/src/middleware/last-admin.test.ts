@@ -35,6 +35,12 @@ describe("reducesAdminAuthority", () => {
         false,
       );
       expect(reducesAdminAuthority("/admin/set-role", { userId: "u1", role: ["user"] })).toBe(true);
+      expect(
+        reducesAdminAuthority("/admin/set-role", { userId: "u1", role: ["admin", "user"] }),
+      ).toBe(false);
+      expect(
+        reducesAdminAuthority("/admin/set-role", { userId: "u1", role: ["user", "admin"] }),
+      ).toBe(false);
     });
   });
 

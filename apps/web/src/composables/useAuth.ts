@@ -3,6 +3,7 @@ import { storeToRefs } from "pinia";
 import { useQueryCache } from "@pinia/colada";
 import { useAuthStore } from "~/stores/auth";
 import { authClient } from "~/lib/auth-client";
+import { roleHasAdmin } from "~/lib/roles";
 
 /**
  * The app's view of who is signed in.
@@ -80,7 +81,7 @@ export function useAuth() {
         if (gen !== generation.value) return;
         if (data?.user) {
           authenticated.value = true;
-          admin.value = data.user.role === "admin";
+          admin.value = roleHasAdmin(data.user.role);
           name.value = data.user.name ?? null;
           email.value = data.user.email ?? null;
           storedUserId.value = data.user.id;

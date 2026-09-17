@@ -291,18 +291,18 @@ Self-registration is disabled outright (`emailAndPassword.disableSignUp`). Accou
 
 Route-level policies are declared in `shared/route-policy.ts` — first match wins, and anything that matches nothing (SPA static files, favicon) is `skip`:
 
-| Order | Pattern            | Match  | Policy     | Behaviour                                                                                                                                  |
-| ----- | ------------------ | ------ | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| 1     | `/api/auth/`       | prefix | `skip`     | Better Auth authenticates its own endpoints. A prefix, so nested plugin routes stay covered.                                               |
-| 2     | `/api/setup`       | exact  | `public`   | No authentication. Self-guarding: 409s once any credential exists.                                                                         |
-| 3     | `/api/health/live` | exact  | `public`   | Liveness probe. `public`, not `optional`: resolving a session would put I/O back on an endpoint whose whole contract is that it does none. |
-| 4     | `/api/health`      | exact  | `optional` | Session resolved if one is presented; the response is enriched when it is.                                                                 |
-| 5     | `/kosync/`         | prefix | `kosync`   | `x-auth-user` / `x-auth-key` against `kosync_credentials`. `users/auth` and `users/create` self-handle.                                    |
-| 6     | `/opds`            | prefix | `opds`     | Same session lookup as `api-key`; a 401 also carries `WWW-Authenticate: Basic realm="Libris OPDS"`.                                        |
-| 7     | `/__test/`         | prefix | `test`     | Constant-time compare of `x-test-token` against `TEST_ROUTE_TOKEN` (32+ chars). Never anonymous.                                           |
-| 8     | `/_`               | prefix | `skip`     | Scalar UI and the OpenAPI JSON.                                                                                                            |
-| 9     | `/api/jobs`        | prefix | `admin`    | Requires a session whose user has role `admin`. App passwords refused.                                                                     |
-| 10    | `/api/`            | prefix | `api-key`  | Default for the API: requires a session, from either credential.                                                                           |
+| Order | Pattern            | Match  | Policy     | Behaviour                                                                                                                                                              |
+| ----- | ------------------ | ------ | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1     | `/api/auth/`       | prefix | `skip`     | Better Auth authenticates its own endpoints. A prefix, so nested plugin routes stay covered.                                                                           |
+| 2     | `/api/setup`       | exact  | `public`   | No authentication. Self-guarding: 409s once any credential exists.                                                                                                     |
+| 3     | `/api/health/live` | exact  | `public`   | Liveness probe. `public`, not `optional`: resolving a session would put I/O back on an endpoint whose whole contract is that it does none.                             |
+| 4     | `/api/health`      | exact  | `optional` | Session resolved if one is presented; the response is enriched when it is.                                                                                             |
+| 5     | `/kosync/`         | prefix | `kosync`   | `x-auth-user` / `x-auth-key` against `kosync_credentials`. `users/auth` and `users/create` self-handle.                                                                |
+| 6     | `/opds`            | prefix | `opds`     | Same session lookup as `api-key`; a 401 also carries `WWW-Authenticate: Basic realm="Libris OPDS"`.                                                                    |
+| 7     | `/__test/`         | prefix | `test`     | Constant-time compare of `x-test-token` against `TEST_ROUTE_TOKEN` (32+ chars). Never anonymous.                                                                       |
+| 8     | `/_`               | prefix | `skip`     | Scalar UI and the OpenAPI JSON.                                                                                                                                        |
+| 9     | `/api/jobs`        | prefix | `admin`    | Requires a session whose user carries the `admin` role — a comma-joined multi-role value such as `admin,user` counts, parsed by `roleHasAdmin`. App passwords refused. |
+| 10    | `/api/`            | prefix | `api-key`  | Default for the API: requires a session, from either credential.                                                                                                       |
 
 The policy name `api-key` is historical; it means "authenticated", not "app password only".
 
