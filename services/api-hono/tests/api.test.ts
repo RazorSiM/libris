@@ -1,4 +1,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { serve } from "@hono/node-server";
+import { WebSocket } from "ws";
+import type { AddressInfo } from "node:net";
 import { eq, like } from "drizzle-orm";
 import { bootstrapAdmin, createTestApp, createFetchHelper, TEST_PASSWORD } from "./setup.js";
 import type { Db } from "../src/db/client.js";
@@ -16,6 +19,7 @@ import { registerQueue } from "../src/services/queue.js";
 let $fetchRaw: ReturnType<typeof createFetchHelper>;
 let testDb: Db;
 let services: AppServices;
+let testApp: Awaited<ReturnType<typeof createTestApp>>;
 
 // ── Per-test state ───────────────────────────────────────────────
 
@@ -39,7 +43,7 @@ function session() {
 // ── App lifecycle: create once ─────────────────────────────────────
 
 beforeAll(async () => {
-  const testApp = await createTestApp();
+  testApp = await createTestApp();
   $fetchRaw = createFetchHelper(testApp.app);
   testDb = testApp.db;
   services = testApp.services;
@@ -1764,5 +1768,39 @@ describe("GET /api/stats", () => {
     expect(at(9)?.avgPages).toBe(10);
     // An idle day is still a row, averaging the 10 pages six calendar days back.
     expect(at(10)?.avgPages).toBe(1.4);
+  });
+});
+
+// ── Event WebSocket frame cap ──────────────────────────────────────
+
+describe("GET /api/events (WebSocket)", () => {
+  it("closes the socket when a client sends a frame over the payload cap", async () => {
+    const server = serve({ fetch: testApp.app.fetch, port: 0 });
+    testApp.injectWebSocket(server);
+    try {
+      const address = server.address() as AddressInfo;
+      const ws = new WebSocket(`ws://127.0.0.1:${address.port}/api/events`, {
+        headers: { cookie },
+      });
+      await new Promise<void>((resolve, reject) => {
+        ws.once("open", resolve);
+        ws.once("error", reject);
+      });
+
+      const closed = new Promise<number>((resolve) => {
+        ws.once("close", (code) => resolve(code));
+      });
+      ws.send("x".repeat(70_000));
+      const code = await Promise.race([
+        closed,
+        new Promise<number>((_, reject) => {
+          setTimeout(() => reject(new Error("socket stayed open after an oversized frame")), 2_000);
+        }),
+      ]);
+      expect(code).toBe(1009); // "message too big"
+      ws.terminate();
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
   });
 });

@@ -344,6 +344,8 @@ The split exists because a subscription's user id and admin flag are baked in at
 
 Closing tears the event-bus subscription down before the transport, so "closed" means "receives nothing" rather than "will stop receiving shortly" — `ws.close()` is a handshake, and the socket stays writable until the peer answers. The connection slot is returned to the per-principal cap at the same time, for both codes: a re-scoped client must be able to dial straight back in.
 
+**Inbound frames are capped at 64 KiB.** The only client message the server acts on is the literal text `"ping"`; everything else is discarded unread. `ws`'s default cap is 100 MiB, which — across the five sockets one principal may hold — would let an authenticated client make the process buffer hundreds of MiB for nothing. The cap is assigned on the shared `WebSocketServer` in `app.ts` before any upgrade (the library reads it per handshake), and a larger frame closes the connection with the standard `1009` "message too big" code.
+
 #### CSRF
 
 Unsafe methods (`POST`/`PUT`/`PATCH`/`DELETE`) that carry a cookie are rejected with 403 when `Sec-Fetch-Site: cross-site` is present, or when an `Origin` header's canonical scheme, host, and port do not match the server's own (`localhost:3100`/`:3000` are also allowed outside production). The scheme is read from `x-forwarded-proto` only when `TRUST_PROXY_HEADERS=1`, so a TLS-terminating proxy must forward it and a same-host different-port origin is rejected. Headerless clients — an app password or OPDS request, which sends no cookie and no browser `Origin` — fall through untouched.

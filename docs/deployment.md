@@ -359,7 +359,7 @@ Without this, repeated auth failures from the same client may not be correctly r
 
 ### WebSocket Upgrade
 
-The SPA receives real-time updates over a single WebSocket at `/api/events`. The reverse proxy must allow the WebSocket upgrade on `/api/*` by forwarding the `Connection` and `Upgrade` headers. Without it, the connection falls back or fails and live UI updates stop working.
+The SPA receives real-time updates over a single WebSocket at `/api/events`. The reverse proxy must allow the WebSocket upgrade on `/api/*` by forwarding the `Connection` and `Upgrade` headers. Without it, the connection falls back or fails and live UI updates stop working. Inbound client frames are capped at 64 KiB by the server itself — a larger frame closes the socket with code 1009 — so no proxy-level frame limit is required.
 
 **nginx:**
 

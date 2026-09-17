@@ -420,6 +420,9 @@ importers:
       '@types/node':
         specifier: 'catalog:'
         version: 26.1.2
+      '@types/ws':
+        specifier: ^8.18.1
+        version: 8.18.1
       better-sqlite3:
         specifier: 'catalog:'
         version: 13.0.3
@@ -444,6 +447,9 @@ importers:
       vite-plus:
         specifier: 'catalog:'
         version: 0.2.8(@opentelemetry/api@1.9.1)(@types/node@26.1.2)(esbuild@0.28.1)(happy-dom@20.11.1)(jiti@2.7.0)(msw@2.15.0(@types/node@26.1.2)(typescript@6.0.3))(tsx@4.23.11)(typescript@6.0.3)(vite@8.0.14(@types/node@26.1.2)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.11)(yaml@2.9.0))(yaml@2.9.0)
+      ws:
+        specifier: ^8.21.3
+        version: 8.21.3
 
   tests/e2e:
     devDependencies:
@@ -7145,7 +7151,7 @@ snapshots:
     dependencies:
       '@hono/node-server': 2.1.0(hono@4.13.8)
       hono: 4.13.8
-      ws: 8.21.0
+      ws: 8.21.3
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate

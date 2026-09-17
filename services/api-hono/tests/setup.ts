@@ -75,12 +75,12 @@ export async function createTestApp() {
   __setTestDb(db);
   __setTestQueues(mockQueues as never);
 
-  const { app } = createApp({ services, env: testEnv });
+  const { app, injectWebSocket } = createApp({ services, env: testEnv });
   // `db` is the cast the app wants; `testDb.db` is the real Drizzle/PGlite
   // handle, which is what the seedUser/seedAppPassword fixtures are typed
   // against. Both are the same object — returning each under its own type
   // saves every caller a cast.
-  return { app, db, testDb: testDb.db, services, env: testEnv };
+  return { app, db, testDb: testDb.db, services, env: testEnv, injectWebSocket };
 }
 
 /**
