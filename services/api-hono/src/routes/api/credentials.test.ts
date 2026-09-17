@@ -232,6 +232,27 @@ describe("PUT /api/credentials/hardcover", () => {
     expect(await bobStatus.json()).toMatchObject({ connected: true, username: "hc-bob" });
   });
 
+  it("invalidates the cached status so a fresh connection shows immediately", async () => {
+    const { app, auth } = createTestApp();
+    const alice = await createSignedInUser(auth, "cache-invalidate@example.test");
+
+    // First read caches "not connected" for the user.
+    const before = await app.request("/api/hardcover/status", {
+      headers: { cookie: alice.cookie },
+    });
+    expect(await before.json()).toMatchObject({ connected: false });
+
+    verifyTokenMock.mockResolvedValue({ ok: true, data: { username: "hc-alice" } });
+    expect((await connectHardcover(app, alice.cookie, "alice-hardcover-token")).status).toBe(200);
+
+    // The write clears the cache; without it this served the stale false for
+    // up to 30 seconds after the user connected.
+    const after = await app.request("/api/hardcover/status", {
+      headers: { cookie: alice.cookie },
+    });
+    expect(await after.json()).toMatchObject({ connected: true, username: "hc-alice" });
+  });
+
   it("returns 409, not 500, when a unique constraint rejects the write", async () => {
     // Independent of the dropped index: prove the handler cannot leak a raw
     // 23505 again. A temporary index reintroduces exactly the old shape.

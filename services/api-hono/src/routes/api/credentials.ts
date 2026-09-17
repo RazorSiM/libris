@@ -6,6 +6,7 @@ import { hash } from "bcryptjs";
 import { kosyncCredentials, serviceCredentials } from "#db";
 import type { AppVariables } from "../../context.js";
 import { BCRYPT_ROUNDS, md5, sealToken, getUserId } from "../../shared/auth.js";
+import { hardcoverStatusCacheKey } from "../../shared/hardcover-status.js";
 import { isUniqueViolation } from "../../shared/db-errors.js";
 import { hashKosyncSecret } from "../../shared/kosync-auth.js";
 import { CredentialServiceParamSchema, CredentialPutBodySchema } from "../../shared/validation.js";
@@ -253,6 +254,12 @@ export const credentialsRoutes = createOpenApiRouter<{ Variables: AppVariables }
         }),
     );
 
+    // The status endpoint caches "connected" per user; a new token must not
+    // serve the stale answer from before this write.
+    if (service === "hardcover") {
+      await c.get("cacheStorage").removeItem(hardcoverStatusCacheKey(userId));
+    }
+
     return c.json({ service, username, updated: true });
   })
   .openapi(deleteCredentialRoute, async (c) => {
@@ -277,6 +284,10 @@ export const credentialsRoutes = createOpenApiRouter<{ Variables: AppVariables }
       throw new HTTPException(404, {
         message: `No credentials found for service: ${service}`,
       });
+    }
+
+    if (service === "hardcover") {
+      await c.get("cacheStorage").removeItem(hardcoverStatusCacheKey(userId));
     }
 
     return c.json({ service, deleted: true });

@@ -164,3 +164,52 @@ export function createTestAuth(db: TestDb, env: Env): Auth {
     baseURL: "http://localhost:3000",
   });
 }
+
+export interface FakeJob {
+  id: string;
+  name: string;
+  data: Record<string, unknown>;
+  state: string;
+  getState(): Promise<string>;
+  remove(): Promise<void>;
+}
+
+/**
+ * In-memory stand-in for a BullMQ queue, for route suites that assert on what
+ * an endpoint enqueues. `getJob`/`getJobs` make it drive the dedup and per-user
+ * caps in shared/enqueue-*.ts the same way a real queue would.
+ */
+export function createFakeJobQueue() {
+  const jobs = new Map<string, FakeJob>();
+  const adds: { name: string; data: Record<string, unknown>; opts?: { jobId?: string } }[] = [];
+  let seq = 0;
+
+  return {
+    jobs,
+    adds,
+    async add(name: string, data: Record<string, unknown>, opts?: { jobId?: string }) {
+      seq += 1;
+      const id = opts?.jobId ?? `job-${seq}`;
+      const job: FakeJob = {
+        id,
+        name,
+        data,
+        state: "waiting",
+        getState: async () => job.state,
+        remove: async () => {
+          jobs.delete(id);
+        },
+      };
+      jobs.set(id, job);
+      adds.push({ name, data, opts });
+      return job;
+    },
+    async getJob(id: string) {
+      return jobs.get(id);
+    },
+    async getJobs() {
+      return [...jobs.values()];
+    },
+    async close() {},
+  };
+}

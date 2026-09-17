@@ -10,6 +10,7 @@ import type { AppVariables } from "../../context.js";
 import { getUserId, isAdmin, requireBookOwnership } from "../../shared/auth.js";
 import { uploaderRef } from "../../shared/uploader-ref.js";
 import { buildPrefixTsquery } from "../../shared/tsquery.js";
+import { enqueueUserMetadataFetch } from "../../shared/enqueue-metadata-fetch.js";
 import { extractEpubCoverImage } from "../../lib/metadata/index.js";
 import { fetchExternalImage } from "../../shared/secure-image-fetch.js";
 import { validateEpubUpload } from "../../shared/epub-validation.js";
@@ -184,7 +185,8 @@ const rescanRoute = createRoute({
   path: "/{id}/rescan",
   tags: ["inbox"],
   summary: "Rescan inbox book metadata",
-  description: "Delete existing metadata candidates and re-fetch from external sources",
+  description:
+    "Delete existing metadata candidates and re-fetch from external sources. Idempotent while a rescan for the book is in flight, and capped at 10 in-flight metadata jobs per user.",
   request: {
     params: IdParamSchema,
   },
@@ -198,6 +200,7 @@ const rescanRoute = createRoute({
     403: { description: "Not authorized to modify this book" },
     404: { description: "Book not found" },
     422: { description: "Book has no metadata to search with" },
+    429: { description: "Too many metadata jobs already in progress for this user" },
   },
 });
 
@@ -559,7 +562,11 @@ export const inboxRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
     });
 
     // Enqueue metadata fetch job AFTER the transaction commits successfully
-    await queues.bookFetchMetadata.add("fetch-metadata", { bookId: id, searchQuery });
+    await enqueueUserMetadataFetch(
+      queues.bookFetchMetadata,
+      { bookId: id, searchQuery },
+      getUserId(c),
+    );
 
     // No invalidation: a rescan moves the book between "review" and "inbox",
     // and neither status appears in the OPDS catalogue (organized only) or in

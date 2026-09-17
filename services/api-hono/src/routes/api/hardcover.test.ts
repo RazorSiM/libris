@@ -14,6 +14,51 @@ vi.mock("../../lib/metadata/clients/hardcover.js", () => ({
   searchHardcover: (...args: unknown[]) => searchHardcoverMock(...args),
 }));
 
+// The status endpoint verifies the stored token with a live outbound call.
+const verifyTokenMock = vi.fn();
+vi.mock("../../lib/hardcover/client.js", () => ({
+  verifyToken: (...args: unknown[]) => verifyTokenMock(...args),
+}));
+
+/** A hardcover-sync queue stand-in the route reads through getAllQueues(). */
+const { syncQueue } = vi.hoisted(() => {
+  const jobs = new Map<
+    string,
+    { data: unknown; getState: () => Promise<string>; remove: () => Promise<void> }
+  >();
+  const adds: { name: string; data: unknown; opts?: { jobId?: string } }[] = [];
+  let seq = 0;
+  const syncQueue = {
+    name: "hardcover-sync",
+    adds,
+    async add(name: string, data: unknown, opts?: { jobId?: string }) {
+      seq += 1;
+      const id = opts?.jobId ?? `job-${seq}`;
+      const job = {
+        data,
+        getState: async () => "waiting",
+        remove: async () => {
+          jobs.delete(id);
+        },
+      };
+      jobs.set(id, job);
+      adds.push({ name, data, opts });
+      return job;
+    },
+    async getJob(id: string) {
+      return jobs.get(id);
+    },
+    async getJobs() {
+      return [...jobs.values()];
+    },
+    reset() {
+      jobs.clear();
+      adds.length = 0;
+    },
+  };
+  return { syncQueue };
+});
+
 vi.mock("../../services/redis.js", () => ({
   isRedisHealthy: async () => ({ ok: true, latencyMs: 1 }),
   getSharedRedis: () => null,
@@ -21,7 +66,7 @@ vi.mock("../../services/redis.js", () => ({
 
 vi.mock("../../services/queue.js", () => ({
   getQueues: () => ({ close: async () => {} }),
-  getAllQueues: () => new Map(),
+  getAllQueues: () => new Map([["hardcover-sync", syncQueue]]),
   registerQueue: () => {},
 }));
 
@@ -115,10 +160,71 @@ afterAll(async () => {
 
 beforeEach(async () => {
   searchHardcoverMock.mockReset();
+  verifyTokenMock.mockReset();
+  syncQueue.reset();
   // Wipe per-test state so each case starts from defaults.
   await db.delete(schema.appSettings);
   await db.delete(schema.serviceCredentials);
   await db.delete(schema.apiKeys);
+});
+
+describe("GET /api/hardcover/status", () => {
+  it("verifies the token once per cache window instead of once per request", async () => {
+    const { userId, rawKey } = await seedApiKey("Hardcover Status");
+    await seedHardcoverCredential(userId);
+    verifyTokenMock.mockResolvedValue({ ok: true, data: { id: 1, username: "hc-reader" } });
+
+    const { app } = createTestApp();
+    const headers = { Authorization: `Bearer ${rawKey}` };
+
+    const first = await app.request("/api/hardcover/status", { headers });
+    const second = await app.request("/api/hardcover/status", { headers });
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    expect(await second.json()).toEqual(await first.json());
+    // Pre-fix every request ran a live GraphQL call on the user's token, so a
+    // polling page (or a loop) multiplied outbound calls without bound.
+    expect(verifyTokenMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("POST /api/hardcover/sync", () => {
+  it("enqueues once while a sync is in flight and reports the repeat", async () => {
+    const { userId, rawKey } = await seedApiKey("Hardcover Sync");
+    await seedHardcoverCredential(userId);
+    const { app } = createTestApp();
+    const headers = { Authorization: `Bearer ${rawKey}` };
+
+    const first = await app.request("/api/hardcover/sync", { method: "POST", headers });
+    const second = await app.request("/api/hardcover/sync", { method: "POST", headers });
+
+    expect(first.status).toBe(200);
+    expect((await first.json()).message).toBe("Sync job enqueued");
+    expect(second.status).toBe(200);
+    expect((await second.json()).message).toBe("Sync already queued");
+
+    // Pre-fix each POST added another `manual-sync` job.
+    expect(syncQueue.adds).toHaveLength(1);
+    expect(syncQueue.adds[0]).toMatchObject({
+      name: "manual-sync",
+      data: { manual: true, userId },
+      opts: { jobId: `hardcover-sync-${userId}` },
+    });
+  });
+
+  it("refuses to sync without a credential", async () => {
+    const { rawKey } = await seedApiKey("Hardcover Sync Unconfigured");
+    const { app } = createTestApp();
+
+    const response = await app.request("/api/hardcover/sync", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${rawKey}` },
+    });
+
+    expect(response.status).toBe(400);
+    expect(syncQueue.adds).toHaveLength(0);
+  });
 });
 
 describe("GET /api/hardcover/search", () => {

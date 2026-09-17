@@ -6,7 +6,13 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vite-plus/test";
 import type { PGlite } from "@electric-sql/pglite";
 import { eq } from "drizzle-orm";
 import { createApp } from "../../app.js";
-import { createTestAuth, createTestDb, seedAppPassword, type TestDb } from "../../db/test-utils.js";
+import {
+  createFakeJobQueue,
+  createTestAuth,
+  createTestDb,
+  seedAppPassword,
+  type TestDb,
+} from "../../db/test-utils.js";
 import * as schema from "../../db/schema.js";
 import type { Env } from "../../env.js";
 import { uploaderRef } from "../../shared/uploader-ref.js";
@@ -68,7 +74,7 @@ beforeAll(async () => {
  * An app with the inbox routes and in-memory queues, for assertions that only
  * need the HTTP surface. Auth reads the same test db the rows are seeded into.
  */
-function buildInboxApp() {
+function buildInboxApp(overrides: { fetchMetadataQueue?: unknown } = {}) {
   const env: Env = {
     NODE_ENV: "test",
     PORT: 3000,
@@ -107,7 +113,7 @@ function buildInboxApp() {
       queues: {
         bookDetected: { add: async () => ({}) },
         bookParseFile: { add: async () => ({}) },
-        bookFetchMetadata: { add: async () => ({}) },
+        bookFetchMetadata: (overrides.fetchMetadataQueue ?? { add: async () => ({}) }) as never,
         bookOrganize: { add: async () => ({}) },
         close: async () => {},
       },
@@ -467,10 +473,33 @@ describe("PATCH /api/inbox/:id/rescan", () => {
 
     // Verify: metadata fetch job was enqueued AFTER the transaction
     expect(fetchMetadataAdd).toHaveBeenCalledOnce();
-    expect(fetchMetadataAdd).toHaveBeenCalledWith("fetch-metadata", {
-      bookId: book.id,
-      searchQuery: "Test Book by Author",
-    });
+    expect(fetchMetadataAdd).toHaveBeenCalledWith(
+      "fetch-metadata",
+      { bookId: book.id, searchQuery: "Test Book by Author", requestedBy: userId },
+      { jobId: `fetch-metadata-${book.id}` },
+    );
+  });
+
+  it("collapses repeated rescans of the same book into one job", async () => {
+    const { userId, rawKey } = await seedApiKey();
+    const [book] = await db
+      .insert(schema.books)
+      .values({ status: "review", title: "Dedup Book", author: "Author", createdBy: userId })
+      .returning({ id: schema.books.id });
+
+    const queue = createFakeJobQueue();
+    const { app } = buildInboxApp({ fetchMetadataQueue: queue });
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const response = await app.request(`/api/inbox/${book.id}/rescan`, {
+        method: "PATCH",
+        headers: { Authorization: `Bearer ${rawKey}` },
+      });
+      expect(response.status).toBe(200);
+    }
+
+    // Re-clicking rescan while the first job is still waiting must not fan out.
+    expect(queue.adds).toHaveLength(1);
   });
 });
 
