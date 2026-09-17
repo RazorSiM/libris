@@ -1,5 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import { eq } from "drizzle-orm";
+import { eq, like } from "drizzle-orm";
 import { bootstrapAdmin, createTestApp, createFetchHelper, TEST_PASSWORD } from "./setup.js";
 import type { Db } from "../src/db/client.js";
 import type { AppServices } from "../src/bootstrap.js";
@@ -1428,5 +1428,60 @@ describe("GET /api/stats", () => {
     // Genre distribution still includes it.
     const sciFi = data.genreDistribution.find((g: { genre: string }) => g.genre === "Sci-Fi");
     expect(sciFi?.count).toBe(1);
+  });
+
+  it("genreDistribution ranks counts numerically and drops the least popular genre", async () => {
+    // Counts 2-9 and 10-13: text ordering ("13" < "9") used to choose the
+    // top-ten cutoff, so a genre with 2 books survived while ones with 10 and
+    // 11 were cut off.
+    const counts = [9, 8, 7, 6, 5, 4, 3, 2, 13, 12, 11, 10];
+    const seed = counts.flatMap((count, genreIndex) =>
+      Array.from({ length: count }, (_, bookIndex) => ({
+        title: `GD-${genreIndex}-${bookIndex}`,
+        author: "Genre Author",
+        genres: [`Genre ${String(genreIndex + 1).padStart(2, "0")}`],
+        status: "organized",
+      })),
+    );
+    await $fetchRaw("/__test/seed-books", {
+      method: "POST",
+      headers: auth(),
+      body: { books: seed },
+    });
+
+    const seeded = await testDb
+      .select({ id: books.id })
+      .from(books)
+      .where(like(books.title, "GD-%"));
+    expect(seeded).toHaveLength(90);
+    const now = new Date();
+    await testDb.insert(readingAggregate).values(
+      seeded.map((row) => ({
+        userId,
+        bookId: row.id,
+        manualStatus: "finished" as const,
+        manualStartedAt: now,
+        manualFinishedAt: now,
+        manualSetAt: now,
+      })),
+    );
+
+    const { data, status } = await $fetchRaw("/api/stats", { headers: auth() });
+    expect(status).toBe(200);
+    const ranked = data.genreDistribution.map(
+      (entry: { genre: string; count: string }) => `${entry.genre}:${entry.count}`,
+    );
+    expect(ranked).toEqual([
+      "Genre 09:13",
+      "Genre 10:12",
+      "Genre 11:11",
+      "Genre 12:10",
+      "Genre 01:9",
+      "Genre 02:8",
+      "Genre 03:7",
+      "Genre 04:6",
+      "Genre 05:5",
+      "Genre 06:4",
+    ]);
   });
 });

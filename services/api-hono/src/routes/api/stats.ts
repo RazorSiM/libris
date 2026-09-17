@@ -248,7 +248,8 @@ export const statsRoutes = router.openapi(statsRoute, async (c) => {
       FROM book_state, unnest(book_state.genres) AS g
       WHERE effective_status = 'finished' AND array_length(book_state.genres, 1) > 0
       GROUP BY g
-      ORDER BY count DESC
+      -- Count numerically for ordering; the text alias is only for JSON serialization.
+      ORDER BY COUNT(*) DESC, g ASC
       LIMIT 10
     `),
 
