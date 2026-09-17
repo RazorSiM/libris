@@ -240,6 +240,17 @@ describe("OPDS Feed (integration)", () => {
     expect(xml).toContain("{searchTerms}");
   });
 
+  it("/opds/search answers punctuation-only queries instead of a tsquery error", async () => {
+    // An OPDS reader whose user typed an apostrophe used to get a 500 here.
+    for (const q of ["'", "''", '"', "\\", "foo&'", "bar'"]) {
+      const res = await app.request(`/opds/search?q=${encodeURIComponent(q)}`, {
+        headers: { Authorization: opdsAuthHeader() },
+      });
+      expect(res.status, JSON.stringify(q)).toBe(200);
+      expect(res.headers.get("content-type") ?? "").toContain("kind=acquisition");
+    }
+  });
+
   it("Basic auth works for e-reader compatibility", async () => {
     const res = await app.request("/opds/books", {
       headers: { Authorization: opdsAuthHeader() },

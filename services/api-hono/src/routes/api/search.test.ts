@@ -166,4 +166,27 @@ describe("GET /api/search/suggest", () => {
       expect.arrayContaining(["Quorbal Alice Draft", "Quorbal Shared Volume"]),
     );
   });
+
+  it("answers punctuation-only queries instead of a tsquery syntax error", async () => {
+    const { userId, rawKey } = await seedUserKey("Suggest Punctuation");
+    const { app } = createTestApp();
+
+    // Each of these used to build a tsquery Postgres rejects (e.g. `':*`),
+    // turning a stray apostrophe into a 500.
+    for (const q of ["'", "''", '"', "\\", "foo&'", "bar'"]) {
+      const response = await app.request(`/api/search/suggest?q=${encodeURIComponent(q)}`, {
+        headers: { Authorization: `Bearer ${rawKey}` },
+      });
+      expect(response.status, JSON.stringify(q)).toBe(200);
+    }
+
+    // A normal query still matches through the same path.
+    await db
+      .insert(schema.books)
+      .values({ status: "organized", title: "Punctuation Control", createdBy: userId });
+    const found = await app.request("/api/search/suggest?q=Punctuation", {
+      headers: { Authorization: `Bearer ${rawKey}` },
+    });
+    expect((await found.json()).data).toHaveLength(1);
+  });
 });

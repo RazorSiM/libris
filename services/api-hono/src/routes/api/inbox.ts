@@ -9,6 +9,7 @@ import { users, books, bookColumns, bookFiles, bookMetadataCandidates, uploadReg
 import type { AppVariables } from "../../context.js";
 import { getUserId, isAdmin, requireBookOwnership } from "../../shared/auth.js";
 import { uploaderRef } from "../../shared/uploader-ref.js";
+import { buildPrefixTsquery } from "../../shared/tsquery.js";
 import { extractEpubCoverImage } from "../../lib/metadata/index.js";
 import { fetchExternalImage } from "../../shared/secure-image-fetch.js";
 import { validateEpubUpload } from "../../shared/epub-validation.js";
@@ -282,13 +283,8 @@ export const inboxRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
     // When searching: tsquery for FTS + pg_trgm fallback for typos/filenames
     let tsquery: string | null = null;
     if (q) {
-      const sanitized = q.replaceAll(/[&|!<>():*\\]/g, " ").trim();
-      if (sanitized) {
-        const words = sanitized.split(/\s+/).filter(Boolean);
-        tsquery = words
-          .map((w: string, i: number) => (i === words.length - 1 ? `${w}:*` : w))
-          .join(" & ");
-
+      tsquery = buildPrefixTsquery(q);
+      if (tsquery) {
         conditions.push(
           sql`(
             "search_vector" @@ to_tsquery('english', ${tsquery})

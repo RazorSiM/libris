@@ -649,4 +649,24 @@ describe("GET /api/inbox", () => {
       status: "organized",
     });
   });
+
+  it("answers punctuation-only searches instead of a tsquery syntax error", async () => {
+    const { userId, rawKey } = await seedApiKey();
+    const { app } = buildInboxApp();
+    await db
+      .insert(schema.books)
+      .values({ status: "review", title: "Punctuation Draft", createdBy: userId });
+
+    for (const q of ["'", "''", '"', "\\", "foo&'", "bar'"]) {
+      const response = await app.request(`/api/inbox?q=${encodeURIComponent(q)}`, {
+        headers: { Authorization: `Bearer ${rawKey}` },
+      });
+      expect(response.status, JSON.stringify(q)).toBe(200);
+    }
+
+    const found = await app.request("/api/inbox?q=Punctuation", {
+      headers: { Authorization: `Bearer ${rawKey}` },
+    });
+    expect((await found.json()).data).toHaveLength(1);
+  });
 });

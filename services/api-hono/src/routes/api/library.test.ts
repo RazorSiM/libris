@@ -367,6 +367,27 @@ describe("GET /api/library", () => {
     expect(body.data).toHaveLength(0);
     expect(body.pagination.total).toBe(0);
   });
+
+  it("answers punctuation-only searches instead of a tsquery syntax error", async () => {
+    const { userId, rawKey } = await seedApiKey("Punctuation Search Key");
+    await db
+      .insert(schema.books)
+      .values({ status: "organized", title: "Punctuation Volume", createdBy: userId });
+
+    const { app } = createTestApp();
+    for (const q of ["'", "''", '"', "\\", "foo&'", "bar'"]) {
+      const response = await app.request(`/api/library?q=${encodeURIComponent(q)}`, {
+        headers: { Authorization: `Bearer ${rawKey}` },
+      });
+      expect(response.status, JSON.stringify(q)).toBe(200);
+    }
+
+    const found = await app.request("/api/library?q=Punctuation", {
+      headers: { Authorization: `Bearer ${rawKey}` },
+    });
+    const foundBody = await found.json();
+    expect(foundBody.data).toHaveLength(1);
+  });
 });
 
 describe("GET /api/library/sync", () => {

@@ -6,6 +6,7 @@ import { createReadStream, existsSync, realpathSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import { basename, extname, join, resolve } from "node:path";
 import { assertPathWithinRoot } from "../../lib/assert-path-within-root.js";
+import { buildPrefixTsquery } from "../../shared/tsquery.js";
 import { normalizeLanguage } from "../../lib/languages.js";
 import { Readable } from "node:stream";
 import {
@@ -468,13 +469,8 @@ export const libraryRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
     // When searching: tsquery for FTS + pg_trgm fallback for typos
     let tsquery: string | null = null;
     if (q) {
-      const sanitized = q.replaceAll(/[&|!<>():*\\]/g, " ").trim();
-      if (sanitized) {
-        const words = sanitized.split(/\s+/).filter(Boolean);
-        tsquery = words
-          .map((w: string, i: number) => (i === words.length - 1 ? `${w}:*` : w))
-          .join(" & ");
-
+      tsquery = buildPrefixTsquery(q);
+      if (tsquery) {
         conditions.push(
           sql`(
             "search_vector" @@ to_tsquery('english', ${tsquery})
