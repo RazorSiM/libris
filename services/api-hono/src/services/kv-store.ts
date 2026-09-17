@@ -10,6 +10,8 @@ export interface KVStore {
   getItem(key: string): Promise<unknown>;
   setItem(key: string, value: unknown, opts?: { ttl?: number }): Promise<void>;
   increment(key: string, ttl: number): Promise<{ value: number; ttl: number }>;
+  /** Read a counter without consuming from it. Null when absent or expired. */
+  peek(key: string): Promise<{ value: number; ttl: number } | null>;
   getKeys(base?: string): Promise<string[]>;
   removeItem(key: string): Promise<void>;
   clear(): Promise<void>;
@@ -53,6 +55,16 @@ export function createRedisKVStore(redis: Redis, prefix: string): KVStore {
         fullKey(key),
         String(ttl),
       )) as [number, number];
+      return { value: Number(result[0]), ttl: Math.max(1, Number(result[1])) };
+    },
+
+    async peek(key: string): Promise<{ value: number; ttl: number } | null> {
+      const result = (await redis.eval(
+        "local value = redis.call('GET', KEYS[1]); if not value then return nil end; return { tonumber(value), math.max(1, redis.call('TTL', KEYS[1])) }",
+        1,
+        fullKey(key),
+      )) as [number, number] | null;
+      if (!result || result[0] === null || result[0] === undefined) return null;
       return { value: Number(result[0]), ttl: Math.max(1, Number(result[1])) };
     },
 
@@ -126,6 +138,19 @@ export function createMemoryKVStore(): KVStore {
       entry.value = next;
       return {
         value: next,
+        ttl: Math.max(1, Math.ceil(((entry.expiresAt ?? now) - now) / 1000)),
+      };
+    },
+
+    async peek(key: string): Promise<{ value: number; ttl: number } | null> {
+      const entry = store.get(key);
+      const now = Date.now();
+      if (!entry || isExpired(entry)) {
+        store.delete(key);
+        return null;
+      }
+      return {
+        value: Number(entry.value),
         ttl: Math.max(1, Math.ceil(((entry.expiresAt ?? now) - now) / 1000)),
       };
     },

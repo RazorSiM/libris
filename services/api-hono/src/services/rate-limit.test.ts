@@ -1,7 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import type { Env } from "../env.js";
 import { createMemoryKVStore, type KVStore } from "./kv-store.js";
-import { checkRateLimit } from "./rate-limit.js";
+import {
+  checkRateLimit,
+  clearRateLimitFailures,
+  peekRateLimit,
+  recordRateLimitFailure,
+} from "./rate-limit.js";
 import { getCredentialRateLimitKey } from "../shared/request-ip.js";
 
 const ENV = {
@@ -56,6 +61,56 @@ describe("checkRateLimit", () => {
     expect((await checkRateLimit(storage, identity, "auth", env)).retryAfter).toBeNull();
     expect((await checkRateLimit(storage, identity, "auth", env)).retryAfter).toBeNull();
     expect((await checkRateLimit(storage, identity, "auth", env)).retryAfter).toBeGreaterThan(0);
+  });
+});
+
+describe("failure-only credential budgets", () => {
+  const env = { ...ENV, LIBRIS_RATELIMIT_AUTH_LIMIT: 3 } as Env;
+
+  it("admits until the recorded failures reach the limit, then refuses", async () => {
+    const storage = createMemoryKVStore();
+    const identity = getCredentialRateLimitKey("failure-budget-peek@example.com");
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const peeked = await peekRateLimit(storage, identity, "auth", env);
+      expect(peeked.retryAfter, `peek ${attempt}`).toBeNull();
+      await recordRateLimitFailure(storage, identity, "auth", env);
+    }
+
+    const locked = await peekRateLimit(storage, identity, "auth", env);
+    expect(locked.retryAfter).toBeGreaterThan(0);
+    expect(locked.remaining).toBe(0);
+  });
+
+  it("clears the bucket after a successful check", async () => {
+    const storage = createMemoryKVStore();
+    const identity = getCredentialRateLimitKey("failure-budget-clear@example.com");
+
+    await recordRateLimitFailure(storage, identity, "auth", env);
+    await recordRateLimitFailure(storage, identity, "auth", env);
+    await clearRateLimitFailures(storage, identity, "auth");
+
+    expect((await peekRateLimit(storage, identity, "auth", env)).retryAfter).toBeNull();
+  });
+
+  it("fails closed onto local memory when the store is down", async () => {
+    // A Redis outage must not turn the failure budget off; auth-tier budgets
+    // always degrade to the in-process limiter rather than disappearing.
+    const storage = {
+      ...createMemoryKVStore(),
+      increment: () => Promise.reject(new Error("ECONNREFUSED")),
+      peek: () => Promise.reject(new Error("ECONNREFUSED")),
+    } as KVStore;
+    const identity = getCredentialRateLimitKey("failure-budget-outage@example.com");
+
+    await recordRateLimitFailure(storage, identity, "auth", env);
+    await recordRateLimitFailure(storage, identity, "auth", env);
+    await recordRateLimitFailure(storage, identity, "auth", env);
+
+    expect((await peekRateLimit(storage, identity, "auth", env)).retryAfter).toBeGreaterThan(0);
+
+    await clearRateLimitFailures(storage, identity, "auth");
+    expect((await peekRateLimit(storage, identity, "auth", env)).retryAfter).toBeNull();
   });
 });
 

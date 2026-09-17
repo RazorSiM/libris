@@ -72,6 +72,24 @@ function checkMemoryFallback(
   return { retryAfter: null, remaining: limit - 1, limit, resetIn: windowSeconds };
 }
 
+function peekMemoryFallback(
+  ip: string,
+  tier: RateLimitTier,
+  config: RateLimitConfig,
+): { retryAfter: number | null; remaining: number; limit: number; resetIn: number } {
+  const { limit, windowSeconds } = config;
+  const now = Date.now();
+  const entry = memoryStore.get(`${tier}:${ip}`);
+  if (!entry || entry.expiresAt <= now) {
+    return { retryAfter: null, remaining: limit, limit, resetIn: windowSeconds };
+  }
+  const resetIn = Math.ceil((entry.expiresAt - now) / 1000);
+  if (entry.count >= limit) {
+    return { retryAfter: resetIn, remaining: 0, limit, resetIn };
+  }
+  return { retryAfter: null, remaining: Math.max(0, limit - entry.count), limit, resetIn };
+}
+
 /**
  * Check rate limit for an IP and tier.
  * Returns limit info including retryAfter (seconds until window resets if rate-limited, or null if allowed),
@@ -115,6 +133,116 @@ export async function checkRateLimit(
 }
 
 /**
+ * Read a bucket without consuming from it (peek-before).
+ *
+ * The failure-only credential budget needs to know whether a credential is
+ * already locked out BEFORE verifying it, and to leave the counter alone when
+ * it is not. `checkRateLimit` cannot express that: every call spends a guess,
+ * which for a high-frequency sync route would punish a working device.
+ */
+export async function peekRateLimit(
+  storage: KVStore,
+  ip: string,
+  tier: RateLimitTier,
+  env: Env,
+): Promise<{ retryAfter: number | null; remaining: number; limit: number; resetIn: number }> {
+  const config = getTiers(env)[tier];
+  const { limit, windowSeconds } = config;
+  const key = `ratelimit:${tier}:${ip}`;
+
+  try {
+    const current = await storage.peek(key);
+    if (!current) {
+      return { retryAfter: null, remaining: limit, limit, resetIn: windowSeconds };
+    }
+    if (current.value >= limit) {
+      return { retryAfter: current.ttl, remaining: 0, limit, resetIn: current.ttl };
+    }
+    return {
+      retryAfter: null,
+      remaining: Math.max(0, limit - current.value),
+      limit,
+      resetIn: current.ttl,
+    };
+  } catch (err) {
+    if (tier === "auth" || tier === "keyCreation") {
+      logger
+        .withMetadata({ error: String(err) })
+        .warn(`Redis unavailable, using in-memory fallback for ${tier}`);
+      return peekMemoryFallback(ip, tier, config);
+    }
+    logger.withMetadata({ error: String(err) }).warn("Rate limit check failed, allowing request");
+    return { retryAfter: null, remaining: limit, limit, resetIn: windowSeconds };
+  }
+}
+
+/**
+ * Record one failed credential check against a failure-only budget.
+ *
+ * Never throws: the caller is already answering 401, and a store outage must
+ * not turn that into a 500. The in-memory fallback keeps the budget alive
+ * while Redis is down, matching the auth tier's fail-closed behavior.
+ */
+export async function recordRateLimitFailure(
+  storage: KVStore,
+  ip: string,
+  tier: RateLimitTier,
+  env: Env,
+): Promise<void> {
+  const config = getTiers(env)[tier];
+  try {
+    await storage.increment(`ratelimit:${tier}:${ip}`, config.windowSeconds);
+  } catch (err) {
+    if (tier === "auth" || tier === "keyCreation") {
+      logger
+        .withMetadata({ error: String(err) })
+        .warn(`Redis unavailable, using in-memory fallback for ${tier}`);
+      checkMemoryFallback(ip, tier, config);
+      return;
+    }
+    logger.withMetadata({ error: String(err) }).warn("Failed to record a rate-limit failure");
+  }
+}
+
+/**
+ * Forget a credential's recorded failures after a check that succeeded.
+ *
+ * Without this, a device that mistyped once during pairing would carry that
+ * failure toward a later lockout for the rest of the window. Cannot be abused
+ * to clear a victim's budget: only a verified credential for that identity
+ * reaches this call.
+ */
+export async function clearRateLimitFailures(
+  storage: KVStore,
+  ip: string,
+  tier: RateLimitTier,
+): Promise<void> {
+  memoryStore.delete(`${tier}:${ip}`);
+  try {
+    await storage.removeItem(`ratelimit:${tier}:${ip}`);
+  } catch (err) {
+    logger.withMetadata({ error: String(err) }).warn("Failed to clear rate-limit failures");
+  }
+}
+
+/** The single 429 shape, so every limiter response carries the same headers. */
+export function rateLimitExceeded(retryAfter: number, limit: number): HTTPException {
+  const resetAt = Math.floor(Date.now() / 1000) + retryAfter;
+  return new HTTPException(429, {
+    message: "Too many requests",
+    res: new Response("Too many requests", {
+      status: 429,
+      headers: {
+        "retry-after": String(retryAfter),
+        "X-RateLimit-Limit": String(limit),
+        "X-RateLimit-Remaining": "0",
+        "X-RateLimit-Reset": String(resetAt),
+      },
+    }),
+  });
+}
+
+/**
  * Enforce rate limit for a request — throws HTTPException 429 if exceeded.
  * Returns limit info on success.
  */
@@ -126,19 +254,7 @@ export async function enforceRateLimit(
 ): Promise<{ limit: number; remaining: number; resetIn: number }> {
   const { retryAfter, remaining, limit, resetIn } = await checkRateLimit(storage, ip, tier, env);
   if (retryAfter !== null) {
-    const resetAt = Math.floor(Date.now() / 1000) + retryAfter;
-    throw new HTTPException(429, {
-      message: "Too many requests",
-      res: new Response("Too many requests", {
-        status: 429,
-        headers: {
-          "retry-after": String(retryAfter),
-          "X-RateLimit-Limit": String(limit),
-          "X-RateLimit-Remaining": "0",
-          "X-RateLimit-Reset": String(resetAt),
-        },
-      }),
-    });
+    throw rateLimitExceeded(retryAfter, limit);
   }
   return { limit, remaining, resetIn };
 }

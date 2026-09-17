@@ -91,6 +91,10 @@ function createFlakyKVStore(): KVStore & { down: boolean } {
       if (store.down) throw new Error("ECONNREFUSED");
       return inner.increment(key, ttl);
     },
+    async peek(key: string) {
+      if (store.down) throw new Error("ECONNREFUSED");
+      return inner.peek(key);
+    },
     async getKeys(base?: string) {
       if (store.down) throw new Error("ECONNREFUSED");
       return inner.getKeys(base);
