@@ -385,6 +385,26 @@ describe("POST /api/jobs/:id/retry (queueName disambiguation)", () => {
   });
 });
 
+describe("POST /api/jobs/queues/:name/drain", () => {
+  it("drains delayed jobs along with waiting ones", async () => {
+    const drainArgs: (boolean | undefined)[] = [];
+    registerQueue({
+      name: "drain-behavior",
+      drain: async (delayed?: boolean) => {
+        drainArgs.push(delayed);
+      },
+    } as never);
+
+    const { status, data } = await $fetchRaw("/api/jobs/queues/drain-behavior/drain", {
+      method: "POST",
+      headers: session(),
+    });
+    expect(status).toBe(200);
+    expect(data).toEqual({ success: true, queue: "drain-behavior" });
+    expect(drainArgs).toEqual([true]);
+  });
+});
+
 describe("GET /api/jobs (pagination contract)", () => {
   function fakeJob(id: string, timestamp: number) {
     return {

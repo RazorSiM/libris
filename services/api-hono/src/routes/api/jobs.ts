@@ -606,6 +606,8 @@ export const jobsRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
     if (!queue) {
       throw new HTTPException(404, { message: `Queue "${name}" not found` });
     }
-    await queue.drain();
+    // `true` includes delayed jobs: the endpoint's description promises they
+    // are removed, but BullMQ's default leaves them scheduled.
+    await queue.drain(true);
     return c.json({ success: true, queue: name });
   });
