@@ -7,7 +7,7 @@
  * "moved but the database update failed" could not recover. These run the real
  * worker against a real database and filesystem.
  */
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import type { PGlite } from "@electric-sql/pglite";
@@ -292,6 +292,53 @@ describe("processBookOrganize cover replacement", () => {
     await processBookOrganize(job({ bookId, forceRedownloadCover: true }));
 
     expect(await readFile(join(destDir, "cover.jpg"), "utf8")).toBe("OLD-COVER");
+    const [book] = await db
+      .select({ coverPath: schema.books.coverPath })
+      .from(schema.books)
+      .where(eq(schema.books.id, bookId));
+    expect(book.coverPath).toBe(coverStoragePath);
+  });
+
+  it("replaces the existing cover when a forced re-download succeeds", async () => {
+    const bookId = await seedBook({
+      title: "Recovered",
+      author: "Same Author",
+      status: "organized",
+      coverUrl: "https://example.com/new-cover.jpg",
+    });
+    const destDir = join(
+      libraryPath,
+      sanitizeName("Same Author"),
+      `${sanitizeName("Recovered")} (${bookDirectorySuffix(bookId)})`,
+    );
+    await mkdir(destDir, { recursive: true });
+    await writeFile(join(destDir, "book.epub"), "BOOK-BYTES");
+    await writeFile(join(destDir, "cover.jpg"), "OLD-COVER");
+
+    await db.insert(schema.bookFiles).values({
+      bookId,
+      format: "epub",
+      originalName: "book.epub",
+      storagePath: relative(libraryPath, join(destDir, "book.epub")),
+      fileSize: 10,
+      checksum: computeChecksumFromBuffer(Buffer.from("BOOK-BYTES")),
+    });
+    const coverStoragePath = relative(libraryPath, join(destDir, "cover.jpg"));
+    await db
+      .update(schema.books)
+      .set({ coverPath: coverStoragePath })
+      .where(eq(schema.books.id, bookId));
+
+    fetchExternalImage.mockResolvedValue({
+      data: Buffer.from("NEW-COVER"),
+      contentType: "image/jpeg",
+    });
+
+    await processBookOrganize(job({ bookId, forceRedownloadCover: true }));
+
+    expect(await readFile(join(destDir, "cover.jpg"), "utf8")).toBe("NEW-COVER");
+    // The temp file is moved over the destination, never left behind.
+    await expect(stat(join(destDir, "cover.jpg.tmp"))).rejects.toThrow();
     const [book] = await db
       .select({ coverPath: schema.books.coverPath })
       .from(schema.books)
