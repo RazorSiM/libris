@@ -1,8 +1,33 @@
 import type Redis from "ioredis";
+import { createHash } from "node:crypto";
 import type { BetterAuthOptions } from "better-auth/types";
 import { getLogger } from "../lib/logger.js";
 
 const logger = getLogger("auth-storage");
+
+const ACTIVE_SESSIONS_PREFIX = "active-sessions-";
+
+/**
+ * What a log line may say about a key.
+ *
+ * Better Auth's keys embed live material: a session token, a single-use
+ * verification token, or `<ip>|<path>` for a rate-limit counter. A log line is
+ * a copy of whatever it contains, kept longer and read more widely than Redis,
+ * so the key itself never goes in. The category keeps lines greppable; the
+ * truncated hash keeps the same key correlatable across lines without being
+ * usable.
+ */
+function logKeyMetadata(key: string, storageKey: string): { keyCategory: string; keyId: string } {
+  const keyCategory = key.includes("|")
+    ? "rate-limit"
+    : key.startsWith(ACTIVE_SESSIONS_PREFIX)
+      ? "active-sessions"
+      : "credential";
+  return {
+    keyCategory,
+    keyId: createHash("sha256").update(storageKey).digest("hex").slice(0, 12),
+  };
+}
 
 // better-auth does not re-export SecondaryStorage, and the declaring package
 // (@better-auth/core) is only a transitive dependency — importing from it
@@ -102,7 +127,7 @@ export function createRedisSecondaryStorage(redis: Redis, prefix = "ba"): Second
 
   const degradeToMiss = (operation: string, key: string, err: unknown): null => {
     logger
-      .withMetadata({ operation, key: fullKey(key) })
+      .withMetadata({ operation, ...logKeyMetadata(key, fullKey(key)) })
       .warn(
         `Redis ${operation} failed, treating as a miss so the database fallback runs: ${
           err instanceof Error ? err.message : String(err)
@@ -136,7 +161,7 @@ export function createRedisSecondaryStorage(redis: Redis, prefix = "ba"): Second
         return Number(value);
       } catch (err) {
         logger
-          .withMetadata({ key: fullKey(key) })
+          .withMetadata({ operation: "increment", ...logKeyMetadata(key, fullKey(key)) })
           .warn(
             `Redis increment failed, counting in process memory instead: ${
               err instanceof Error ? err.message : String(err)
@@ -161,7 +186,7 @@ export function createRedisSecondaryStorage(redis: Redis, prefix = "ba"): Second
 }
 
 /** How Better Auth indexes a user's live sessions in secondary storage. */
-const ACTIVE_SESSIONS_KEY = (userId: string) => `active-sessions-${userId}`;
+const ACTIVE_SESSIONS_KEY = (userId: string) => `${ACTIVE_SESSIONS_PREFIX}${userId}`;
 
 interface ActiveSessionEntry {
   token: string;
