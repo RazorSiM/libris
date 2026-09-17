@@ -445,11 +445,19 @@ export const statsRoutes = router.openapi(statsRoute, async (c) => {
             ROWS BETWEEN 6 PRECEDING AND CURRENT ROW
           ) AS avg_pages
         FROM filled
+      ),
+      -- Start the series six days before the first day with a read, so the
+      -- first point's window is full, but an install with no reads at all
+      -- still reports an empty series rather than 90 zeroes.
+      bounds AS (
+        SELECT MIN(day) AS first_day FROM daily
       )
-      SELECT day::text, ROUND(avg_pages::numeric, 1)::text AS avg_pages
-      FROM windowed
-      WHERE day >= CURRENT_DATE - INTERVAL '90 days'
-      ORDER BY day
+      SELECT w.day::text, ROUND(w.avg_pages::numeric, 1)::text AS avg_pages
+      FROM windowed w, bounds
+      WHERE w.day >= CURRENT_DATE - INTERVAL '90 days'
+        AND bounds.first_day IS NOT NULL
+        AND w.day >= bounds.first_day - INTERVAL '6 days'
+      ORDER BY w.day
     `),
 
     // Top 10 authors by organized-book count

@@ -394,6 +394,8 @@ describe("POST /api/jobs/queues/:name/drain", () => {
     const drainArgs: (boolean | undefined)[] = [];
     registerQueue({
       name: "drain-behavior",
+      getJobCounts: async () => ({}),
+      getJobs: async () => [],
       drain: async (delayed?: boolean) => {
         drainArgs.push(delayed);
       },
@@ -1702,8 +1704,9 @@ describe("GET /api/stats", () => {
     const { data, status } = await $fetchRaw("/api/stats", { headers: auth() });
     expect(status).toBe(200);
     const entry = data.readingVelocity.find((row: { day: string }) => row.day === inWindowDay);
-    // 10 pages of delta, so the day's average is 10.0 — 20.0 without the baseline.
-    expect(entry?.avgPages).toBe(10);
+    // 10 pages of delta spread over the 7-day calendar window: 1.4. Without the
+    // baseline the delta is 20 pages, i.e. 2.9.
+    expect(entry?.avgPages).toBe(1.4);
   });
 
   it("velocity averages over calendar days, including idle ones", async () => {
