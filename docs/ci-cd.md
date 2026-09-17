@@ -7,6 +7,8 @@ Two GitHub Actions workflows:
 
 All jobs run on `ubuntu-latest`.
 
+Every third-party action is pinned to a full commit SHA with a `# vX.Y.Z` comment — the release jobs in particular run with a write-scoped `GITHUB_TOKEN`, and a mutable tag there is a supply-chain risk. `.github/dependabot.yml` updates the pins weekly via the `github-actions` ecosystem, hash and comment together. To bump one by hand, resolve the tag to a commit (`gh api repos/<owner>/<repo>/git/ref/tags/<tag>`) and keep the comment in sync.
+
 ## Caching strategy
 
 This repo is orchestrated by Vite+ (the `vp` CLI), not Turbo or a standalone pnpm install step. CI caching has two layers:
