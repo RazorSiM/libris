@@ -99,6 +99,8 @@ describe("POST /api/inbox/upload", () => {
       LIBRIS_RATELIMIT_AUTH_WINDOW_SECONDS: 60,
       LIBRIS_RATELIMIT_KEY_CREATION_LIMIT: 30,
       LIBRIS_RATELIMIT_KEY_CREATION_WINDOW_SECONDS: 3600,
+      LIBRIS_MAX_UPLOAD_BYTES: 1024 * 1024 * 1024,
+      LIBRIS_MAX_UPLOAD_FILES: 20,
       LIBRIS_HTTP_HEADERS_TIMEOUT_MS: 10_000,
       LIBRIS_HTTP_REQUEST_TIMEOUT_MS: 30_000,
       LIBRIS_HTTP_IDLE_TIMEOUT_MS: 30_000,
@@ -165,6 +167,76 @@ describe("POST /api/inbox/upload", () => {
     await rm(inboxPath, { recursive: true, force: true });
   });
 
+  it("rejects more file parts than the configured cap before writing any", async () => {
+    const { rawKey } = await seedApiKey();
+    const inboxPath = await mkdtemp(join(tmpdir(), "libris-inbox-toomany-"));
+    const env = {
+      ...AUTH_ENV,
+      NODE_ENV: "test",
+      PORT: 3000,
+      DATABASE_URL: "pglite://",
+      REDIS_URL: "redis://localhost:6379",
+      LIBRIS_INBOX_PATH: inboxPath,
+      LIBRIS_LIBRARY_PATH: "/tmp/libris-test-library",
+      LIBRIS_COVER_FETCH_ALLOWLIST: [],
+      API_SECRET_KEY: "test-secret-key-at-least-32-characters-long!!",
+      BETTER_AUTH_URL: "",
+      MIGRATIONS_PATH: "./migrations",
+      E2E_TEST: "",
+      LOG_LEVEL: "info",
+      LIBRIS_RATELIMIT_GENERAL_LIMIT: 600,
+      LIBRIS_RATELIMIT_GENERAL_WINDOW_SECONDS: 60,
+      LIBRIS_RATELIMIT_AUTH_LIMIT: 30,
+      LIBRIS_RATELIMIT_AUTH_WINDOW_SECONDS: 60,
+      LIBRIS_RATELIMIT_KEY_CREATION_LIMIT: 30,
+      LIBRIS_RATELIMIT_KEY_CREATION_WINDOW_SECONDS: 3600,
+      LIBRIS_MAX_UPLOAD_BYTES: 1024 * 1024 * 1024,
+      LIBRIS_MAX_UPLOAD_FILES: 1,
+      LIBRIS_HTTP_HEADERS_TIMEOUT_MS: 10_000,
+      LIBRIS_HTTP_REQUEST_TIMEOUT_MS: 30_000,
+      LIBRIS_HTTP_IDLE_TIMEOUT_MS: 30_000,
+    } as Env;
+    const { app } = createApp({
+      services: {
+        db: db as never,
+        queues: {
+          bookDetected: { add: async () => ({}) },
+          bookParseFile: { add: async () => ({}) },
+          bookFetchMetadata: { add: async () => ({}) },
+          bookOrganize: { add: async () => ({}) },
+          close: async () => {},
+        },
+        redisStorage: createMemoryKVStore(),
+        cacheStorage: createMemoryKVStore(),
+        auth: createTestAuth(db, env),
+        shutdown: async () => {},
+      },
+      env,
+    });
+
+    const epub = validEpubBytes();
+    const form = new FormData();
+    form.append(
+      "file",
+      new File([new Uint8Array(epub)], "one.epub", { type: "application/epub+zip" }),
+    );
+    form.append(
+      "file",
+      new File([new Uint8Array(epub)], "two.epub", { type: "application/epub+zip" }),
+    );
+
+    const response = await app.request("/api/inbox/upload", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${rawKey}` },
+      body: form,
+    });
+
+    expect(response.status).toBe(413);
+    expect(await response.text()).toMatch(/Too many files/);
+    expect(await readdir(inboxPath)).toEqual([]);
+    await rm(inboxPath, { recursive: true, force: true });
+  });
+
   it.each([
     ["empty.epub", Buffer.alloc(0), /empty/i],
     ["text.epub", Buffer.from("not a zip"), /ZIP archive/i],
@@ -191,6 +263,8 @@ describe("POST /api/inbox/upload", () => {
       LIBRIS_RATELIMIT_AUTH_WINDOW_SECONDS: 60,
       LIBRIS_RATELIMIT_KEY_CREATION_LIMIT: 30,
       LIBRIS_RATELIMIT_KEY_CREATION_WINDOW_SECONDS: 3600,
+      LIBRIS_MAX_UPLOAD_BYTES: 1024 * 1024 * 1024,
+      LIBRIS_MAX_UPLOAD_FILES: 20,
       LIBRIS_HTTP_HEADERS_TIMEOUT_MS: 10_000,
       LIBRIS_HTTP_REQUEST_TIMEOUT_MS: 30_000,
       LIBRIS_HTTP_IDLE_TIMEOUT_MS: 30_000,
@@ -273,6 +347,8 @@ describe("PATCH /api/inbox/:id/rescan", () => {
       LIBRIS_RATELIMIT_AUTH_WINDOW_SECONDS: 60,
       LIBRIS_RATELIMIT_KEY_CREATION_LIMIT: 30,
       LIBRIS_RATELIMIT_KEY_CREATION_WINDOW_SECONDS: 3600,
+      LIBRIS_MAX_UPLOAD_BYTES: 1024 * 1024 * 1024,
+      LIBRIS_MAX_UPLOAD_FILES: 20,
       LIBRIS_HTTP_HEADERS_TIMEOUT_MS: 10_000,
       LIBRIS_HTTP_REQUEST_TIMEOUT_MS: 30_000,
       LIBRIS_HTTP_IDLE_TIMEOUT_MS: 30_000,
@@ -376,6 +452,8 @@ describe("GET /api/inbox", () => {
       LIBRIS_RATELIMIT_AUTH_WINDOW_SECONDS: 60,
       LIBRIS_RATELIMIT_KEY_CREATION_LIMIT: 30,
       LIBRIS_RATELIMIT_KEY_CREATION_WINDOW_SECONDS: 3600,
+      LIBRIS_MAX_UPLOAD_BYTES: 1024 * 1024 * 1024,
+      LIBRIS_MAX_UPLOAD_FILES: 20,
       LIBRIS_HTTP_HEADERS_TIMEOUT_MS: 10_000,
       LIBRIS_HTTP_REQUEST_TIMEOUT_MS: 30_000,
       LIBRIS_HTTP_IDLE_TIMEOUT_MS: 30_000,
@@ -471,6 +549,8 @@ describe("GET /api/inbox", () => {
       LIBRIS_RATELIMIT_AUTH_WINDOW_SECONDS: 60,
       LIBRIS_RATELIMIT_KEY_CREATION_LIMIT: 30,
       LIBRIS_RATELIMIT_KEY_CREATION_WINDOW_SECONDS: 3600,
+      LIBRIS_MAX_UPLOAD_BYTES: 1024 * 1024 * 1024,
+      LIBRIS_MAX_UPLOAD_FILES: 20,
       LIBRIS_HTTP_HEADERS_TIMEOUT_MS: 10_000,
       LIBRIS_HTTP_REQUEST_TIMEOUT_MS: 30_000,
       LIBRIS_HTTP_IDLE_TIMEOUT_MS: 30_000,

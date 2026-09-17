@@ -84,6 +84,8 @@ books.example.com/_docs/*  → Hono API (OpenAPI docs)
 | `LIBRIS_HTTP_HEADERS_TIMEOUT_MS` | Time allowed to receive complete request headers. Default: `10000`.                                                                                                                                 |
 | `LIBRIS_HTTP_REQUEST_TIMEOUT_MS` | Time allowed to receive a complete request body. Default: `30000`.                                                                                                                                  |
 | `LIBRIS_HTTP_IDLE_TIMEOUT_MS`    | Maximum inactive time on an HTTP connection. Default: `30000`.                                                                                                                                      |
+| `LIBRIS_MAX_UPLOAD_BYTES`        | Aggregate limit for one inbox upload, across all files and fields. Default: `1073741824` (1 GiB).                                                                                                   |
+| `LIBRIS_MAX_UPLOAD_FILES`        | Maximum file parts in one inbox upload. Default: `20`.                                                                                                                                              |
 
 ### Rate Limiting
 

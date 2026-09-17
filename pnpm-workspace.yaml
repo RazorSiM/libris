@@ -75,7 +75,7 @@ catalog:
   echarts: ^6.0.0
   fast-xml-parser: 5.10.1
   happy-dom: ^20.11.1
-  hono: ^4.13.1
+  hono: ^4.13.8
   ioredis: ^6.0.0
   iron-webcrypto: ^2.0.0
   lefthook: ^2.1.10
@@ -120,6 +120,10 @@ catalog:
 catalogMode: prefer
 overrides:
   "@opentelemetry/api-logs": 0.218.0
+  # Security floor for GHSA-gqvv-2mrq-wpjv / GHSA-g6gw-c38x-mqfc and the other
+  # <4.13.5 advisories. @hono/cli still resolves its own @hono/node-server 1.x,
+  # whose `hono: ^4` range would otherwise keep an old copy in the lockfile.
+  hono: ^4.13.8
   # Force every transitive `vite` onto vite-plus-core. There is deliberately no
   # `vitest` override — vite-plus 0.2.x depends on upstream vitest directly, so
   # letting pnpm resolve it normally keeps it deduped with the @vitest/* packages

@@ -1,6 +1,11 @@
 import { z } from "zod";
 import { resolveDatabaseUrl } from "./lib/resolve-database-url";
 import { resolveRedisUrl } from "./lib/resolve-redis-url";
+
+/** Aggregate upload ceiling: ten files at the route's 100 MiB per-file limit. */
+export const DEFAULT_MAX_UPLOAD_BYTES = 1024 * 1024 * 1024;
+/** More multipart file parts than any real batch; each one costs memory. */
+export const DEFAULT_MAX_UPLOAD_FILES = 20;
 import { isValidProxyCidr } from "./shared/request-ip.js";
 
 const CoverFetchAllowlistSchema = z
@@ -178,6 +183,12 @@ const RawEnvSchema = z.object({
   LIBRIS_HTTP_HEADERS_TIMEOUT_MS: z.coerce.number().int().positive().default(10_000),
   LIBRIS_HTTP_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
   LIBRIS_HTTP_IDLE_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
+  // Aggregate multipart ceiling for POST /api/inbox/upload, across every file
+  // and field in one request, and how many file parts it may carry. The
+  // per-file check in the route runs after the body is parsed, so it cannot
+  // bound memory on its own; this is the limit the body stream enforces.
+  LIBRIS_MAX_UPLOAD_BYTES: z.coerce.number().int().positive().default(DEFAULT_MAX_UPLOAD_BYTES),
+  LIBRIS_MAX_UPLOAD_FILES: z.coerce.number().int().positive().default(DEFAULT_MAX_UPLOAD_FILES),
 });
 
 const EnvSchema = RawEnvSchema.transform((raw, ctx) => {

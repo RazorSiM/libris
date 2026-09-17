@@ -14,6 +14,7 @@ import { fetchExternalImage } from "../../shared/secure-image-fetch.js";
 import { validateEpubUpload } from "../../shared/epub-validation.js";
 
 import { getLogger } from "../../lib/logger.js";
+import { DEFAULT_MAX_UPLOAD_FILES } from "../../env.js";
 
 const coverLogger = getLogger("inbox:cover");
 
@@ -650,6 +651,15 @@ export const inboxRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
 
     if (fileEntries.length === 0) {
       throw new HTTPException(400, { message: "No files provided" });
+    }
+
+    // The stream cap bounds total bytes; this bounds the number of parts, each
+    // of which costs a buffer and a File object before any file-level check.
+    const maxFiles = env.LIBRIS_MAX_UPLOAD_FILES || DEFAULT_MAX_UPLOAD_FILES;
+    if (fileEntries.length > maxFiles) {
+      throw new HTTPException(413, {
+        message: `Too many files in one upload (max ${maxFiles})`,
+      });
     }
 
     const inboxPath = env.LIBRIS_INBOX_PATH;
