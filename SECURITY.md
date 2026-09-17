@@ -20,14 +20,18 @@ Out of scope:
 
 ## Reporting a Vulnerability
 
-Open a [GitHub issue](../../issues) and label it `security`. If the issue is sensitive and you'd prefer it not be public before a fix is available, use [GitHub's private vulnerability reporting](../../security/advisories/new) if enabled, or describe the issue minimally in a public issue and we'll move the conversation privately.
+**Use [GitHub's private vulnerability reporting](../../security/advisories/new) by default.** It is enabled on this repository, so the report and the discussion around it stay private until a fix is available and an advisory is published.
 
-Please include:
+Include:
 
 - A description of the vulnerability and its potential impact
 - Steps to reproduce or a proof-of-concept
 - The version of Libris you tested against
 - Any suggested mitigations if you have them
+
+If you cannot use private reporting, open a [public issue](../../issues) that asks for a private contact channel and **do not include any vulnerability details or reproduction steps in it**. A maintainer will move the conversation somewhere private.
+
+Please do not disclose a vulnerability publicly before a fix is available.
 
 ## Response
 
