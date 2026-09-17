@@ -1591,4 +1591,68 @@ describe("GET /api/stats", () => {
     // 10 pages of delta, so the day's average is 10.0 — 20.0 without the baseline.
     expect(entry?.avgPages).toBe(10);
   });
+
+  it("velocity averages over calendar days, including idle ones", async () => {
+    await $fetchRaw("/__test/seed-books", {
+      method: "POST",
+      headers: auth(),
+      body: {
+        books: [{ title: "Velocity Calendar", author: "Boundary Author", status: "organized" }],
+      },
+    });
+    const [book] = await testDb
+      .select({ id: books.id })
+      .from(books)
+      .where(eq(books.title, "Velocity Calendar"));
+    expect(book).toBeDefined();
+    await testDb.update(books).set({ pageCount: 100 }).where(eq(books.id, book!.id));
+
+    const dayString = (daysAgo: number) =>
+      new Date(Date.now() - daysAgo * 86_400_000).toISOString().slice(0, 10);
+    const firstDay = dayString(16);
+    const readDay = dayString(9);
+    await testDb.insert(readingProgressHistory).values([
+      {
+        userId,
+        bookId: book!.id,
+        document: "velocity-calendar.epub",
+        device: "kobo",
+        progress: "/body/p[1]",
+        percentage: "0.00",
+        timestamp: 0n,
+        createdAt: new Date(`${dayString(20)}T12:00:00.000Z`),
+      },
+      {
+        userId,
+        bookId: book!.id,
+        document: "velocity-calendar.epub",
+        device: "kobo",
+        progress: "/body/p[10]",
+        percentage: "0.10",
+        timestamp: 0n,
+        createdAt: new Date(`${firstDay}T12:00:00.000Z`),
+      },
+      {
+        userId,
+        bookId: book!.id,
+        document: "velocity-calendar.epub",
+        device: "kobo",
+        progress: "/body/p[80]",
+        percentage: "0.80",
+        timestamp: 0n,
+        createdAt: new Date(`${readDay}T12:00:00.000Z`),
+      },
+    ]);
+
+    const { data, status } = await $fetchRaw("/api/stats", { headers: auth() });
+    expect(status).toBe(200);
+    const at = (daysAgo: number) =>
+      data.readingVelocity.find((row: { day: string }) => row.day === dayString(daysAgo));
+
+    // 70 pages on the read day spread over the 7-day window: 10/day. Summing
+    // only the two days with data would report 40.
+    expect(at(9)?.avgPages).toBe(10);
+    // An idle day is still a row, averaging the 10 pages six calendar days back.
+    expect(at(10)?.avgPages).toBe(1.4);
+  });
 });

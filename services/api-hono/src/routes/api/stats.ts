@@ -421,6 +421,22 @@ export const statsRoutes = router.openapi(statsRoute, async (c) => {
         WHERE in_period
         GROUP BY day
       ),
+      -- Fill idle days with 0 so the moving window averages calendar days, not
+      -- the last seven days that happened to have syncs. Starts six days before
+      -- the first displayed day so its window is full.
+      calendar AS (
+        SELECT day::date AS day
+        FROM generate_series(
+          CURRENT_DATE - INTERVAL '96 days',
+          CURRENT_DATE,
+          INTERVAL '1 day'
+        ) AS day
+      ),
+      filled AS (
+        SELECT c.day, COALESCE(d.pages, 0) AS pages
+        FROM calendar c
+        LEFT JOIN daily d ON d.day = c.day
+      ),
       windowed AS (
         SELECT
           day,
@@ -428,7 +444,7 @@ export const statsRoutes = router.openapi(statsRoute, async (c) => {
             ORDER BY day
             ROWS BETWEEN 6 PRECEDING AND CURRENT ROW
           ) AS avg_pages
-        FROM daily
+        FROM filled
       )
       SELECT day::text, ROUND(avg_pages::numeric, 1)::text AS avg_pages
       FROM windowed
