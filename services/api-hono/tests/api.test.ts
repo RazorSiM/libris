@@ -9,6 +9,7 @@ import {
   readingProgress,
   readingProgressHistory,
 } from "../src/db/schema.js";
+import { registerQueue } from "../src/services/queue.js";
 
 // ── App-level state ────────────────────────────────────────────────
 
@@ -381,6 +382,95 @@ describe("POST /api/jobs/:id/retry (queueName disambiguation)", () => {
       headers: session(),
     });
     expect(status).toBe(404);
+  });
+});
+
+describe("GET /api/jobs (pagination contract)", () => {
+  function fakeJob(id: string, timestamp: number) {
+    return {
+      id,
+      name: "test-job",
+      data: {},
+      progress: 0,
+      returnvalue: undefined,
+      failedReason: undefined,
+      stacktrace: [],
+      attemptsMade: 0,
+      opts: { attempts: 1 },
+      timestamp,
+      processedOn: null,
+      finishedOn: null,
+      getState: async () => "completed",
+    };
+  }
+
+  function registerFakeQueue(name: string, count: number, timestampAt: (index: number) => number) {
+    registerQueue({
+      name,
+      getJobCounts: async (...statuses: string[]) =>
+        Object.fromEntries(statuses.map((s) => [s, s === "completed" ? count : 0])),
+      getJobs: async (_statuses: string[], start: number, end: number) => {
+        const last = Math.min(end, count - 1);
+        return Array.from({ length: Math.max(0, last - start + 1) }, (_, k) =>
+          fakeJob(`${name}-${start + k}`, timestampAt(start + k)),
+        );
+      },
+    } as never);
+  }
+
+  it("reports the exact total and serves pages past the old 200-job window", async () => {
+    registerFakeQueue("paginate-a", 201, (i) => 1_000_000 - i);
+
+    const page11 = await $fetchRaw(
+      "/api/jobs?queue=paginate-a&status=completed&page=11&pageSize=20",
+      { headers: session() },
+    );
+    expect(page11.status).toBe(200);
+    expect(page11.data).toMatchObject({
+      total: 201,
+      page: 11,
+      pageSize: 20,
+      totalPages: 11,
+      truncated: false,
+    });
+    expect(page11.data.jobs.map((job: { id: string }) => job.id)).toEqual(["paginate-a-200"]);
+
+    const page1 = await $fetchRaw(
+      "/api/jobs?queue=paginate-a&status=completed&page=1&pageSize=20",
+      { headers: session() },
+    );
+    expect(page1.data.jobs).toHaveLength(20);
+    expect(page1.data.jobs[0].id).toBe("paginate-a-0");
+  });
+
+  it("merge-sorts queues by timestamp and flags totals beyond the window", async () => {
+    registerFakeQueue("paginate-b", 2, (i) => 2_000_000 - i);
+
+    const merged = await $fetchRaw("/api/jobs?status=completed&page=1&pageSize=20", {
+      headers: session(),
+    });
+    expect(merged.status).toBe(200);
+    expect(merged.data.total).toBe(203);
+    expect(merged.data.jobs.slice(0, 3).map((job: { id: string }) => job.id)).toEqual([
+      "paginate-b-0",
+      "paginate-b-1",
+      "paginate-a-0",
+    ]);
+
+    // 10,005 matching jobs: `total` stays exact, but only the newest 10,000 are
+    // materialized, so the 501st page has no jobs and the response says so.
+    registerFakeQueue("paginate-c", 10_005, (i) => 3_000_000 - i);
+    const beyondWindow = await $fetchRaw(
+      "/api/jobs?queue=paginate-c&status=completed&page=501&pageSize=20",
+      { headers: session() },
+    );
+    expect(beyondWindow.status).toBe(200);
+    expect(beyondWindow.data).toMatchObject({
+      total: 10_005,
+      totalPages: 501,
+      truncated: true,
+    });
+    expect(beyondWindow.data.jobs).toEqual([]);
   });
 });
 

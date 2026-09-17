@@ -212,6 +212,14 @@ function refreshJobs() {
           />
         </div>
       </div>
+
+      <p
+        v-if="jobsData.truncated"
+        class="text-xs text-muted pt-2"
+        data-testid="jobs-truncated-notice"
+      >
+        Only the newest jobs are browsable; older pages beyond the window are not shown.
+      </p>
     </div>
 
     <!-- Job Detail Slideover -->

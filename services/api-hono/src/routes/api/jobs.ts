@@ -10,6 +10,14 @@ import {
 } from "../../services/queue-diagnostics.js";
 import type { Queue, Job } from "bullmq";
 
+/**
+ * How many jobs, per queue, the list route will materialize from BullMQ.
+ * `total` comes from queue counters and stays exact; this cap only bounds the
+ * merge-sort window, so a deep page cannot ask Redis for unbounded history.
+ * Pages beyond it return an empty array with `truncated: true`.
+ */
+export const MAX_JOB_WINDOW = 10_000;
+
 // ── Shared Schemas ──────────────────────────────────────────────
 
 const JobDetailSchema = z.object({
@@ -109,7 +117,9 @@ const listRoute = createRoute({
   summary: "List jobs across all queues",
   description:
     "Browse recent jobs across all queues with filtering by queue name and status. " +
-    "Supports pagination via page/pageSize query params.",
+    "Supports pagination via page/pageSize query params. `total` is the exact " +
+    `per-queue count; only the newest ${MAX_JOB_WINDOW} jobs are materialized for ` +
+    "browsing, so `truncated` is true when older jobs exist beyond the window.",
   request: {
     query: z.object({
       queue: z
@@ -137,10 +147,13 @@ const listRoute = createRoute({
         "application/json": {
           schema: z.object({
             jobs: z.array(JobDetailSchema),
-            total: z.number().int(),
+            total: z.number().int().openapi({ description: "Exact number of matching jobs" }),
             page: z.number().int(),
             pageSize: z.number().int(),
             totalPages: z.number().int(),
+            truncated: z.boolean().openapi({
+              description: `True when matching jobs exceed the ${MAX_JOB_WINDOW}-job browsable window; pages past it return no jobs`,
+            }),
           }),
         },
       },
@@ -422,7 +435,14 @@ export const jobsRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
     if (queueFilter) {
       const q = findQueueByName(queueFilter);
       if (!q) {
-        return c.json({ jobs: [], total: 0, page, pageSize, totalPages: 0 });
+        return c.json({
+          jobs: [],
+          total: 0,
+          page,
+          pageSize,
+          totalPages: 0,
+          truncated: false,
+        });
       }
       queuesToQuery = [q];
     } else {
@@ -435,13 +455,28 @@ export const jobsRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
       ? [status]
       : ["completed", "active", "waiting", "failed", "delayed"];
 
+    // Exact totals from BullMQ's counters. The job window fetched below is
+    // capped, so deriving `total` from it would under-report (and once did).
+    const queueTotals = await Promise.all(
+      queuesToQuery.map(async (queue) => {
+        const counts = await queue.getJobCounts(...statuses);
+        return statuses.reduce((sum, s) => sum + (counts[s] ?? 0), 0);
+      }),
+    );
+    const total = queueTotals.reduce((sum, n) => sum + n, 0);
+
+    // Materialize the requested page per queue: to place the page after the
+    // cross-queue merge-sort, every queue must contribute everything newer
+    // than the page's last row, i.e. the first page*pageSize jobs.
+    const fetchWindow = Math.min(page * pageSize, MAX_JOB_WINDOW);
+
     // Collect jobs from all matching queues
     type JobWithStatus = ReturnType<typeof serializeJob> & { status: string };
     const allJobs: JobWithStatus[] = [];
 
     await Promise.all(
       queuesToQuery.map(async (queue) => {
-        const jobs: Job[] = await queue.getJobs(statuses, 0, 199);
+        const jobs: Job[] = await queue.getJobs(statuses, 0, fetchWindow - 1);
         for (const job of jobs) {
           if (!job.id) continue;
           const state = await job.getState();
@@ -452,16 +487,23 @@ export const jobsRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
       }),
     );
 
-    // Sort by timestamp descending (most recent first)
+    // Sort by timestamp descending (most recent first), then trim to the window.
     allJobs.sort((a, b) => b.timestamp - a.timestamp);
+    const windowJobs = allJobs.slice(0, fetchWindow);
 
     // Paginate
-    const total = allJobs.length;
     const totalPages = Math.ceil(total / pageSize);
     const start = (page - 1) * pageSize;
-    const paginatedJobs = allJobs.slice(start, start + pageSize);
+    const paginatedJobs = windowJobs.slice(start, start + pageSize);
 
-    return c.json({ jobs: paginatedJobs, total, page, pageSize, totalPages });
+    return c.json({
+      jobs: paginatedJobs,
+      total,
+      page,
+      pageSize,
+      totalPages,
+      truncated: total > MAX_JOB_WINDOW,
+    });
   })
   .openapi(detailRoute, async (c) => {
     const { id } = c.req.valid("param");
