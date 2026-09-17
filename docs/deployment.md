@@ -339,6 +339,8 @@ LIBRIS_TRUSTED_PROXIES=172.18.0.5/32
 
 Do not use an entire LAN or a network that includes clients. Libris first verifies the direct TCP peer against this list, then walks `X-Forwarded-For` from right to left past trusted proxy hops. A client-supplied leftmost value therefore cannot select its own rate-limit bucket. Keep the API origin unreachable except through the proxy as an additional deployment boundary.
 
+The same switch controls the scheme half of the origin check for cookie-authenticated mutations and WebSocket upgrades. Libris compares the browser's `Origin` against the exact scheme, host, and port it sees, and derives the scheme from `X-Forwarded-Proto` only when `TRUST_PROXY_HEADERS=1`. A TLS-terminating proxy that does not forward the scheme will make the browser's `https://…` origin look foreign, and those requests are rejected with 403.
+
 Configure the proxy to replace or append the client IP headers:
 
 **nginx:**
@@ -346,6 +348,7 @@ Configure the proxy to replace or append the client IP headers:
 ```nginx
 proxy_set_header X-Real-IP $remote_addr;
 proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+proxy_set_header X-Forwarded-Proto $scheme;
 ```
 
 Without this, repeated auth failures from the same client may not be correctly rate-limited.

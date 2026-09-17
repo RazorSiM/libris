@@ -21,7 +21,7 @@ import * as schema from "../db/schema.js";
 import type { Env } from "../env.js";
 import { createMemoryKVStore } from "../services/kv-store.js";
 import { isAdmin } from "../shared/auth.js";
-import { authMiddleware } from "./auth.js";
+import { authMiddleware, isTrustedOrigin } from "./auth.js";
 
 const TEST_ENV = {
   NODE_ENV: "test",
@@ -700,5 +700,81 @@ describe("cross-site cookie mutation rejection", () => {
       headers: { cookie, host: "localhost", origin: "https://evil.example.com" },
     });
     expect(res.status).toBe(200);
+  });
+});
+
+describe("isTrustedOrigin", () => {
+  function request(url: string, host?: string, headers: Record<string, string | undefined> = {}) {
+    return {
+      req: {
+        url,
+        header: (name: string) =>
+          name.toLowerCase() === "host" ? host : headers[name.toLowerCase()],
+      },
+    };
+  }
+
+  const TEST = { NODE_ENV: "test", TRUST_PROXY_HEADERS: "0" };
+
+  it("accepts an exact scheme, host, and port match", () => {
+    const c = request("http://libris.example.com:8443/api/books", "libris.example.com:8443");
+    expect(isTrustedOrigin("http://libris.example.com:8443", c, TEST)).toBe(true);
+  });
+
+  it("rejects a same-host different-port origin", () => {
+    const c = request("http://libris.example.com:3000/api/books", "libris.example.com:3000");
+    expect(isTrustedOrigin("http://libris.example.com:3100", c, TEST)).toBe(false);
+  });
+
+  it("rejects a different scheme when proxy headers are not trusted", () => {
+    const c = request("http://libris.example.com/api/books", "libris.example.com", {
+      "x-forwarded-proto": "https",
+    });
+    expect(isTrustedOrigin("https://libris.example.com", c, TEST)).toBe(false);
+  });
+
+  it("honors x-forwarded-proto when TRUST_PROXY_HEADERS is enabled", () => {
+    const env = { NODE_ENV: "production", TRUST_PROXY_HEADERS: "1" };
+    const c = request("http://10.0.0.5:3000/api/books", "libris.example.com", {
+      "x-forwarded-proto": "https, http",
+    });
+    expect(isTrustedOrigin("https://libris.example.com", c, env)).toBe(true);
+    expect(isTrustedOrigin("http://libris.example.com", c, env)).toBe(false);
+  });
+
+  it("ignores an invalid x-forwarded-proto value", () => {
+    const env = { NODE_ENV: "production", TRUST_PROXY_HEADERS: "1" };
+    const c = request("http://libris.example.com/api/books", "libris.example.com", {
+      "x-forwarded-proto": "gopher",
+    });
+    expect(isTrustedOrigin("http://libris.example.com", c, env)).toBe(true);
+  });
+
+  it("accepts a bracketed IPv6 host with a matching port", () => {
+    const c = request("http://[::1]:3000/api/books", "[::1]:3000");
+    expect(isTrustedOrigin("http://[::1]:3000", c, TEST)).toBe(true);
+  });
+
+  it("rejects a bracketed IPv6 host with a different port", () => {
+    const c = request("http://[::1]:3000/api/books", "[::1]:3000");
+    expect(isTrustedOrigin("http://[::1]:3100", c, TEST)).toBe(false);
+  });
+
+  it("rejects a malformed Origin header", () => {
+    const c = request("http://libris.example.com/api/books", "libris.example.com");
+    expect(isTrustedOrigin("null", c, TEST)).toBe(false);
+    expect(isTrustedOrigin("not a url", c, TEST)).toBe(false);
+  });
+
+  it("rejects when the Host header is missing or unparsable", () => {
+    expect(isTrustedOrigin("http://libris.example.com", request("http://x/"), TEST)).toBe(false);
+    const c = request("http://x/api", "bad host");
+    expect(isTrustedOrigin("http://bad host", c, TEST)).toBe(false);
+  });
+
+  it("allows the dev SPA origins outside production only", () => {
+    const c = request("http://libris.example.com/api/books", "libris.example.com");
+    expect(isTrustedOrigin("http://localhost:3100", c, { NODE_ENV: "test" })).toBe(true);
+    expect(isTrustedOrigin("http://localhost:3100", c, { NODE_ENV: "production" })).toBe(false);
   });
 });

@@ -346,7 +346,7 @@ Closing tears the event-bus subscription down before the transport, so "closed" 
 
 #### CSRF
 
-Unsafe methods (`POST`/`PUT`/`PATCH`/`DELETE`) that carry a cookie are rejected with 403 when `Sec-Fetch-Site: cross-site` is present, or when an `Origin` header names a host other than the server's own (plus `localhost:3100`/`:3000` outside production). Headerless clients — an app password or OPDS request, which sends no cookie and no browser `Origin` — fall through untouched.
+Unsafe methods (`POST`/`PUT`/`PATCH`/`DELETE`) that carry a cookie are rejected with 403 when `Sec-Fetch-Site: cross-site` is present, or when an `Origin` header's canonical scheme, host, and port do not match the server's own (`localhost:3100`/`:3000` are also allowed outside production). The scheme is read from `x-forwarded-proto` only when `TRUST_PROXY_HEADERS=1`, so a TLS-terminating proxy must forward it and a same-host different-port origin is rejected. Headerless clients — an app password or OPDS request, which sends no cookie and no browser `Origin` — fall through untouched.
 
 ### Book Ownership
 
