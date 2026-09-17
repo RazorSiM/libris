@@ -250,12 +250,28 @@ export function __setTestEnv(env: Env): void {
   _env = env;
 }
 
+function decodeRedisCredential(value: string, part: "username" | "password"): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    throw new Error(`REDIS_URL has an invalid percent-encoded ${part}`);
+  }
+}
+
 export function parseRedisUrl(url: string) {
   const parsed = new URL(url);
+  const hasUsername = parsed.username !== "";
+  const hasPassword = parsed.password !== "";
   return {
     host: parsed.hostname,
     port: Number(parsed.port) || 6379,
-    password: parsed.password || undefined,
+    ...(hasUsername && { username: decodeRedisCredential(parsed.username, "username") }),
+    // Keep an explicit empty password when a username is present: ioredis
+    // sends `AUTH <user> <password>` for ACL users, and omitting it would
+    // turn `redis://user:@host` into a legacy single-argument AUTH.
+    ...((hasUsername || hasPassword) && {
+      password: hasPassword ? decodeRedisCredential(parsed.password, "password") : "",
+    }),
     ...(parsed.protocol === "rediss:" && { tls: {} }),
   };
 }
