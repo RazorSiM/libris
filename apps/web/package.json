@@ -28,6 +28,7 @@
     "@vue/test-utils": "catalog:",
     "happy-dom": "catalog:",
     "typescript": "catalog:",
+    "vite": "catalog:",
     "vite-plus": "catalog:",
     "vue-tsc": "catalog:"
   }
