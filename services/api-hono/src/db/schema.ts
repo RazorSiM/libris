@@ -114,9 +114,14 @@ export const books = pgTable(
   ],
 );
 
-/** All book columns except searchVector (internal FTS column, never sent to clients). */
+/**
+ * All book columns except the two that are internal worker state and must not
+ * reach clients: `searchVector` (FTS) and `possibleDuplicateOf` (the raw FK is
+ * another user's book id — the inbox detail exposes only the resolved
+ * `possibleDuplicate` object under the caller's visibility rule).
+ */
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
-const { searchVector: _sv, ...bookColumns } = getColumns(books);
+const { searchVector: _sv, possibleDuplicateOf: _pdo, ...bookColumns } = getColumns(books);
 export { bookColumns };
 
 export const bookFiles = pgTable(

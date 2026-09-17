@@ -1,7 +1,7 @@
 import { createRoute, z } from "@hono/zod-openapi";
 import { createOpenApiRouter } from "../../shared/openapi.js";
 import { HTTPException } from "hono/http-exception";
-import { and, count, eq, inArray, ne, sql } from "drizzle-orm";
+import { and, count, eq, inArray, ne, or, sql } from "drizzle-orm";
 import { access } from "node:fs/promises";
 import { writeFile } from "node:fs/promises";
 import { basename, join, extname, resolve } from "node:path";
@@ -438,6 +438,9 @@ export const inboxRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
     const [book] = await db
       .select({
         ...bookColumns,
+        // Needed for the visibility-scoped lookup below, but stripped from the
+        // response: the raw id can point at another user's private upload.
+        possibleDuplicateOf: books.possibleDuplicateOf,
         uploaderId: users.id,
         uploaderLabel: users.name,
       })
@@ -464,17 +467,35 @@ export const inboxRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
       status: string;
     } | null = null;
     if (book.possibleDuplicateOf) {
+      // The worker writes this id without an owner predicate, so it can point
+      // at another user's private upload. Resolve it under the same visibility
+      // rule the inbox and library use — own books plus the shared organized
+      // library; admins see everything — or a non-admin could read the title,
+      // author and status of a book they cannot open.
+      const visibility = isAdmin(c)
+        ? eq(books.id, book.possibleDuplicateOf)
+        : and(
+            eq(books.id, book.possibleDuplicateOf),
+            or(eq(books.status, "organized"), eq(books.createdBy, getUserId(c))),
+          );
       const [dup] = await db
         .select({ id: books.id, title: books.title, author: books.author, status: books.status })
         .from(books)
-        .where(eq(books.id, book.possibleDuplicateOf));
+        .where(visibility);
       if (dup) {
         possibleDuplicate = dup;
       }
     }
 
+    const {
+      uploaderId: _uploaderId,
+      uploaderLabel: _uploaderLabel,
+      possibleDuplicateOf: _possibleDuplicateOf,
+      ...bookRest
+    } = book;
+
     return c.json({
-      ...(({ uploaderId: _uploaderId, uploaderLabel: _uploaderLabel, ...rest }) => rest)(book),
+      ...bookRest,
       uploader: formatUploader(book, secret),
       possibleDuplicate,
       files: files.map((f) => ({

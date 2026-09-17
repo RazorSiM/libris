@@ -64,6 +64,64 @@ beforeAll(async () => {
   db = testDb.db;
 });
 
+/**
+ * An app with the inbox routes and in-memory queues, for assertions that only
+ * need the HTTP surface. Auth reads the same test db the rows are seeded into.
+ */
+function buildInboxApp() {
+  const env: Env = {
+    NODE_ENV: "test",
+    PORT: 3000,
+    DATABASE_URL: "pglite://",
+    REDIS_URL: "redis://localhost:6379",
+    LIBRIS_INBOX_PATH: "/tmp/libris-test-inbox",
+    LIBRIS_LIBRARY_PATH: "/tmp/libris-test-library",
+    LIBRIS_COVER_FETCH_ALLOWLIST: [],
+    API_SECRET_KEY: "test-secret-key-at-least-32-characters-long!!",
+    BETTER_AUTH_SECRET: "test-better-auth-secret-at-least-32-chars!!",
+    BETTER_AUTH_URL: "",
+    LIBRIS_COOKIE_SECURE: "0",
+    MIGRATIONS_PATH: "./migrations",
+    TRUST_PROXY_HEADERS: "0",
+    LIBRIS_TRUSTED_PROXIES: [],
+    E2E_TEST: "",
+    LOG_LEVEL: "info",
+    LIBRIS_RATELIMIT_GENERAL_LIMIT: 600,
+    LIBRIS_RATELIMIT_GENERAL_WINDOW_SECONDS: 60,
+    LIBRIS_RATELIMIT_AUTH_LIMIT: 30,
+    LIBRIS_RATELIMIT_AUTH_WINDOW_SECONDS: 60,
+    LIBRIS_RATELIMIT_KEY_CREATION_LIMIT: 30,
+    LIBRIS_RATELIMIT_KEY_CREATION_WINDOW_SECONDS: 3600,
+    LIBRIS_MAX_UPLOAD_BYTES: 1024 * 1024 * 1024,
+    LIBRIS_MAX_UPLOAD_FILES: 20,
+    LIBRIS_MAX_EMBED_OPF_BYTES: 1024 * 1024,
+    LIBRIS_EMBED_TIMEOUT_MS: 30_000,
+    LIBRIS_HTTP_HEADERS_TIMEOUT_MS: 10_000,
+    LIBRIS_HTTP_REQUEST_TIMEOUT_MS: 30_000,
+    LIBRIS_HTTP_IDLE_TIMEOUT_MS: 30_000,
+  };
+
+  const { app } = createApp({
+    services: {
+      db: db as never,
+      queues: {
+        bookDetected: { add: async () => ({}) },
+        bookParseFile: { add: async () => ({}) },
+        bookFetchMetadata: { add: async () => ({}) },
+        bookOrganize: { add: async () => ({}) },
+        close: async () => {},
+      },
+      redisStorage: createMemoryKVStore(),
+      cacheStorage: createMemoryKVStore(),
+      auth: createTestAuth(db, env),
+      shutdown: async () => {},
+    },
+    env,
+  });
+
+  return { app, env };
+}
+
 afterAll(async () => {
   await pglite.close();
 });
@@ -437,56 +495,7 @@ describe("GET /api/inbox", () => {
       fileSize: 4321,
     });
 
-    const env: Env = {
-      NODE_ENV: "test",
-      PORT: 3000,
-      DATABASE_URL: "pglite://",
-      REDIS_URL: "redis://localhost:6379",
-      LIBRIS_INBOX_PATH: "/tmp/libris-test-inbox",
-      LIBRIS_LIBRARY_PATH: "/tmp/libris-test-library",
-      LIBRIS_COVER_FETCH_ALLOWLIST: [],
-      API_SECRET_KEY: "test-secret-key-at-least-32-characters-long!!",
-      BETTER_AUTH_SECRET: "test-better-auth-secret-at-least-32-chars!!",
-      BETTER_AUTH_URL: "",
-      LIBRIS_COOKIE_SECURE: "0",
-      MIGRATIONS_PATH: "./migrations",
-      TRUST_PROXY_HEADERS: "0",
-      LIBRIS_TRUSTED_PROXIES: [],
-      E2E_TEST: "",
-      LOG_LEVEL: "info",
-      LIBRIS_RATELIMIT_GENERAL_LIMIT: 600,
-      LIBRIS_RATELIMIT_GENERAL_WINDOW_SECONDS: 60,
-      LIBRIS_RATELIMIT_AUTH_LIMIT: 30,
-      LIBRIS_RATELIMIT_AUTH_WINDOW_SECONDS: 60,
-      LIBRIS_RATELIMIT_KEY_CREATION_LIMIT: 30,
-      LIBRIS_RATELIMIT_KEY_CREATION_WINDOW_SECONDS: 3600,
-      LIBRIS_MAX_UPLOAD_BYTES: 1024 * 1024 * 1024,
-      LIBRIS_MAX_UPLOAD_FILES: 20,
-      LIBRIS_MAX_EMBED_OPF_BYTES: 1024 * 1024,
-      LIBRIS_EMBED_TIMEOUT_MS: 30_000,
-      LIBRIS_HTTP_HEADERS_TIMEOUT_MS: 10_000,
-      LIBRIS_HTTP_REQUEST_TIMEOUT_MS: 30_000,
-      LIBRIS_HTTP_IDLE_TIMEOUT_MS: 30_000,
-    };
-
-    const { app } = createApp({
-      services: {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        db: db as any,
-        queues: {
-          bookDetected: { add: async () => ({}) },
-          bookParseFile: { add: async () => ({}) },
-          bookFetchMetadata: { add: async () => ({}) },
-          bookOrganize: { add: async () => ({}) },
-          close: async () => {},
-        },
-        redisStorage: createMemoryKVStore(),
-        cacheStorage: createMemoryKVStore(),
-        auth: createTestAuth(db, env),
-        shutdown: async () => {},
-      },
-      env,
-    });
+    const { app, env } = buildInboxApp();
 
     const listResponse = await app.request("/api/inbox", {
       headers: { Authorization: `Bearer ${rawKey}` },
@@ -536,54 +545,7 @@ describe("GET /api/inbox", () => {
       .values({ status: "review", title: "Private Inbox Book", createdBy: owner.userId })
       .returning({ id: schema.books.id });
 
-    const env = {
-      NODE_ENV: "test",
-      PORT: 3000,
-      DATABASE_URL: "pglite://",
-      REDIS_URL: "redis://localhost:6379",
-      LIBRIS_INBOX_PATH: "/tmp/libris-test-inbox",
-      LIBRIS_LIBRARY_PATH: "/tmp/libris-test-library",
-      LIBRIS_COVER_FETCH_ALLOWLIST: [],
-      API_SECRET_KEY: "test-secret-key-at-least-32-characters-long!!",
-      BETTER_AUTH_SECRET: "test-better-auth-secret-at-least-32-chars!!",
-      BETTER_AUTH_URL: "",
-      LIBRIS_COOKIE_SECURE: "0",
-      MIGRATIONS_PATH: "./migrations",
-      TRUST_PROXY_HEADERS: "0",
-      LIBRIS_TRUSTED_PROXIES: [],
-      E2E_TEST: "",
-      LOG_LEVEL: "info",
-      LIBRIS_RATELIMIT_GENERAL_LIMIT: 600,
-      LIBRIS_RATELIMIT_GENERAL_WINDOW_SECONDS: 60,
-      LIBRIS_RATELIMIT_AUTH_LIMIT: 30,
-      LIBRIS_RATELIMIT_AUTH_WINDOW_SECONDS: 60,
-      LIBRIS_RATELIMIT_KEY_CREATION_LIMIT: 30,
-      LIBRIS_RATELIMIT_KEY_CREATION_WINDOW_SECONDS: 3600,
-      LIBRIS_MAX_UPLOAD_BYTES: 1024 * 1024 * 1024,
-      LIBRIS_MAX_UPLOAD_FILES: 20,
-      LIBRIS_MAX_EMBED_OPF_BYTES: 1024 * 1024,
-      LIBRIS_EMBED_TIMEOUT_MS: 30_000,
-      LIBRIS_HTTP_HEADERS_TIMEOUT_MS: 10_000,
-      LIBRIS_HTTP_REQUEST_TIMEOUT_MS: 30_000,
-      LIBRIS_HTTP_IDLE_TIMEOUT_MS: 30_000,
-    } as Env;
-    const { app } = createApp({
-      services: {
-        db: db as never,
-        queues: {
-          bookDetected: { add: async () => ({}) },
-          bookParseFile: { add: async () => ({}) },
-          bookFetchMetadata: { add: async () => ({}) },
-          bookOrganize: { add: async () => ({}) },
-          close: async () => {},
-        },
-        redisStorage: createMemoryKVStore(),
-        cacheStorage: createMemoryKVStore(),
-        auth: createTestAuth(db, env),
-        shutdown: async () => {},
-      },
-      env,
-    });
+    const { app } = buildInboxApp();
 
     for (const path of [`/api/inbox/${book.id}`, `/api/inbox/${book.id}/cover`]) {
       const response = await app.request(path, {
@@ -603,5 +565,88 @@ describe("GET /api/inbox", () => {
       headers: { Authorization: `Bearer ${other.rawKey}` },
     });
     expect(await countResponse.json()).toEqual({ count: 0 });
+  });
+
+  it("resolves a possibleDuplicate only when the caller can see the target book", async () => {
+    const owner = await seedApiKey();
+    const other = await seedApiKey();
+    const [hidden] = await db
+      .insert(schema.books)
+      .values({
+        status: "review",
+        title: "Hidden Pre-Approval",
+        author: "Hidden Author",
+        createdBy: owner.userId,
+      })
+      .returning({ id: schema.books.id });
+    const [callerBook] = await db
+      .insert(schema.books)
+      .values({
+        status: "review",
+        title: "Caller Book",
+        author: "Caller Author",
+        createdBy: other.userId,
+        possibleDuplicateOf: hidden.id,
+      })
+      .returning({ id: schema.books.id });
+
+    const { app } = buildInboxApp();
+    const request = async (path: string, key: string) =>
+      app.request(path, { headers: { Authorization: `Bearer ${key}` } });
+
+    // The worker points at the duplicate without an owner predicate, so the
+    // detail route must not resolve it for a caller who cannot open the target.
+    const denied = await request(`/api/inbox/${callerBook.id}`, other.rawKey);
+    expect(denied.status).toBe(200);
+    const deniedBody = await denied.json();
+    expect(deniedBody.possibleDuplicate).toBeNull();
+    expect(JSON.stringify(deniedBody)).not.toContain("Hidden Pre-Approval");
+    expect(JSON.stringify(deniedBody)).not.toContain(hidden.id);
+
+    // Own books stay visible: the same caller pointing at their own review book.
+    const [own] = await db
+      .insert(schema.books)
+      .values({
+        status: "review",
+        title: "Own Review Book",
+        author: "Caller Author",
+        createdBy: other.userId,
+      })
+      .returning({ id: schema.books.id });
+    await db
+      .update(schema.books)
+      .set({ possibleDuplicateOf: own.id })
+      .where(eq(schema.books.id, callerBook.id));
+
+    const ownBody = await (await request(`/api/inbox/${callerBook.id}`, other.rawKey)).json();
+    expect(ownBody.possibleDuplicate).toEqual({
+      id: own.id,
+      title: "Own Review Book",
+      author: "Caller Author",
+      status: "review",
+    });
+
+    // And the shared organized library is visible to every user.
+    const [organized] = await db
+      .insert(schema.books)
+      .values({
+        status: "organized",
+        title: "Shared Organized",
+        author: "Owner Author",
+        createdBy: owner.userId,
+      })
+      .returning({ id: schema.books.id });
+    await db
+      .update(schema.books)
+      .set({ possibleDuplicateOf: organized.id })
+      .where(eq(schema.books.id, callerBook.id));
+
+    const sharedBody = await (await request(`/api/inbox/${callerBook.id}`, other.rawKey)).json();
+    expect(sharedBody.possibleDuplicate).toEqual({
+      id: organized.id,
+      title: "Shared Organized",
+      author: "Owner Author",
+      status: "organized",
+    });
   });
 });
