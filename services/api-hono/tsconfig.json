@@ -8,6 +8,12 @@
     "moduleResolution": "bundler",
     "esModuleInterop": true,
     "target": "ESNext",
+    // The EPUB worker (src/lib/epub/embed-worker.ts) runs under Node's native
+    // type stripping, which does not rewrite `.js` specifiers to `.ts` files.
+    // Its whole module graph therefore imports with explicit `.ts` extensions.
+    // Nothing here emits through tsc; tsdown does the bundling.
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
     "paths": {
       "#db": ["./src/db/index.ts"],
       "#db/*": ["./src/db/*"]

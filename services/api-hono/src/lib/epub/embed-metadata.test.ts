@@ -1,4 +1,5 @@
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vite-plus/test";
@@ -454,5 +455,97 @@ describe("embedEpubMetadata", () => {
     expect(extracted.language).toBe("en");
     expect(extracted.description).toBe("Round trip test");
     expect(extracted.genres).toEqual(["Testing", "Software"]);
+  });
+
+  describe("robustness (R11/R20)", () => {
+    it("rewrites an OPF that is a 512 KiB flood of unclosed dc tags in bounded time", async () => {
+      // The exact shape from the review reproduction: `<dc:title ` repeated
+      // with no `>`, which drove the old regex quadratic (7.3 s at 160 KiB,
+      // extrapolating to hours at the 16 MiB entry cap).
+      const flood = "<dc:title ".repeat(40_000); // ~512 KiB
+      const opf = `<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>Old</dc:title>
+    ${flood}
+  </metadata>
+  <manifest>
+    <item id="chapter1" href="chapter1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine>
+    <itemref idref="chapter1"/>
+  </spine>
+</package>`;
+      const path = await writeEpub("hostile-opf.epub", buildEpub(opf, "content.opf"));
+
+      const started = performance.now();
+      await embedEpubMetadata(path, { title: "Survivor" });
+      const elapsed = performance.now() - started;
+
+      expect(elapsed).toBeLessThan(2_000);
+      const opfXml = await readOpfFromEpub(path);
+      expect(opfXml).toContain("<dc:title>Survivor</dc:title>");
+    });
+
+    it("refuses an OPF over the configured embedding limit and leaves the file intact", async () => {
+      const opf = makeOpf({
+        title: "Original",
+        extraMeta: `<meta name="pad" content="${"x".repeat(96 * 1024)}"/>`,
+      });
+      const path = await writeEpub("over-cap-opf.epub", buildEpub(opf, "content.opf"));
+      const before = await readFile(path);
+
+      await expect(
+        embedEpubMetadata(path, { title: "Too Big" }, undefined, { maxOpfBytes: 64 * 1024 }),
+      ).rejects.toThrow(/embedding limit/);
+      expect((await readFile(path)).equals(before)).toBe(true);
+    });
+
+    it("rejects instead of hanging when the worker exceeds the timeout", async () => {
+      const path = await writeEpub("timeout.epub", buildEpub(makeOpf({ title: "Timeout" })));
+
+      await expect(
+        embedEpubMetadata(path, { title: "Never Applied" }, undefined, { timeoutMs: 1 }),
+      ).rejects.toThrow(/timed out after 1ms/);
+    });
+
+    it("keeps the event loop responsive while rewriting incompressible entries", async () => {
+      // DEFLATE over incompressible data is the worst case for the old
+      // synchronous buildZip: 4 × 12 MiB delayed a zero-delay timer by ~800 ms
+      // (R11). With the rewrite in a worker, the parent only moves bytes.
+      const randomEntries = Array.from({ length: 5 }, (_, i) => ({
+        name: `OEBPS/big-${i}.bin`,
+        data: randomBytes(12 * 1024 * 1024),
+        compress: true as const,
+      }));
+      const epub = buildZip([
+        { name: "mimetype", data: Buffer.from("application/epub+zip"), compress: false },
+        {
+          name: "META-INF/container.xml",
+          data: Buffer.from(makeContainerXml("content.opf")),
+          compress: false,
+        },
+        { name: "content.opf", data: Buffer.from(makeOpf({ title: "Big" })), compress: false },
+        ...randomEntries,
+      ]);
+      const path = await writeEpub("incompressible.epub", epub);
+
+      const gaps: number[] = [];
+      let previous = performance.now();
+      const sampler = setInterval(() => {
+        const now = performance.now();
+        gaps.push(now - previous);
+        previous = now;
+      }, 20);
+      try {
+        await embedEpubMetadata(path, { title: "Responsive" });
+      } finally {
+        clearInterval(sampler);
+      }
+
+      expect(Math.max(...gaps)).toBeLessThan(600);
+      const opfXml = await readOpfFromEpub(path);
+      expect(opfXml).toContain("<dc:title>Responsive</dc:title>");
+    });
   });
 });

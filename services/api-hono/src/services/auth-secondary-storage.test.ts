@@ -410,6 +410,8 @@ describe("a Redis outage against a durable session", () => {
     LIBRIS_HTTP_IDLE_TIMEOUT_MS: 30_000,
     LIBRIS_MAX_UPLOAD_BYTES: 1024 * 1024 * 1024,
     LIBRIS_MAX_UPLOAD_FILES: 20,
+    LIBRIS_MAX_EMBED_OPF_BYTES: 1024 * 1024,
+    LIBRIS_EMBED_TIMEOUT_MS: 30_000,
   } satisfies Env;
 
   const PASSWORD = "correct-horse-battery-staple";

@@ -11,7 +11,11 @@
     "isolatedModules": true,
     "skipLibCheck": true,
     "noEmit": true,
-    "allowImportingTsExtensions": false,
+    // The web program follows imports into services/api-hono source (its
+    // `client`/`types` exports). The EPUB worker graph there must import with
+    // explicit `.ts` extensions because it runs under Node's native type
+    // stripping — see services/api-hono/tsconfig.json.
+    "allowImportingTsExtensions": true,
     "useDefineForClassFields": true,
     "lib": ["ESNext", "DOM", "DOM.Iterable"],
     "types": ["vite-plus/client"],

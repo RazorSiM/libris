@@ -86,6 +86,8 @@ books.example.com/_docs/*  → Hono API (OpenAPI docs)
 | `LIBRIS_HTTP_IDLE_TIMEOUT_MS`    | Maximum inactive time on an HTTP connection. Default: `30000`.                                                                                                                                      |
 | `LIBRIS_MAX_UPLOAD_BYTES`        | Aggregate limit for one inbox upload, across all files and fields. Default: `1073741824` (1 GiB).                                                                                                   |
 | `LIBRIS_MAX_UPLOAD_FILES`        | Maximum file parts in one inbox upload. Default: `20`.                                                                                                                                              |
+| `LIBRIS_MAX_EMBED_OPF_BYTES`     | Largest OPF rewritten when embedding metadata during organize. Default: `1048576` (1 MiB).                                                                                                          |
+| `LIBRIS_EMBED_TIMEOUT_MS`        | Timeout for the metadata-embedding worker thread. Default: `30000`.                                                                                                                                 |
 
 ### Rate Limiting
 

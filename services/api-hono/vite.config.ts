@@ -6,7 +6,12 @@ const here = fileURLToPath(new URL(".", import.meta.url));
 
 export default defineConfig({
   pack: {
-    entry: ["src/index.ts"],
+    // The worker entry must stay a sibling of dist/index.mjs: embed-metadata.ts
+    // resolves it as `new URL("./embed-worker.mjs", import.meta.url)`.
+    entry: {
+      index: "src/index.ts",
+      "embed-worker": "src/lib/epub/embed-worker.ts",
+    },
     format: "esm",
     // Matches the runtime major in .node-version / engines.node and the
     // node:*-slim base in the Dockerfile — keep the three in step so tsdown

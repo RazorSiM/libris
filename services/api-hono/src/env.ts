@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { resolveDatabaseUrl } from "./lib/resolve-database-url";
 import { resolveRedisUrl } from "./lib/resolve-redis-url";
+import { DEFAULT_EMBED_TIMEOUT_MS, DEFAULT_MAX_EMBED_OPF_BYTES } from "./lib/epub/embed-core";
 
 /** Aggregate upload ceiling: ten files at the route's 100 MiB per-file limit. */
 export const DEFAULT_MAX_UPLOAD_BYTES = 1024 * 1024 * 1024;
@@ -189,6 +190,14 @@ const RawEnvSchema = z.object({
   // bound memory on its own; this is the limit the body stream enforces.
   LIBRIS_MAX_UPLOAD_BYTES: z.coerce.number().int().positive().default(DEFAULT_MAX_UPLOAD_BYTES),
   LIBRIS_MAX_UPLOAD_FILES: z.coerce.number().int().positive().default(DEFAULT_MAX_UPLOAD_FILES),
+  // OPF rewrite during organize runs in a worker thread; these bound how much
+  // document it will touch and how long the parent waits before killing it.
+  LIBRIS_MAX_EMBED_OPF_BYTES: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(DEFAULT_MAX_EMBED_OPF_BYTES),
+  LIBRIS_EMBED_TIMEOUT_MS: z.coerce.number().int().positive().default(DEFAULT_EMBED_TIMEOUT_MS),
 });
 
 const EnvSchema = RawEnvSchema.transform((raw, ctx) => {

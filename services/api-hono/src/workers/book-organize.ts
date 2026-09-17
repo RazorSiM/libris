@@ -503,6 +503,10 @@ export async function processBookOrganize(job: Job<BookOrganizePayload>): Promis
           genres: book.genres,
         },
         coverPath ? join(libraryPath, coverPath) : undefined,
+        {
+          maxOpfBytes: getEnv().LIBRIS_MAX_EMBED_OPF_BYTES,
+          timeoutMs: getEnv().LIBRIS_EMBED_TIMEOUT_MS,
+        },
       );
       // Recompute MD5 since file content changed; keep the pre-embedding
       // hash so KoSync progress from the original file still matches.
