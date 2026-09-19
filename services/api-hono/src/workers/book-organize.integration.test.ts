@@ -7,7 +7,7 @@
  * "moved but the database update failed" could not recover. These run the real
  * worker against a real database and filesystem.
  */
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import type { PGlite } from "@electric-sql/pglite";
@@ -17,11 +17,12 @@ import { createTestDb, seedUser, type TestDb } from "../db/test-utils.js";
 import * as schema from "../db/schema.js";
 import { __setTestEnv, type Env } from "../env.js";
 import { computeChecksumFromBuffer } from "../shared/checksum.js";
+import { computePartialMd5 } from "../lib/content-hash.js";
 import { __setTestDb } from "../services/db.js";
 import { bookDirectorySuffix, processBookOrganize, sanitizeName } from "./book-organize.js";
 
 const { embedEpubMetadata, fetchExternalImage } = vi.hoisted(() => ({
-  embedEpubMetadata: vi.fn(async () => {}),
+  embedEpubMetadata: vi.fn(async (_filePath: string) => {}),
   fetchExternalImage: vi.fn(),
 }));
 
@@ -253,6 +254,144 @@ describe("processBookOrganize retry recovery", () => {
     await expect(processBookOrganize(job({ bookId }))).rejects.toThrow(/Source file not found/);
     expect(await storagePathFor(bookId)).toBeNull();
     expect(await readFile(join(destDir, "book.epub"), "utf8")).toBe("SOMEBODY-ELSE");
+  });
+
+  it("recovers a re-organize when embedding rewrote the file past the upload checksum", async () => {
+    const bookId = await seedBook({
+      title: "Renamed",
+      author: "Same Author",
+      status: "organized",
+    });
+    const legacyDir = join(libraryPath, sanitizeName("Same Author"), sanitizeName("Old Name"));
+    await mkdir(legacyDir, { recursive: true });
+    const legacyPath = join(legacyDir, "book.epub");
+    await writeFile(legacyPath, "POST-EMBED-BYTES");
+
+    // The row left behind by a crash between the move and the database update:
+    // `checksum` is the upload's SHA-256 and was never rewritten, while the
+    // on-disk bytes are the embedded file the previous organize wrote.
+    await db.insert(schema.bookFiles).values({
+      bookId,
+      format: "epub",
+      originalName: "book.epub",
+      storagePath: relative(libraryPath, legacyPath),
+      fileSize: Buffer.byteLength("POST-EMBED-BYTES"),
+      checksum: computeChecksumFromBuffer(Buffer.from("ORIGINAL-UPLOAD-BYTES")),
+      contentHash: await computePartialMd5(legacyPath),
+      originalContentHash: "0".repeat(32),
+    });
+
+    // Simulate the move the crashed attempt completed.
+    const destDir = join(
+      libraryPath,
+      sanitizeName("Same Author"),
+      `${sanitizeName("Renamed")} (${bookDirectorySuffix(bookId)})`,
+    );
+    await mkdir(destDir, { recursive: true });
+    await rename(legacyPath, join(destDir, "book.epub"));
+
+    await expect(processBookOrganize(job({ bookId }))).resolves.toBeUndefined();
+
+    const storagePath = await storagePathFor(bookId);
+    expect(storagePath).toBe(relative(libraryPath, join(destDir, "book.epub")));
+    expect(await readFile(join(libraryPath, storagePath!), "utf8")).toBe("POST-EMBED-BYTES");
+  });
+
+  it("removes a leftover .tmp file when the embed worker fails", async () => {
+    const bookId = await seedBook({ title: "TmpLeftover", author: "Same Author" });
+    await seedInboxFile(bookId, "book.epub", "TMP-CONTENT");
+
+    embedEpubMetadata.mockImplementationOnce(async (filePath: string) => {
+      await writeFile(`${filePath}.tmp`, "half-written");
+      throw new Error("worker died");
+    });
+
+    await expect(processBookOrganize(job({ bookId }))).resolves.toBeUndefined();
+
+    const storagePath = await storagePathFor(bookId);
+    expect(storagePath).toBeTruthy();
+    const finalPath = join(libraryPath, storagePath!);
+    expect(await readFile(finalPath, "utf8")).toBe("TMP-CONTENT");
+    await expect(stat(`${finalPath}.tmp`)).rejects.toThrow();
+  });
+});
+
+describe("processBookOrganize legacy directory cleanup", () => {
+  async function seedLegacyBook(options: { title: string; fileName: string; coverUrl?: string }) {
+    const bookId = await seedBook({
+      title: options.title,
+      author: "Same Author",
+      status: "organized",
+      coverUrl: options.coverUrl ?? null,
+    });
+    const legacyDir = join(libraryPath, sanitizeName("Same Author"), sanitizeName(options.title));
+    await mkdir(legacyDir, { recursive: true });
+    const filePath = join(legacyDir, options.fileName);
+    const content = `LEGACY-${options.fileName}`;
+    await writeFile(filePath, content);
+    await db.insert(schema.bookFiles).values({
+      bookId,
+      format: "epub",
+      originalName: options.fileName,
+      storagePath: relative(libraryPath, filePath),
+      fileSize: Buffer.byteLength(content),
+      contentHash: await computePartialMd5(filePath),
+    });
+    return { bookId, legacyDir };
+  }
+
+  it("keeps a shared legacy cover while another book still references it", async () => {
+    const bookA = await seedLegacyBook({
+      title: "Shared",
+      fileName: "a.epub",
+      coverUrl: "https://example.com/a.jpg",
+    });
+    const bookB = await seedLegacyBook({ title: "Shared", fileName: "b.epub" });
+    const sharedCover = join(bookA.legacyDir, "cover.jpg");
+    await writeFile(sharedCover, "SHARED-COVER");
+    const sharedCoverStoragePath = relative(libraryPath, sharedCover);
+    for (const id of [bookA.bookId, bookB.bookId]) {
+      await db
+        .update(schema.books)
+        .set({ coverPath: sharedCoverStoragePath })
+        .where(eq(schema.books.id, id));
+    }
+
+    fetchExternalImage.mockResolvedValue({
+      data: Buffer.from("NEW-COVER"),
+      contentType: "image/jpeg",
+    });
+    await processBookOrganize(job({ bookId: bookA.bookId }));
+
+    expect(await readFile(sharedCover, "utf8")).toBe("SHARED-COVER");
+    expect(await readFile(join(bookA.legacyDir, "b.epub"), "utf8")).toBe("LEGACY-b.epub");
+  });
+
+  it("removes an unreferenced legacy cover and its directory", async () => {
+    const book = await seedLegacyBook({
+      title: "Alone",
+      fileName: "book.epub",
+      coverUrl: "https://example.com/a.jpg",
+    });
+    const legacyCover = join(book.legacyDir, "cover.jpg");
+    await writeFile(legacyCover, "OLD-COVER");
+    await db
+      .update(schema.books)
+      .set({ coverPath: relative(libraryPath, legacyCover) })
+      .where(eq(schema.books.id, book.bookId));
+
+    fetchExternalImage.mockResolvedValue({
+      data: Buffer.from("NEW-COVER"),
+      contentType: "image/jpeg",
+    });
+    await processBookOrganize(job({ bookId: book.bookId }));
+
+    await expect(stat(book.legacyDir)).rejects.toThrow();
+    const [row] = await db
+      .select({ coverPath: schema.books.coverPath })
+      .from(schema.books)
+      .where(eq(schema.books.id, book.bookId));
+    expect(row.coverPath).toContain("Alone (");
   });
 });
 

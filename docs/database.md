@@ -128,7 +128,7 @@ Values: `unread`, `reading`, `finished`, `paused`
 | `timestamp` | bigint | No | 0 |  |
 | `created_at` | timestamptz | No | now() |  |
 
-**Indexes:** `reading_progress_history_document_created_at_idx`, `reading_progress_history_created_at_idx`, `reading_progress_history_book_id_idx`, `reading_progress_history_user_id_idx`
+**Indexes:** `reading_progress_history_document_created_at_idx`, `reading_progress_history_created_at_idx`, `reading_progress_history_book_id_idx`, `reading_progress_history_user_id_idx`, `reading_progress_history_user_stream_created_at_idx`
 
 ### `reading_aggregate`
 

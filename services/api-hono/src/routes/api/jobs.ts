@@ -9,14 +9,16 @@ import {
   getRegisteredQueues,
 } from "../../services/queue-diagnostics.js";
 import type { Queue, Job } from "bullmq";
+import {
+  MAX_JOB_WINDOW,
+  collectBoardJobs,
+  isPageBeyondWindow,
+  isWindowTruncated,
+  planJobWindow,
+  sortJobWindow,
+} from "../../lib/queue/jobs-window.js";
 
-/**
- * How many jobs, per queue, the list route will materialize from BullMQ.
- * `total` comes from queue counters and stays exact; this cap only bounds the
- * merge-sort window, so a deep page cannot ask Redis for unbounded history.
- * Pages beyond it return an empty array with `truncated: true`.
- */
-export const MAX_JOB_WINDOW = 10_000;
+export { MAX_JOB_WINDOW };
 
 // ── Shared Schemas ──────────────────────────────────────────────
 
@@ -118,8 +120,11 @@ const listRoute = createRoute({
   description:
     "Browse recent jobs across all queues with filtering by queue name and status. " +
     "Supports pagination via page/pageSize query params. `total` is the exact " +
-    `per-queue count; only the newest ${MAX_JOB_WINDOW} jobs are materialized for ` +
-    "browsing, so `truncated` is true when older jobs exist beyond the window.",
+    "number of matching jobs. Browsing is bounded: every selected queue/status " +
+    `board is read in BullMQ's native order up to a share of a ${MAX_JOB_WINDOW}-job ` +
+    "window (fewer selected boards means a deeper per-board window), and the merged " +
+    "result is ordered by creation time. `truncated` is true when any board holds " +
+    "more matching jobs than the window reaches; those jobs cannot be paged to.",
   request: {
     query: z.object({
       queue: z
@@ -152,7 +157,8 @@ const listRoute = createRoute({
             pageSize: z.number().int(),
             totalPages: z.number().int(),
             truncated: z.boolean().openapi({
-              description: `True when matching jobs exceed the ${MAX_JOB_WINDOW}-job browsable window; pages past it return no jobs`,
+              description:
+                "True when a selected queue/status board holds more matching jobs than the browsable window fetches; those jobs cannot be paged to",
             }),
           }),
         },
@@ -357,7 +363,10 @@ const drainQueueRoute = createRoute({
   path: "/queues/{name}/drain",
   tags: ["jobs"],
   summary: "Drain a queue",
-  description: "Remove all waiting and delayed jobs from a queue. Active jobs are not affected.",
+  description:
+    "Remove all waiting, prioritized, and delayed jobs from a queue. Active jobs keep " +
+    "running, and delayed jobs owned by a Job Scheduler are kept — draining a scheduler " +
+    "queue does not unschedule its recurring work.",
   request: {
     params: z.object({
       name: z.string().min(1).openapi({ description: "Queue name" }),
@@ -455,46 +464,41 @@ export const jobsRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
       ? [status]
       : ["completed", "active", "waiting", "failed", "delayed"];
 
-    // Exact totals from BullMQ's counters. The job window fetched below is
-    // capped, so deriving `total` from it would under-report (and once did).
-    const queueTotals = await Promise.all(
-      queuesToQuery.map(async (queue) => {
-        const counts = await queue.getJobCounts(...statuses);
-        return statuses.reduce((sum, s) => sum + (counts[s] ?? 0), 0);
-      }),
+    // Exact totals from BullMQ's counters. The per-board window fetched below
+    // is capped, so deriving `total` from it would under-report (and once did).
+    const countsByQueue = await Promise.all(
+      queuesToQuery.map((queue) => queue.getJobCounts(...statuses)),
     );
-    const total = queueTotals.reduce((sum, n) => sum + n, 0);
-
-    // Materialize the requested page per queue: to place the page after the
-    // cross-queue merge-sort, every queue must contribute everything newer
-    // than the page's last row, i.e. the first page*pageSize jobs.
-    const fetchWindow = Math.min(page * pageSize, MAX_JOB_WINDOW);
-
-    // Collect jobs from all matching queues
-    type JobWithStatus = ReturnType<typeof serializeJob> & { status: string };
-    const allJobs: JobWithStatus[] = [];
-
-    await Promise.all(
-      queuesToQuery.map(async (queue) => {
-        const jobs: Job[] = await queue.getJobs(statuses, 0, fetchWindow - 1);
-        for (const job of jobs) {
-          if (!job.id) continue;
-          const state = await job.getState();
-          if (status && state !== status) continue;
-          const serialized = serializeJob(job, queue.name);
-          allJobs.push({ ...serialized, status: state });
-        }
-      }),
+    const total = countsByQueue.reduce(
+      (sum, counts) => sum + statuses.reduce((statusSum, s) => statusSum + (counts[s] ?? 0), 0),
+      0,
     );
-
-    // Sort by timestamp descending (most recent first), then trim to the window.
-    allJobs.sort((a, b) => b.timestamp - a.timestamp);
-    const windowJobs = allJobs.slice(0, fetchWindow);
-
-    // Paginate
     const totalPages = Math.ceil(total / pageSize);
-    const start = (page - 1) * pageSize;
-    const paginatedJobs = windowJobs.slice(start, start + pageSize);
+
+    const plan = planJobWindow(page, pageSize, queuesToQuery.length * statuses.length);
+    const boardCounts = countsByQueue.flatMap((counts) => statuses.map((s) => counts[s] ?? 0));
+    // A board with more matching jobs than the window fetches holds jobs the
+    // browser can never reach, whatever page is requested.
+    const truncated = isWindowTruncated(boardCounts, plan.perBoardLimit);
+
+    // Pages past the window are answerable from the counters alone; fetching
+    // anything first would be pure cost.
+    if (isPageBeyondWindow(plan)) {
+      return c.json({ jobs: [], total, page, pageSize, totalPages, truncated });
+    }
+
+    // Materialize each board in its native order up to the window depth. A
+    // board's jobs are authoritative for its own status, so no per-job
+    // `getState()` round trip (and no state race dropping a fetched job).
+    const allJobs = await collectBoardJobs(
+      queuesToQuery,
+      statuses,
+      plan.depth,
+      (job, queueName, boardStatus) => ({ ...serializeJob(job, queueName), status: boardStatus }),
+    );
+
+    const windowJobs = sortJobWindow(allJobs).slice(0, plan.depth);
+    const paginatedJobs = windowJobs.slice(plan.start, plan.start + pageSize);
 
     return c.json({
       jobs: paginatedJobs,
@@ -502,7 +506,7 @@ export const jobsRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
       page,
       pageSize,
       totalPages,
-      truncated: total > MAX_JOB_WINDOW,
+      truncated,
     });
   })
   .openapi(detailRoute, async (c) => {

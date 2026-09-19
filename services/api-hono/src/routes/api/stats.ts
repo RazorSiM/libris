@@ -339,7 +339,7 @@ export const statsRoutes = router.openapi(statsRoute, async (c) => {
             )
           ) * COALESCE(b.page_count, 0) AS page_delta
         FROM samples s
-        INNER JOIN ${books} b ON b.id = s.book_id
+        LEFT JOIN ${books} b ON b.id = s.book_id
       )
       SELECT day::text, ROUND(SUM(page_delta))::text AS pages
       FROM deltas
@@ -413,7 +413,7 @@ export const statsRoutes = router.openapi(statsRoute, async (c) => {
             )
           ) * COALESCE(b.page_count, 0) AS page_delta
         FROM samples s
-        INNER JOIN ${books} b ON b.id = s.book_id
+        LEFT JOIN ${books} b ON b.id = s.book_id
       ),
       daily AS (
         SELECT day, SUM(page_delta) AS pages
@@ -450,7 +450,10 @@ export const statsRoutes = router.openapi(statsRoute, async (c) => {
       -- first point's window is full, but an install with no reads at all
       -- still reports an empty series rather than 90 zeroes.
       bounds AS (
-        SELECT MIN(day) AS first_day FROM daily
+        SELECT MIN(day) AS first_day
+        FROM daily
+        WHERE pages > 0
+          AND day >= CURRENT_DATE - INTERVAL '96 days'
       )
       SELECT w.day::text, ROUND(w.avg_pages::numeric, 1)::text AS avg_pages
       FROM windowed w, bounds

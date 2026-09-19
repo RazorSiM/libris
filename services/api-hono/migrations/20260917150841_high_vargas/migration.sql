@@ -1,0 +1,1 @@
+CREATE INDEX "reading_progress_history_user_stream_created_at_idx" ON "reading_progress_history" ("user_id","document","device","created_at" DESC NULLS LAST);

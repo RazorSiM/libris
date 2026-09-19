@@ -426,26 +426,36 @@ describe("GET /api/jobs (pagination contract)", () => {
       timestamp,
       processedOn: null,
       finishedOn: null,
-      getState: async () => "completed",
     };
   }
 
-  function registerFakeQueue(name: string, count: number, timestampAt: (index: number) => number) {
+  interface Board {
+    count: number;
+    timestampAt: (index: number) => number;
+  }
+
+  /** A fake queue whose `getJobs` models one board per status, like BullMQ's. */
+  function registerBoardQueue(name: string, boards: Record<string, Board>) {
     registerQueue({
       name,
       getJobCounts: async (...statuses: string[]) =>
-        Object.fromEntries(statuses.map((s) => [s, s === "completed" ? count : 0])),
-      getJobs: async (_statuses: string[], start: number, end: number) => {
-        const last = Math.min(end, count - 1);
+        Object.fromEntries(statuses.map((s) => [s, boards[s]?.count ?? 0])),
+      getJobs: async (statuses: string[], start: number, end: number) => {
+        const status = statuses[0]!;
+        const board = boards[status];
+        if (!board) return [];
+        const last = Math.min(end, board.count - 1);
         return Array.from({ length: Math.max(0, last - start + 1) }, (_, k) =>
-          fakeJob(`${name}-${start + k}`, timestampAt(start + k)),
+          fakeJob(`${name}-${status}-${start + k}`, board.timestampAt(start + k)),
         );
       },
     } as never);
   }
 
   it("reports the exact total and serves pages past the old 200-job window", async () => {
-    registerFakeQueue("paginate-a", 201, (i) => 1_000_000 - i);
+    registerBoardQueue("paginate-a", {
+      completed: { count: 201, timestampAt: (i) => 1_000_000 - i },
+    });
 
     const page11 = await $fetchRaw(
       "/api/jobs?queue=paginate-a&status=completed&page=11&pageSize=20",
@@ -459,18 +469,22 @@ describe("GET /api/jobs (pagination contract)", () => {
       totalPages: 11,
       truncated: false,
     });
-    expect(page11.data.jobs.map((job: { id: string }) => job.id)).toEqual(["paginate-a-200"]);
+    expect(page11.data.jobs.map((job: { id: string }) => job.id)).toEqual([
+      "paginate-a-completed-200",
+    ]);
 
     const page1 = await $fetchRaw(
       "/api/jobs?queue=paginate-a&status=completed&page=1&pageSize=20",
       { headers: session() },
     );
     expect(page1.data.jobs).toHaveLength(20);
-    expect(page1.data.jobs[0].id).toBe("paginate-a-0");
+    expect(page1.data.jobs[0].id).toBe("paginate-a-completed-0");
   });
 
   it("merge-sorts queues by timestamp and flags totals beyond the window", async () => {
-    registerFakeQueue("paginate-b", 2, (i) => 2_000_000 - i);
+    registerBoardQueue("paginate-b", {
+      completed: { count: 2, timestampAt: (i) => 2_000_000 - i },
+    });
 
     const merged = await $fetchRaw("/api/jobs?status=completed&page=1&pageSize=20", {
       headers: session(),
@@ -478,14 +492,16 @@ describe("GET /api/jobs (pagination contract)", () => {
     expect(merged.status).toBe(200);
     expect(merged.data.total).toBe(203);
     expect(merged.data.jobs.slice(0, 3).map((job: { id: string }) => job.id)).toEqual([
-      "paginate-b-0",
-      "paginate-b-1",
-      "paginate-a-0",
+      "paginate-b-completed-0",
+      "paginate-b-completed-1",
+      "paginate-a-completed-0",
     ]);
 
-    // 10,005 matching jobs: `total` stays exact, but only the newest 10,000 are
-    // materialized, so the 501st page has no jobs and the response says so.
-    registerFakeQueue("paginate-c", 10_005, (i) => 3_000_000 - i);
+    // 10,005 matching jobs: `total` stays exact, but the browsable window ends
+    // at 10,000, so the 501st page has no jobs and the response says so.
+    registerBoardQueue("paginate-c", {
+      completed: { count: 10_005, timestampAt: (i) => 3_000_000 - i },
+    });
     const beyondWindow = await $fetchRaw(
       "/api/jobs?queue=paginate-c&status=completed&page=501&pageSize=20",
       { headers: session() },
@@ -497,6 +513,72 @@ describe("GET /api/jobs (pagination contract)", () => {
       truncated: true,
     });
     expect(beyondWindow.data.jobs).toEqual([]);
+  });
+
+  it("does not fetch jobs at all for a page beyond the window", async () => {
+    // The counters answer this page; touching every board first was the old
+    // request-amplification bug.
+    const getJobs = vi.fn(async () => {
+      throw new Error("getJobs must not be called for a page beyond the window");
+    });
+    registerQueue({
+      name: "paginate-d",
+      getJobCounts: async () => ({ completed: 20_000 }),
+      getJobs,
+    } as never);
+
+    const beyond = await $fetchRaw(
+      "/api/jobs?queue=paginate-d&status=completed&page=1001&pageSize=20",
+      { headers: session() },
+    );
+    expect(beyond.status).toBe(200);
+    expect(beyond.data).toMatchObject({ total: 20_000, totalPages: 1_000, truncated: true });
+    expect(beyond.data.jobs).toEqual([]);
+    expect(getJobs).not.toHaveBeenCalled();
+  });
+
+  it("reads every selected status board without duplicating jobs", async () => {
+    const perStatus: Record<string, number> = { completed: 2, waiting: 1 };
+    registerQueue({
+      name: "paginate-e",
+      getJobCounts: async () => perStatus,
+      getJobs: async (statuses: string[]) => {
+        const count = perStatus[statuses[0]!] ?? 0;
+        return Array.from({ length: count }, (_, i) =>
+          fakeJob(`${statuses[0]}-${i}`, 4_000_000 - i),
+        );
+      },
+    } as never);
+
+    const merged = await $fetchRaw("/api/jobs?queue=paginate-e&page=1&pageSize=20", {
+      headers: session(),
+    });
+    expect(merged.status).toBe(200);
+    expect(merged.data.total).toBe(3);
+    const ids = merged.data.jobs.map((job: { id: string }) => job.id);
+    expect(ids).toHaveLength(3);
+    expect(new Set(ids).size).toBe(3);
+    expect(ids).toContain("waiting-0");
+    expect(ids).toContain("completed-0");
+    expect(ids).toContain("completed-1");
+  });
+
+  it("flags a board beyond its share even when the global total is small", async () => {
+    // Selecting all five statuses on one queue splits the window five ways
+    // (2,000 jobs per board), so 2,001 completed jobs are unreachable even
+    // though the total is well under the global 10,000.
+    registerQueue({
+      name: "paginate-f",
+      getJobCounts: async () => ({ completed: 2_001 }),
+      getJobs: async () => [],
+    } as never);
+
+    const response = await $fetchRaw("/api/jobs?queue=paginate-f", {
+      headers: session(),
+    });
+    expect(response.status).toBe(200);
+    expect(response.data.total).toBe(2_001);
+    expect(response.data.truncated).toBe(true);
   });
 });
 
@@ -1771,6 +1853,108 @@ describe("GET /api/stats", () => {
     expect(at(9)?.avgPages).toBe(10);
     // An idle day is still a row, averaging the 10 pages six calendar days back.
     expect(at(10)?.avgPages).toBe(1.4);
+  });
+
+  it("keeps the baseline when the pre-year sample's book was deleted", async () => {
+    // Deleting a book sets its history rows' book_id to NULL. That row is
+    // still the only baseline for the (document, device) stream, so the join
+    // onto books must not drop it: an INNER JOIN counted the first in-year
+    // sample from zero (51 pages instead of 1).
+    await $fetchRaw("/__test/seed-books", {
+      method: "POST",
+      headers: auth(),
+      body: {
+        books: [
+          { title: "Deleted Baseline", author: "Boundary Author", status: "organized" },
+          { title: "Reimported", author: "Boundary Author", status: "organized" },
+        ],
+      },
+    });
+    const [deleted] = await testDb
+      .select({ id: books.id })
+      .from(books)
+      .where(eq(books.title, "Deleted Baseline"));
+    const [reimported] = await testDb
+      .select({ id: books.id })
+      .from(books)
+      .where(eq(books.title, "Reimported"));
+    expect(deleted).toBeDefined();
+    expect(reimported).toBeDefined();
+    await testDb.update(books).set({ pageCount: 100 }).where(eq(books.id, reimported!.id));
+
+    const atNoon = (day: string) => new Date(`${day}T12:00:00.000Z`);
+    await testDb.insert(readingProgressHistory).values({
+      userId,
+      bookId: deleted!.id,
+      document: "deleted-baseline.epub",
+      device: "kobo",
+      progress: "/body/p[50]",
+      percentage: "0.50",
+      timestamp: 0n,
+      createdAt: atNoon("2024-12-31"),
+    });
+    await testDb.delete(books).where(eq(books.id, deleted!.id));
+    await testDb.insert(readingProgressHistory).values({
+      userId,
+      bookId: reimported!.id,
+      document: "deleted-baseline.epub",
+      device: "kobo",
+      progress: "/body/p[51]",
+      percentage: "0.51",
+      timestamp: 0n,
+      createdAt: atNoon("2025-01-01"),
+    });
+
+    const { data, status } = await $fetchRaw("/api/stats?year=2025", { headers: auth() });
+    expect(status).toBe(200);
+    expect(data.pagesHeatmap.days).toEqual([{ day: "2025-01-01", pages: 1 }]);
+  });
+
+  it("reports an empty velocity series when every carried delta is zero", async () => {
+    // Two samples at the same percentage: the in-window row contributes a
+    // zero-page day. That must not seed a 90-row all-zero series.
+    await $fetchRaw("/__test/seed-books", {
+      method: "POST",
+      headers: auth(),
+      body: {
+        books: [{ title: "Zero Delta", author: "Boundary Author", status: "organized" }],
+      },
+    });
+    const [book] = await testDb
+      .select({ id: books.id })
+      .from(books)
+      .where(eq(books.title, "Zero Delta"));
+    expect(book).toBeDefined();
+    await testDb.update(books).set({ pageCount: 100 }).where(eq(books.id, book!.id));
+
+    const dayString = (daysAgo: number) =>
+      new Date(Date.now() - daysAgo * 86_400_000).toISOString().slice(0, 10);
+    await testDb.insert(readingProgressHistory).values([
+      {
+        userId,
+        bookId: book!.id,
+        document: "zero-delta.epub",
+        device: "kobo",
+        progress: "/body/p[50]",
+        percentage: "0.50",
+        timestamp: 0n,
+        createdAt: new Date(`${dayString(100)}T12:00:00.000Z`),
+      },
+      {
+        userId,
+        bookId: book!.id,
+        document: "zero-delta.epub",
+        device: "kobo",
+        progress: "/body/p[50]",
+        percentage: "0.50",
+        timestamp: 0n,
+        createdAt: new Date(`${dayString(10)}T12:00:00.000Z`),
+      },
+    ]);
+
+    const { data, status } = await $fetchRaw("/api/stats", { headers: auth() });
+    expect(status).toBe(200);
+    expect(data.readingVelocity).toEqual([]);
   });
 });
 

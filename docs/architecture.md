@@ -174,18 +174,24 @@ are a property of the install rather than of a person, it is sent to admins
 only. A non-admin's dashboard derives its `processingCount` from the book ids
 carrying in-flight jobs, intersected with the ones they own.
 
-| Method | Path                             | Purpose                                              |
-| ------ | -------------------------------- | ---------------------------------------------------- |
-| GET    | `/api/jobs`                      | List jobs across all queues (paginated, filterable)  |
-| GET    | `/api/jobs/status`               | Job counts per queue (waiting/active/completed/etc.) |
-| GET    | `/api/jobs/failed`               | List failed jobs across all queues                   |
-| GET    | `/api/jobs/{id}`                 | Full job detail (payload, timestamps, progress)      |
-| GET    | `/api/jobs/{id}/logs`            | Job log lines stored via `job.log()`                 |
-| POST   | `/api/jobs/{id}/retry`           | Retry a failed job                                   |
-| POST   | `/api/jobs/queues/{name}/pause`  | Pause a queue                                        |
-| POST   | `/api/jobs/queues/{name}/resume` | Resume a paused queue                                |
-| POST   | `/api/jobs/queues/{name}/clean`  | Remove all failed jobs from a queue                  |
-| POST   | `/api/jobs/queues/{name}/drain`  | Remove all waiting/delayed jobs from a queue         |
+The jobs browser is bounded: `GET /api/jobs` reads each selected queue/status
+board in BullMQ's native order up to its share of a 10,000-job window (fewer
+selected boards means a deeper per-board window), merges the fetched window by
+creation time, and reports `truncated: true` when any board holds more matching
+jobs than the window reaches. `total` and `totalPages` stay exact.
+
+| Method | Path                             | Purpose                                                                         |
+| ------ | -------------------------------- | ------------------------------------------------------------------------------- |
+| GET    | `/api/jobs`                      | List jobs across all queues (paginated, filterable)                             |
+| GET    | `/api/jobs/status`               | Job counts per queue (waiting/active/completed/etc.)                            |
+| GET    | `/api/jobs/failed`               | List failed jobs across all queues                                              |
+| GET    | `/api/jobs/{id}`                 | Full job detail (payload, timestamps, progress)                                 |
+| GET    | `/api/jobs/{id}/logs`            | Job log lines stored via `job.log()`                                            |
+| POST   | `/api/jobs/{id}/retry`           | Retry a failed job                                                              |
+| POST   | `/api/jobs/queues/{name}/pause`  | Pause a queue                                                                   |
+| POST   | `/api/jobs/queues/{name}/resume` | Resume a paused queue                                                           |
+| POST   | `/api/jobs/queues/{name}/clean`  | Remove all failed jobs from a queue                                             |
+| POST   | `/api/jobs/queues/{name}/drain`  | Remove waiting/prioritized/delayed jobs (scheduler-owned delayed jobs are kept) |
 
 ### Reading Status
 

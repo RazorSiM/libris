@@ -228,6 +228,15 @@ export const readingProgressHistory = pgTable(
     index("reading_progress_history_created_at_idx").on(t.createdAt),
     index("reading_progress_history_book_id_idx").on(t.bookId),
     index("reading_progress_history_user_id_idx").on(t.userId),
+    // The stats baselines (`DISTINCT ON (document, device) ... ORDER BY
+    // created_at DESC` per user) otherwise sort the user's whole history on
+    // every cache miss, and that history grows for the life of the install.
+    index("reading_progress_history_user_stream_created_at_idx").on(
+      t.userId,
+      t.document,
+      t.device,
+      t.createdAt.desc(),
+    ),
   ],
 );
 

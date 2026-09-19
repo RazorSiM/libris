@@ -21,7 +21,7 @@ import { extractEpubCoverImage } from "../lib/metadata/index.js";
 import { BookOrganizePayloadSchema } from "../types/index.js";
 import type { BookOrganizePayload } from "../types/index.js";
 import type { Job } from "bullmq";
-import { eq } from "drizzle-orm";
+import { and, eq, ne } from "drizzle-orm";
 import { getDb } from "../services/db.js";
 import { getCacheStorage } from "../services/cache-storage.js";
 import { invalidateRouteCache } from "../services/cache.js";
@@ -117,14 +117,21 @@ const NO_HARDLINK_CODES = new Set(["EXDEV", "EPERM", "ENOSYS", "ENOTSUP", "EOPNO
 async function moveFileNoClobber(src: string, dest: string): Promise<void> {
   try {
     await link(src, dest);
-    await unlink(src);
-    return;
   } catch (err: unknown) {
     const code = (err as NodeJS.ErrnoException).code;
     if (!code || !NO_HARDLINK_CODES.has(code)) throw err;
+    await copyFile(src, dest, fsConstants.COPYFILE_EXCL);
   }
-  await copyFile(src, dest, fsConstants.COPYFILE_EXCL);
-  await unlink(src);
+  try {
+    await unlink(src);
+  } catch (err) {
+    // The bytes are at the destination but the source could not be removed.
+    // Drop the destination again so a retry does not allocate a suffixed
+    // duplicate beside the original; if the rollback also fails, the move is
+    // still refused rather than silently half-done.
+    await unlink(dest).catch(() => {});
+    throw err;
+  }
 }
 
 function splitFileName(fileName: string): { stem: string; ext: string } {
@@ -173,20 +180,21 @@ interface MovableFile {
 /**
  * Whether `filePath` is the file the database already knows about.
  *
- * The full SHA-256 checksum covers the uploaded bytes; the partial-MD5 content
- * hash covers files that were moved before the checksum column existed. With
- * neither recorded there is nothing to verify against, so the answer is "no" —
- * an unverifiable file must never be adopted.
+ * Any recorded identity counts: the full SHA-256 checksum covers the uploaded
+ * bytes, while the partial-MD5 content hashes cover files whose bytes changed
+ * after upload — embedding approved metadata rewrites the EPUB, so a
+ * re-organize retry sees a file that no longer matches the upload checksum but
+ * does match `content_hash`. With none recorded there is nothing to verify
+ * against, so the answer is "no" — an unverifiable file must never be adopted.
  */
 async function verifyFileChecksum(filePath: string, file: MovableFile): Promise<boolean> {
-  if (file.checksum) {
-    return (await computeChecksumFromFile(filePath)) === file.checksum;
+  if (file.checksum && (await computeChecksumFromFile(filePath)) === file.checksum) {
+    return true;
   }
-  if (file.contentHash) {
-    return (await computePartialMd5(filePath)) === file.contentHash;
-  }
-  if (file.originalContentHash) {
-    return (await computePartialMd5(filePath)) === file.originalContentHash;
+  if (file.contentHash || file.originalContentHash) {
+    const contentHash = await computePartialMd5(filePath);
+    if (file.contentHash && contentHash === file.contentHash) return true;
+    if (file.originalContentHash && contentHash === file.originalContentHash) return true;
   }
   return false;
 }
@@ -519,6 +527,9 @@ export async function processBookOrganize(job: Job<BookOrganizePayload>): Promis
       await linkOrphanProgressForBook(db, bookId, [contentHash, file.contentHash]);
       logger.info(`Embedded metadata into ${moved.finalPath}`);
     } catch (err) {
+      // A worker killed mid-rewrite can leave `<file>.tmp` beside the book;
+      // the rewrite is atomic, so any leftover is incomplete by definition.
+      await unlink(moved.finalPath + ".tmp").catch(() => {});
       logger
         .withMetadata({ error: String(err) })
         .warn("Failed to embed metadata into epub, continuing");
@@ -550,8 +561,32 @@ export async function processBookOrganize(job: Job<BookOrganizePayload>): Promis
   // authors and the library-growth series.
   await invalidateRouteCache(getCacheStorage(), "/opds", "/api/stats");
 
-  // 7. Clean up empty old directories after re-organize
+  // 7. Clean up the old directory after a re-organize. The payload files have
+  // moved out; a cover this book no longer uses is the remaining common
+  // occupant — the replacement was downloaded or moved into the new directory
+  // — and it would otherwise pin the whole directory in place forever. It is
+  // removed only when no other book still references it: colliding books used
+  // to share `<Author>/<Title>/cover.jpg`, and one book re-organizing must not
+  // take another's cover with it. A book that ended up with no cover keeps the
+  // old file rather than destroying the only copy.
   for (const oldDir of oldDirsToClean) {
+    if (coverPath !== null) {
+      const oldCoverDest = join(oldDir, "cover.jpg");
+      const oldCoverStoragePath = relative(libraryPath, oldCoverDest);
+      if (coverPath !== oldCoverStoragePath) {
+        const [reference] = await db
+          .select({ id: books.id })
+          .from(books)
+          .where(and(eq(books.coverPath, oldCoverStoragePath), ne(books.id, bookId)))
+          .limit(1);
+        if (!reference) {
+          const oldCoverStat = await lstat(oldCoverDest).catch(() => null);
+          if (oldCoverStat?.isFile() && !oldCoverStat.isSymbolicLink()) {
+            await unlink(oldCoverDest).catch(() => {});
+          }
+        }
+      }
+    }
     try {
       // rmdir only succeeds on empty directories — safe to call unconditionally
       await rmdir(oldDir);
