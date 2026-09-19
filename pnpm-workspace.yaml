@@ -143,8 +143,13 @@ overrides:
   "esbuild@>=0.27.3 <0.28.1": "^0.28.1"
   # @nuxt/ui pulls its Tiptap editor stack in as optional peers with a `^3`
   # range, so a locked resolution can sit below the <3.30.5 advisories
-  # indefinitely. Floor the entry point; the rest of the family follows via
-  # its own `^3` peers.
+  # indefinitely. Floor the entry point: `@tiptap/core` is the package the
+  # advisories name, and pinning it also pulls `@tiptap/pm` to match core's
+  # exact peer. The remaining `@tiptap/extension-*` packages @nuxt/ui
+  # auto-installs as optional peers stay at 3.24.0 — the pinned pnpm (see
+  # packageManager) records family overrides for them but does not apply them
+  # to auto-installed peers. That mix is unsupported upstream, but the app has
+  # no Tiptap call sites and none of those packages is in an advisory.
   "@tiptap/core": "^3.30.5"
 peerDependencyRules:
   # Packages declaring a `vite` peer (@vitejs/plugin-vue, vitepress, …) see

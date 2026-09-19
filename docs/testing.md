@@ -255,6 +255,7 @@ production driver's own behaviour, cannot run there:
 | `tests/admin-subtree-http.postgres.test.ts`       | PostgreSQL | `lastAdminMiddleware` holds its transaction open across `next()`, and Better Auth's write inside `next()` needs a second connection. PGlite has one, behind an exclusive mutex, so the request deadlocks.       |
 | `tests/reading-status-isolation.postgres.test.ts` | PostgreSQL | `/api/reading-status/*` reads its rows out of a raw `db.execute()`. postgres-js's array-like `RowList` is the shape `rowsOf()` has to get right for production; PGlite only ever exercises the `{ rows }` half. |
 | `tests/redis-increment.test.ts`                   | Redis      | `createMemoryKVStore.increment` is a synchronous `Map` write that cannot lose an update, so it passes against a broken production path.                                                                         |
+| `tests/jobs-window.redis.test.ts`                 | Redis      | The jobs browser's window contract is a property of real BullMQ boards (native per-status ordering, `drain(true)` leaving an active job); an in-memory fake cannot express either.                              |
 
 `tests/backing-services.ts` resolves the connections and creates a uniquely
 named throwaway database per suite (dropped afterwards), so several checkouts
@@ -297,6 +298,7 @@ Paths relative to `services/api-hono/`. Test DB uses in-memory PGlite with mocke
 | `src/lib/metadata/extractors/epub.test.ts`          | EPUB metadata extraction (OPF parsing, cover detection)                                                |
 | `src/lib/metadata/sanitize.test.ts`                 | HTML stripping and metadata field sanitization                                                         |
 | `src/lib/progress-aggregate.test.ts`                | Per-device reading-progress aggregation                                                                |
+| `src/lib/queue/jobs-window.test.ts`                 | Jobs-browser window planning, merge ordering, and per-board truncation                                 |
 | `src/lib/reading-aggregate.test.ts`                 | Per-(user, book) reading aggregate derivation                                                          |
 | `src/lib/reading-status.test.ts`                    | Reading status derivation from KoSync progress                                                         |
 | `src/lib/socket-guard.test.ts`                      | WebSocket connection auth guard                                                                        |
@@ -328,6 +330,7 @@ Paths relative to `services/api-hono/`. Test DB uses in-memory PGlite with mocke
 | `tests/reading-status.test.ts`                      | Per-user `/api/reading-status/counts` and `/{status}` over HTTP                                        |
 | `tests/reading-status-isolation.postgres.test.ts`   | The same two endpoints on the postgres-js driver's result shape (needs PostgreSQL)                     |
 | `tests/redis-increment.test.ts`                     | Atomicity of both rate-limit increments (needs Redis)                                                  |
+| `tests/jobs-window.redis.test.ts`                   | Jobs-browser windowing and `drain(true)` against real BullMQ boards (needs Redis)                      |
 
 ### Web Unit Test Files
 
