@@ -218,7 +218,8 @@ function refreshJobs() {
         class="text-xs text-muted pt-2"
         data-testid="jobs-truncated-notice"
       >
-        Only the newest jobs are browsable; older pages beyond the window are not shown.
+        Some matching jobs are outside the browsable window. Narrow the queue or status filters to
+        bring them into view.
       </p>
     </div>
 

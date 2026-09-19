@@ -199,7 +199,7 @@ async function handleSetPassword() {
           <div class="flex items-center gap-2">
             <span class="text-sm font-medium text-highlighted">{{ user.name }}</span>
             <UBadge
-              v-if="user.role === 'admin'"
+              v-if="roleHasAdmin(user.role)"
               variant="subtle"
               color="warning"
               size="xs"
@@ -213,7 +213,7 @@ async function handleSetPassword() {
         </div>
 
         <UButton
-          :label="user.role === 'admin' ? 'Make user' : 'Make admin'"
+          :label="roleHasAdmin(user.role) ? 'Make user' : 'Make admin'"
           variant="ghost"
           size="sm"
           :disabled="isLastAdmin(user)"
