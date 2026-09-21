@@ -2,7 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { hash } from "bcryptjs";
 import * as Iron from "iron-webcrypto";
 import { HTTPException } from "hono/http-exception";
-import { eq } from "drizzle-orm";
+import { eq, sql, type AnyColumn, type SQL } from "drizzle-orm";
 import type { Context } from "hono";
 import { books } from "#db";
 import type { Db } from "#db";
@@ -40,6 +40,32 @@ export async function generateApiKey(): Promise<{
 // ── Authorization helpers ──────────────────────────────────────────────
 
 /**
+ * Whether a Better Auth role value carries admin.
+ *
+ * The admin plugin stores multiple roles as a comma-joined string and accepts
+ * arrays on the wire, so membership is parsed rather than compared. Every
+ * authorization decision goes through this helper: an exact `=== "admin"`
+ * check denies an `admin,user` session every admin route, and the last-admin
+ * guard counted such a user as zero active admins — letting the sole admin
+ * demote themselves into a lockout.
+ */
+export function roleHasAdmin(role: string | string[] | null | undefined): boolean {
+  const values = Array.isArray(role) ? role : [role];
+  return values.some(
+    (value) =>
+      typeof value === "string" && value.split(",").some((part) => part.trim() === "admin"),
+  );
+}
+
+/** SQL twin of `roleHasAdmin` for the `users.role` column. */
+export function roleHasAdminSql(column: AnyColumn): SQL {
+  return sql`exists (
+    select 1 from unnest(string_to_array(${column}, ',')) as role_value
+    where trim(role_value) = 'admin'
+  )`;
+}
+
+/**
  * Whether the current user is an admin.
  *
  * Derived from the role the middleware read off the Better Auth session, never
@@ -47,7 +73,7 @@ export async function generateApiKey(): Promise<{
  * role field is the only place that fact lives.
  */
 export function isAdmin(c: Context<{ Variables: AppVariables }>): boolean {
-  return c.get("role") === "admin";
+  return roleHasAdmin(c.get("role"));
 }
 
 /** Throw 403 if the current user is not an admin. */

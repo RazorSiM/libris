@@ -12,7 +12,10 @@ const { upgradeWebSocket } = createNodeWebSocket({ app: tempApp });
 const router = createRouter(upgradeWebSocket);
 
 const port = Number(process.env.PORT ?? 3000);
-const server = serve({ fetch: router.fetch, port }, (info) => {
+// Local tooling only (bruno-import.sh): bind loopback so the unauthenticated
+// router's live endpoints (health, kosync/users/create) are not exposed on the
+// machine's network interfaces.
+const server = serve({ fetch: router.fetch, port, hostname: "127.0.0.1" }, (info) => {
   console.log(`OpenAPI server listening on http://localhost:${info.port}`);
 });
 

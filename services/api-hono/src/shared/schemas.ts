@@ -24,7 +24,7 @@ const wrap = <T extends z.ZodRawShape>(schema: z.ZodObject<T>) => z.object(schem
 
 // ── Base schemas (re-wrapped for OpenAPI compat) ─────────────────────
 
-const BookBase = wrap(BookSelectSchema).omit({ searchVector: true });
+const BookBase = wrap(BookSelectSchema).omit({ searchVector: true, possibleDuplicateOf: true });
 const BookFileBase = wrap(BookFileSelectSchema);
 const CandidateBase = wrap(BookMetadataCandidateSelectSchema);
 

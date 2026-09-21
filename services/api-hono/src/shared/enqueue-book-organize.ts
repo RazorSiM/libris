@@ -3,7 +3,7 @@ import type { JobsOptions } from "bullmq";
 import type { BookOrganizePayload } from "../types/index.js";
 
 const MAX_USER_ORGANIZE_JOBS = 10;
-const IN_FLIGHT_STATES = ["active", "waiting", "delayed", "prioritized", "waiting-children"];
+export const IN_FLIGHT_STATES = ["active", "waiting", "delayed", "prioritized", "waiting-children"];
 
 interface QueueJob {
   data?: BookOrganizePayload;

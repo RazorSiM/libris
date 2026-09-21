@@ -54,6 +54,10 @@ const TEST_ENV: Env = {
   LIBRIS_RATELIMIT_AUTH_WINDOW_SECONDS: 60,
   LIBRIS_RATELIMIT_KEY_CREATION_LIMIT: 30,
   LIBRIS_RATELIMIT_KEY_CREATION_WINDOW_SECONDS: 3600,
+  LIBRIS_MAX_UPLOAD_BYTES: 1024 * 1024 * 1024,
+  LIBRIS_MAX_UPLOAD_FILES: 20,
+  LIBRIS_MAX_EMBED_OPF_BYTES: 1024 * 1024,
+  LIBRIS_EMBED_TIMEOUT_MS: 30_000,
   LIBRIS_HTTP_HEADERS_TIMEOUT_MS: 10_000,
   LIBRIS_HTTP_REQUEST_TIMEOUT_MS: 30_000,
   LIBRIS_HTTP_IDLE_TIMEOUT_MS: 30_000,
@@ -161,5 +165,28 @@ describe("GET /api/search/suggest", () => {
     expect(titles).toEqual(
       expect.arrayContaining(["Quorbal Alice Draft", "Quorbal Shared Volume"]),
     );
+  });
+
+  it("answers punctuation-only queries instead of a tsquery syntax error", async () => {
+    const { userId, rawKey } = await seedUserKey("Suggest Punctuation");
+    const { app } = createTestApp();
+
+    // Each of these used to build a tsquery Postgres rejects (e.g. `':*`),
+    // turning a stray apostrophe into a 500.
+    for (const q of ["'", "''", '"', "\\", "foo&'", "bar'"]) {
+      const response = await app.request(`/api/search/suggest?q=${encodeURIComponent(q)}`, {
+        headers: { Authorization: `Bearer ${rawKey}` },
+      });
+      expect(response.status, JSON.stringify(q)).toBe(200);
+    }
+
+    // A normal query still matches through the same path.
+    await db
+      .insert(schema.books)
+      .values({ status: "organized", title: "Punctuation Control", createdBy: userId });
+    const found = await app.request("/api/search/suggest?q=Punctuation", {
+      headers: { Authorization: `Bearer ${rawKey}` },
+    });
+    expect((await found.json()).data).toHaveLength(1);
   });
 });

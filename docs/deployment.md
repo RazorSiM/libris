@@ -84,6 +84,10 @@ books.example.com/_docs/*  → Hono API (OpenAPI docs)
 | `LIBRIS_HTTP_HEADERS_TIMEOUT_MS` | Time allowed to receive complete request headers. Default: `10000`.                                                                                                                                 |
 | `LIBRIS_HTTP_REQUEST_TIMEOUT_MS` | Time allowed to receive a complete request body. Default: `30000`.                                                                                                                                  |
 | `LIBRIS_HTTP_IDLE_TIMEOUT_MS`    | Maximum inactive time on an HTTP connection. Default: `30000`.                                                                                                                                      |
+| `LIBRIS_MAX_UPLOAD_BYTES`        | Aggregate limit for one inbox upload, across all files and fields. Default: `1073741824` (1 GiB).                                                                                                   |
+| `LIBRIS_MAX_UPLOAD_FILES`        | Maximum file parts in one inbox upload. Default: `20`.                                                                                                                                              |
+| `LIBRIS_MAX_EMBED_OPF_BYTES`     | Largest OPF rewritten when embedding metadata during organize. Default: `1048576` (1 MiB).                                                                                                          |
+| `LIBRIS_EMBED_TIMEOUT_MS`        | Timeout for the metadata-embedding worker thread. Default: `30000`.                                                                                                                                 |
 
 ### Rate Limiting
 
@@ -339,6 +343,8 @@ LIBRIS_TRUSTED_PROXIES=172.18.0.5/32
 
 Do not use an entire LAN or a network that includes clients. Libris first verifies the direct TCP peer against this list, then walks `X-Forwarded-For` from right to left past trusted proxy hops. A client-supplied leftmost value therefore cannot select its own rate-limit bucket. Keep the API origin unreachable except through the proxy as an additional deployment boundary.
 
+The same switch controls the scheme half of the origin check for cookie-authenticated mutations and WebSocket upgrades. Libris compares the browser's `Origin` against the exact scheme, host, and port it sees, and derives the scheme from `X-Forwarded-Proto` only when `TRUST_PROXY_HEADERS=1`. A TLS-terminating proxy that does not forward the scheme will make the browser's `https://…` origin look foreign, and those requests are rejected with 403.
+
 Configure the proxy to replace or append the client IP headers:
 
 **nginx:**
@@ -346,13 +352,14 @@ Configure the proxy to replace or append the client IP headers:
 ```nginx
 proxy_set_header X-Real-IP $remote_addr;
 proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+proxy_set_header X-Forwarded-Proto $scheme;
 ```
 
 Without this, repeated auth failures from the same client may not be correctly rate-limited.
 
 ### WebSocket Upgrade
 
-The SPA receives real-time updates over a single WebSocket at `/api/events`. The reverse proxy must allow the WebSocket upgrade on `/api/*` by forwarding the `Connection` and `Upgrade` headers. Without it, the connection falls back or fails and live UI updates stop working.
+The SPA receives real-time updates over a single WebSocket at `/api/events`. The reverse proxy must allow the WebSocket upgrade on `/api/*` by forwarding the `Connection` and `Upgrade` headers. Without it, the connection falls back or fails and live UI updates stop working. Inbound client frames are capped at 64 KiB by the server itself — a larger frame closes the socket with code 1009 — so no proxy-level frame limit is required.
 
 **nginx:**
 

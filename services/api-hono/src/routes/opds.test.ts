@@ -57,6 +57,10 @@ const TEST_ENV: Env = {
   LIBRIS_RATELIMIT_AUTH_WINDOW_SECONDS: 60,
   LIBRIS_RATELIMIT_KEY_CREATION_LIMIT: 30,
   LIBRIS_RATELIMIT_KEY_CREATION_WINDOW_SECONDS: 3600,
+  LIBRIS_MAX_UPLOAD_BYTES: 1024 * 1024 * 1024,
+  LIBRIS_MAX_UPLOAD_FILES: 20,
+  LIBRIS_MAX_EMBED_OPF_BYTES: 1024 * 1024,
+  LIBRIS_EMBED_TIMEOUT_MS: 30_000,
   LIBRIS_HTTP_HEADERS_TIMEOUT_MS: 10_000,
   LIBRIS_HTTP_REQUEST_TIMEOUT_MS: 30_000,
   LIBRIS_HTTP_IDLE_TIMEOUT_MS: 30_000,
@@ -234,6 +238,17 @@ describe("OPDS Feed (integration)", () => {
     expect(xml).toContain("OpenSearchDescription");
     expect(xml).toContain("<ShortName>Libris</ShortName>");
     expect(xml).toContain("{searchTerms}");
+  });
+
+  it("/opds/search answers punctuation-only queries instead of a tsquery error", async () => {
+    // An OPDS reader whose user typed an apostrophe used to get a 500 here.
+    for (const q of ["'", "''", '"', "\\", "foo&'", "bar'"]) {
+      const res = await app.request(`/opds/search?q=${encodeURIComponent(q)}`, {
+        headers: { Authorization: opdsAuthHeader() },
+      });
+      expect(res.status, JSON.stringify(q)).toBe(200);
+      expect(res.headers.get("content-type") ?? "").toContain("kind=acquisition");
+    }
   });
 
   it("Basic auth works for e-reader compatibility", async () => {

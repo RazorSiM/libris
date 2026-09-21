@@ -57,8 +57,9 @@ const selections = ref<Record<string, { source: ApprovedFieldSource; value: unkn
 const errorMessage = ref("");
 const pickerRef = ref<{ hasValidationErrors: boolean }>();
 
-// WebSocket: listen for events filtered to this book
-const { on, close: closeEvents } = useServerEvents({ bookId: book.id });
+// WebSocket: listen for events filtered to this book. A getter, not a snapshot:
+// the modal stays mounted while `book` can change underneath it.
+const { on, close: closeEvents } = useServerEvents({ bookId: () => book.id });
 
 on("book:metadata-ready", async () => {
   if (phase.value !== "fetching") return;

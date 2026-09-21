@@ -6,6 +6,7 @@ import { accounts, appSettings, users, type Db } from "#db";
 import type { AppVariables } from "../../context.js";
 import { getLogger } from "../../lib/logger.js";
 import { isUniqueViolation } from "../../shared/db-errors.js";
+import { roleHasAdminSql } from "../../shared/auth.js";
 
 const logger = getLogger("setup");
 
@@ -82,7 +83,7 @@ async function findAdoptableUser(db: Db, email: string) {
   const [oldestAdmin] = await db
     .select(columns)
     .from(users)
-    .where(eq(users.role, "admin"))
+    .where(roleHasAdminSql(users.role))
     .orderBy(asc(users.createdAt), asc(users.id))
     .limit(1);
   if (oldestAdmin) return oldestAdmin;

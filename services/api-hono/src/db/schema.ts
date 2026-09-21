@@ -114,9 +114,14 @@ export const books = pgTable(
   ],
 );
 
-/** All book columns except searchVector (internal FTS column, never sent to clients). */
+/**
+ * All book columns except the two that are internal worker state and must not
+ * reach clients: `searchVector` (FTS) and `possibleDuplicateOf` (the raw FK is
+ * another user's book id — the inbox detail exposes only the resolved
+ * `possibleDuplicate` object under the caller's visibility rule).
+ */
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
-const { searchVector: _sv, ...bookColumns } = getColumns(books);
+const { searchVector: _sv, possibleDuplicateOf: _pdo, ...bookColumns } = getColumns(books);
 export { bookColumns };
 
 export const bookFiles = pgTable(
@@ -223,6 +228,15 @@ export const readingProgressHistory = pgTable(
     index("reading_progress_history_created_at_idx").on(t.createdAt),
     index("reading_progress_history_book_id_idx").on(t.bookId),
     index("reading_progress_history_user_id_idx").on(t.userId),
+    // The stats baselines (`DISTINCT ON (document, device) ... ORDER BY
+    // created_at DESC` per user) otherwise sort the user's whole history on
+    // every cache miss, and that history grows for the life of the install.
+    index("reading_progress_history_user_stream_created_at_idx").on(
+      t.userId,
+      t.document,
+      t.device,
+      t.createdAt.desc(),
+    ),
   ],
 );
 

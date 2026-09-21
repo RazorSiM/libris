@@ -35,7 +35,7 @@ catalog:
   "@loglayer/transport-opentelemetry": ^4.3.0
   "@loglayer/transport-pino": ^3.3.0
   "@loglayer/transport-pretty-terminal": ^6.3.0
-  "@nuxt/ui": ^4.10.0
+  "@nuxt/ui": ^4.11.1
   "@opentelemetry/api": ^1.9.1
   "@opentelemetry/sdk-logs": ^0.221.0
   "@opentelemetry/sdk-node": ^0.221.0
@@ -75,7 +75,7 @@ catalog:
   echarts: ^6.0.0
   fast-xml-parser: 5.10.1
   happy-dom: ^20.11.1
-  hono: ^4.13.1
+  hono: ^4.13.8
   ioredis: ^6.0.0
   iron-webcrypto: ^2.0.0
   lefthook: ^2.1.10
@@ -100,10 +100,11 @@ catalog:
   # deduplicate to vite-plus-core instead of pulling a separate Vite from npm.
   # Pinned exactly to the core version vite-plus itself depends on — a floating
   # range can drift to a core release the installed vite-plus doesn't expect.
-  vite: npm:@voidzero-dev/vite-plus-core@0.2.8
+  vite: npm:@voidzero-dev/vite-plus-core@0.3.2
   # Pinned exact: Vite+ 0.x minors are breaking (0.2.0 replaced the bundled
   # Vitest wrapper with upstream Vitest), so upgrades should be deliberate.
-  vite-plus: 0.2.8
+  # 0.3.x is the first line carrying upstream vitest 4.1.11 (vite 8.2.2 core).
+  vite-plus: 0.3.2
   vitepress: 2.0.0-alpha.17
   vitepress-mermaid-renderer: ^1.1.30
   vitepress-openapi: ^0.2.3
@@ -120,11 +121,36 @@ catalog:
 catalogMode: prefer
 overrides:
   "@opentelemetry/api-logs": 0.218.0
-  # Force every transitive `vite` onto vite-plus-core. There is deliberately no
-  # `vitest` override — vite-plus 0.2.x depends on upstream vitest directly, so
-  # letting pnpm resolve it normally keeps it deduped with the @vitest/* packages
-  # vite-plus pins alongside it.
-  vite: "catalog:"
+  # Security floor for GHSA-gqvv-2mrq-wpjv / GHSA-g6gw-c38x-mqfc and the other
+  # <4.13.5 advisories. @hono/cli still resolves its own @hono/node-server 1.x,
+  # whose `hono: ^4` range would otherwise keep an old copy in the lockfile.
+  hono: ^4.13.8
+  # Force every transitive `vite` onto vite-plus-core. The `@*` selector is the
+  # form pnpm applies to the plain semver ranges in transitive and peer
+  # declarations while leaving `catalog:` references alone; every package that
+  # declares vite-plus also carries a direct `vite` dev dependency, so pnpm has
+  # a satisfying provider instead of auto-installing a registry Vite. There is
+  # deliberately no `vitest` override — vite-plus 0.3.x depends on upstream
+  # vitest 4.1.11, so letting pnpm resolve it normally keeps it deduped with
+  # the @vitest/* packages vite-plus pins alongside it.
+  "vite@*": "catalog:"
+  # Transitive copies flagged by pnpm audit --prod: postcss (<8.5.18 and
+  # <8.5.23), nanoid 3.x (<3.3.18) and esbuild (>=0.27.3 <0.28.1, dev server
+  # on Windows). Range-keyed so a newer major already in the tree (nanoid 5.x,
+  # esbuild 0.25.x) is left alone.
+  "nanoid@<3.3.18": "^3.3.18"
+  "postcss@<8.5.23": "^8.5.23"
+  "esbuild@>=0.27.3 <0.28.1": "^0.28.1"
+  # @nuxt/ui pulls its Tiptap editor stack in as optional peers with a `^3`
+  # range, so a locked resolution can sit below the <3.30.5 advisories
+  # indefinitely. Floor the entry point: `@tiptap/core` is the package the
+  # advisories name, and pinning it also pulls `@tiptap/pm` to match core's
+  # exact peer. The remaining `@tiptap/extension-*` packages @nuxt/ui
+  # auto-installs as optional peers stay at 3.24.0 — the pinned pnpm (see
+  # packageManager) records family overrides for them but does not apply them
+  # to auto-installed peers. That mix is unsupported upstream, but the app has
+  # no Tiptap call sites and none of those packages is in an advisory.
+  "@tiptap/core": "^3.30.5"
 peerDependencyRules:
   # Packages declaring a `vite` peer (@vitejs/plugin-vue, vitepress, …) see
   # vite-plus-core's version string, which doesn't satisfy their `^7`/`^8` ranges.

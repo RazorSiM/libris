@@ -27,17 +27,40 @@ function isProductionEnv(env: unknown): boolean {
 }
 
 /**
+ * The scheme the client used to reach this server. Behind a TLS-terminating
+ * proxy the connection is plain HTTP, so `x-forwarded-proto` is honored — but
+ * only when `TRUST_PROXY_HEADERS` is enabled, the same switch every other
+ * forwarded-header read is gated on.
+ */
+function effectiveRequestScheme(
+  c: { req: { header(name: string): string | undefined; url: string } },
+  env: unknown,
+): string {
+  if ((env as { TRUST_PROXY_HEADERS?: string })?.TRUST_PROXY_HEADERS === "1") {
+    const forwarded = c.req.header("x-forwarded-proto")?.split(",")[0]?.trim().toLowerCase();
+    if (forwarded === "http" || forwarded === "https") return forwarded;
+  }
+  try {
+    return new URL(c.req.url).protocol === "https:" ? "https" : "http";
+  } catch {
+    return "http";
+  }
+}
+
+/**
  * Whether an Origin header is one this server should accept for a
  * cookie-authenticated mutation.
  *
  * Production is same-origin: the API serves the SPA from ./public, so the only
- * legitimate Origin is the server's own (scheme from x-forwarded-proto when a
- * TLS-terminating proxy is in front, host from the Host header). In dev the SPA
- * runs on the Vite server, so the two localhost origins are allowed too.
+ * legitimate Origin is the server's own. The comparison is a canonical origin
+ * (scheme, hostname, and port) built from the request's effective scheme and
+ * Host header, so a different same-host port is rejected and valid IPv6 hosts
+ * are accepted. In dev the SPA runs on the Vite server, so the two localhost
+ * origins are allowed too.
  */
 export function isTrustedOrigin(
   origin: string,
-  c: { req: { header(name: string): string | undefined } },
+  c: { req: { header(name: string): string | undefined; url: string } },
   env: unknown,
 ): boolean {
   if (DEV_TRUSTED_ORIGINS.has(origin) && !isProductionEnv(env)) return true;
@@ -52,10 +75,12 @@ export function isTrustedOrigin(
   const host = c.req.header("host");
   if (!host) return false;
 
-  // Scheme-insensitive host comparison: the browser may reach the API over
-  // plain http on a LAN while the proxy presents https, or vice versa. The
-  // hostname being the same origin is what matters.
-  return parsed.hostname.toLowerCase() === host.split(":")[0].toLowerCase();
+  try {
+    const requestOrigin = new URL(`${effectiveRequestScheme(c, env)}://${host}`).origin;
+    return parsed.origin === requestOrigin;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -73,7 +98,7 @@ export function isTrustedOrigin(
  */
 export function isForeignCookieMutation(
   c: {
-    req: { method: string; header(name: string): string | undefined };
+    req: { method: string; header(name: string): string | undefined; url: string };
   },
   env: unknown,
 ): boolean {

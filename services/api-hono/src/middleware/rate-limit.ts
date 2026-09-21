@@ -1,7 +1,13 @@
 import { createMiddleware } from "hono/factory";
 import { HTTPException } from "hono/http-exception";
 import type { AppVariables } from "../context.js";
-import { enforceRateLimit } from "../services/rate-limit.js";
+import {
+  clearRateLimitFailures,
+  enforceRateLimit,
+  peekRateLimit,
+  rateLimitExceeded,
+  recordRateLimitFailure,
+} from "../services/rate-limit.js";
 import type { RateLimitTier } from "../services/rate-limit.js";
 import { getCredentialRateLimitKey, getIpRateLimitKey } from "../shared/request-ip.js";
 
@@ -148,26 +154,38 @@ export const rateLimitMiddleware = createMiddleware<{ Variables: AppVariables }>
     // Brute-force budgets also follow the credential being guessed, so rotating
     // source addresses cannot reset attempts against one account.
     let credentialIdentifier: string | undefined;
+    /**
+     * Failure-only budget identity for routes that verify a credential on every
+     * request. Progress syncs are frequent, so charging each one would punish a
+     * working device; only 401s are recorded.
+     */
+    let failureIdentity: string | undefined;
     let oversized = false;
     if (path === "/kosync/users/auth") {
-      // Two shapes for one credential check. GET carries the username in
-      // x-auth-user; POST carries it in the JSON body — and takes the PLAINTEXT
-      // password, so it is the better oracle of the two and needs the budget
-      // more. Without reading the body, POST attempts accumulated only per
-      // source address and an attacker rotating addresses never spent one.
-      credentialIdentifier = c.req.header("x-auth-user");
-      if (!credentialIdentifier && method === "POST") {
+      // Two shapes for one credential check, and each is bucketed by the value
+      // the handler actually verifies. POST takes the username from the JSON
+      // body — preferring x-auth-user there was a bypass: rotating the header
+      // while holding body.username fixed landed every attempt in a fresh
+      // bucket for the same victim.
+      if (method === "POST") {
         const body = await readCredentialBody(c);
         oversized = body.kind === "oversized";
         if (body.kind === "parsed" && typeof body.body.username === "string") {
           credentialIdentifier = body.body.username;
         }
+      } else {
+        credentialIdentifier = c.req.header("x-auth-user");
       }
     } else if (path === "/api/auth/sign-in/email" && method === "POST") {
       const body = await readCredentialBody(c);
       oversized = body.kind === "oversized";
       if (body.kind === "parsed" && typeof body.body.email === "string") {
         credentialIdentifier = body.body.email;
+      }
+    } else if (path.startsWith("/kosync/syncs/progress")) {
+      const username = c.req.header("x-auth-user");
+      if (username) {
+        failureIdentity = `failure:${getCredentialRateLimitKey(username)}`;
       }
     }
     // A body too big to bucket by is refused here rather than passed on
@@ -182,6 +200,20 @@ export const rateLimitMiddleware = createMiddleware<{ Variables: AppVariables }>
       await applyTier("auth", getCredentialRateLimitKey(credentialIdentifier));
     }
 
+    // Progress routes have already spent their guarantee of reaching the
+    // credential check: refuse a locked-out identity before verifying anything,
+    // so a blocked guesser cannot keep exercising the HMAC and DB lookup.
+    let clearFailures = false;
+    if (failureIdentity) {
+      const peeked = await peekRateLimit(storage, failureIdentity, "auth", env);
+      if (peeked.retryAfter !== null) {
+        throw rateLimitExceeded(peeked.retryAfter, peeked.limit);
+      }
+      // Only a bucket that exists needs clearing after a success; the common
+      // no-failures path must not pay a Redis DEL per sync.
+      clearFailures = peeked.remaining < peeked.limit;
+    }
+
     // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
     const info = rateLimitInfo as { limit: number; remaining: number; resetIn: number } | null;
     if (info) {
@@ -192,5 +224,19 @@ export const rateLimitMiddleware = createMiddleware<{ Variables: AppVariables }>
     }
 
     await next();
+
+    // Hono's compose converts a thrown HTTPException into `c.res` at the
+    // handler that threw, so a downstream 401 arrives here as a response —
+    // not as an exception unwinding through this middleware.
+    if (failureIdentity) {
+      if (c.res.status === 401) {
+        await recordRateLimitFailure(storage, failureIdentity, "auth", env);
+      } else if (clearFailures) {
+        // The credential verified (or the request failed for a reason
+        // unrelated to it), so stale failures must not accumulate toward a
+        // future lockout.
+        await clearRateLimitFailures(storage, failureIdentity, "auth");
+      }
+    }
   },
 );

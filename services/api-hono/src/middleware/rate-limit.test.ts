@@ -1,4 +1,5 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
+import { HTTPException } from "hono/http-exception";
 import { describe, expect, it } from "vite-plus/test";
 import type { AppVariables } from "../context.js";
 import type { Env } from "../env.js";
@@ -14,6 +15,7 @@ function createUnavailableKVStore(): KVStore {
     getItem: fail,
     setItem: fail,
     increment: fail,
+    peek: fail,
     getKeys: fail,
     removeItem: fail,
     clear: fail,
@@ -24,10 +26,12 @@ interface BuildOptions {
   env?: Partial<Env>;
   /** Stands in for Redis being down. */
   storage?: KVStore;
+  /** Replaces the echoing handler, for tests that need real 401s. */
+  handler?: (c: Context<{ Variables: AppVariables }>) => Response | Promise<Response>;
 }
 
 /** A minimal stack: the limiter, an echoing handler, and a memory store. */
-function buildLimitedApp({ env: overrides = {}, storage: store }: BuildOptions = {}) {
+function buildLimitedApp({ env: overrides = {}, storage: store, handler }: BuildOptions = {}) {
   const app = new Hono<{ Variables: AppVariables }>();
   const env = {
     NODE_ENV: "production",
@@ -48,8 +52,19 @@ function buildLimitedApp({ env: overrides = {}, storage: store }: BuildOptions =
     await next();
   });
   app.use("*", rateLimitMiddleware);
-  app.all("*", (c) => c.json({ ok: true }));
+  app.all("*", handler ?? ((c) => c.json({ ok: true })));
   return { app, env, storage };
+}
+
+/** The real shape of a KoSync route: 401 unless the secret matches. */
+function kosyncSecretHandler(state: { checks: number }) {
+  return (c: Context<{ Variables: AppVariables }>) => {
+    state.checks += 1;
+    if (c.req.header("x-auth-key") !== "good") {
+      throw new HTTPException(401, { message: "Unauthorized" });
+    }
+    return c.json({ ok: true });
+  };
 }
 
 describe("resolveRateLimitTiers", () => {
@@ -191,6 +206,123 @@ describe("resolveRateLimitTiers", () => {
     expect((await attempt("198.51.100.1")).status).toBe(200);
     expect((await attempt("198.51.100.2")).status).toBe(200);
     expect((await attempt("198.51.100.3")).status).toBe(429);
+  });
+
+  it("buckets POST /kosync/users/auth by the body username, not the header", async () => {
+    // The bypass this closes: the limiter preferred x-auth-user while the
+    // handler verified body.username, so an attacker rotating the header (and
+    // the source address) got a fresh budget for every guess against one
+    // victim. The header is not consulted on POST at all now.
+    const { app } = buildLimitedApp();
+
+    const attempt = (source: string, headerUser: string) =>
+      app.request("/kosync/users/auth", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-auth-user": headerUser,
+          "x-test-source": source,
+        },
+        body: JSON.stringify({ username: "reader", password: "guess" }),
+      });
+
+    expect((await attempt("192.0.2.1", "rotating-1")).status).toBe(200);
+    expect((await attempt("192.0.2.2", "rotating-2")).status).toBe(200);
+    expect((await attempt("192.0.2.3", "rotating-3")).status).toBe(429);
+  });
+
+  it("does not let a header disagree with the body to reset the POST budget", async () => {
+    // Same defect, observed from the other side: rotate the header, keep the
+    // body. The third attempt must be refused even though each header value is
+    // new.
+    const { app } = buildLimitedApp();
+
+    const attempt = (headerUser: string) =>
+      app.request("/kosync/users/auth", {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-auth-user": headerUser },
+        body: JSON.stringify({ username: "reader", password: "guess" }),
+      });
+
+    expect((await attempt("header-a")).status).toBe(200);
+    expect((await attempt("header-b")).status).toBe(200);
+    expect((await attempt("header-c")).status).toBe(429);
+  });
+
+  describe("failure-only budget on progress routes", () => {
+    const progress = (source: string, key: string, user = "reader") =>
+      new Request("http://localhost/kosync/syncs/progress", {
+        method: "PUT",
+        headers: {
+          "content-type": "application/json",
+          "x-auth-user": user,
+          "x-auth-key": key,
+          "x-test-source": source,
+        },
+        body: JSON.stringify({ document: "doc", progress: "1", percentage: 0.1, device: "dev" }),
+      });
+
+    it("throttles repeated wrong credentials across rotating source addresses", async () => {
+      const state = { checks: 0 };
+      const { app } = buildLimitedApp({ handler: kosyncSecretHandler(state) });
+
+      // auth limit is 2 failures. Three sources, one victim credential.
+      expect((await app.request(progress("192.0.2.1", "wrong-1"))).status).toBe(401);
+      expect((await app.request(progress("192.0.2.2", "wrong-2"))).status).toBe(401);
+
+      const blocked = await app.request(progress("192.0.2.3", "wrong-3"));
+      expect(blocked.status).toBe(429);
+      // The third attempt never reached the credential check.
+      expect(state.checks).toBe(2);
+      expect(blocked.headers.get("retry-after")).toBeTruthy();
+    });
+
+    it("does not spend budget on successful syncs", async () => {
+      // The whole point of failure-only: a device syncing every few seconds
+      // must not lock itself out after 30 requests.
+      const state = { checks: 0 };
+      const { app } = buildLimitedApp({ handler: kosyncSecretHandler(state) });
+
+      for (let i = 0; i < 10; i += 1) {
+        expect((await app.request(progress("192.0.2.9", "good"))).status, `sync ${i}`).toBe(200);
+      }
+      expect(state.checks).toBe(10);
+    });
+
+    it("forgets recorded failures after a successful check", async () => {
+      const state = { checks: 0 };
+      const { app } = buildLimitedApp({ handler: kosyncSecretHandler(state) });
+
+      expect((await app.request(progress("192.0.2.1", "wrong"))).status).toBe(401);
+      expect((await app.request(progress("192.0.2.2", "good"))).status).toBe(200);
+      // The success cleared the one failure, so two more are still allowed.
+      expect((await app.request(progress("192.0.2.3", "wrong"))).status).toBe(401);
+      expect((await app.request(progress("192.0.2.4", "wrong"))).status).toBe(401);
+      expect((await app.request(progress("192.0.2.5", "wrong"))).status).toBe(429);
+    });
+
+    it("keeps one credential's failures off another's budget", async () => {
+      const state = { checks: 0 };
+      const { app } = buildLimitedApp({ handler: kosyncSecretHandler(state) });
+
+      expect((await app.request(progress("192.0.2.1", "wrong", "victim"))).status).toBe(401);
+      expect((await app.request(progress("192.0.2.2", "wrong", "victim"))).status).toBe(401);
+      expect((await app.request(progress("192.0.2.3", "wrong", "bystander"))).status).toBe(401);
+      expect((await app.request(progress("192.0.2.4", "wrong", "victim"))).status).toBe(429);
+    });
+
+    it("leaves headerless progress requests to the general tier", async () => {
+      // No username means nothing was verified and nothing to guess.
+      const state = { checks: 0 };
+      const { app } = buildLimitedApp({ handler: kosyncSecretHandler(state) });
+      const res = await app.request("/kosync/syncs/progress", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ document: "doc" }),
+      });
+      expect(res.status).toBe(401);
+      expect(state.checks).toBe(1);
+    });
   });
 
   it("does not throw when a kosync POST body is malformed", async () => {

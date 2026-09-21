@@ -9,6 +9,16 @@ import {
   getRegisteredQueues,
 } from "../../services/queue-diagnostics.js";
 import type { Queue, Job } from "bullmq";
+import {
+  MAX_JOB_WINDOW,
+  collectBoardJobs,
+  isPageBeyondWindow,
+  isWindowTruncated,
+  planJobWindow,
+  sortJobWindow,
+} from "../../lib/queue/jobs-window.js";
+
+export { MAX_JOB_WINDOW };
 
 // ── Shared Schemas ──────────────────────────────────────────────
 
@@ -109,7 +119,12 @@ const listRoute = createRoute({
   summary: "List jobs across all queues",
   description:
     "Browse recent jobs across all queues with filtering by queue name and status. " +
-    "Supports pagination via page/pageSize query params.",
+    "Supports pagination via page/pageSize query params. `total` is the exact " +
+    "number of matching jobs. Browsing is bounded: every selected queue/status " +
+    `board is read in BullMQ's native order up to a share of a ${MAX_JOB_WINDOW}-job ` +
+    "window (fewer selected boards means a deeper per-board window), and the merged " +
+    "result is ordered by creation time. `truncated` is true when any board holds " +
+    "more matching jobs than the window reaches; those jobs cannot be paged to.",
   request: {
     query: z.object({
       queue: z
@@ -137,10 +152,14 @@ const listRoute = createRoute({
         "application/json": {
           schema: z.object({
             jobs: z.array(JobDetailSchema),
-            total: z.number().int(),
+            total: z.number().int().openapi({ description: "Exact number of matching jobs" }),
             page: z.number().int(),
             pageSize: z.number().int(),
             totalPages: z.number().int(),
+            truncated: z.boolean().openapi({
+              description:
+                "True when a selected queue/status board holds more matching jobs than the browsable window fetches; those jobs cannot be paged to",
+            }),
           }),
         },
       },
@@ -344,7 +363,10 @@ const drainQueueRoute = createRoute({
   path: "/queues/{name}/drain",
   tags: ["jobs"],
   summary: "Drain a queue",
-  description: "Remove all waiting and delayed jobs from a queue. Active jobs are not affected.",
+  description:
+    "Remove all waiting, prioritized, and delayed jobs from a queue. Active jobs keep " +
+    "running, and delayed jobs owned by a Job Scheduler are kept — draining a scheduler " +
+    "queue does not unschedule its recurring work.",
   request: {
     params: z.object({
       name: z.string().min(1).openapi({ description: "Queue name" }),
@@ -422,7 +444,14 @@ export const jobsRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
     if (queueFilter) {
       const q = findQueueByName(queueFilter);
       if (!q) {
-        return c.json({ jobs: [], total: 0, page, pageSize, totalPages: 0 });
+        return c.json({
+          jobs: [],
+          total: 0,
+          page,
+          pageSize,
+          totalPages: 0,
+          truncated: false,
+        });
       }
       queuesToQuery = [q];
     } else {
@@ -435,33 +464,50 @@ export const jobsRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
       ? [status]
       : ["completed", "active", "waiting", "failed", "delayed"];
 
-    // Collect jobs from all matching queues
-    type JobWithStatus = ReturnType<typeof serializeJob> & { status: string };
-    const allJobs: JobWithStatus[] = [];
+    // Exact totals from BullMQ's counters. The per-board window fetched below
+    // is capped, so deriving `total` from it would under-report (and once did).
+    const countsByQueue = await Promise.all(
+      queuesToQuery.map((queue) => queue.getJobCounts(...statuses)),
+    );
+    const total = countsByQueue.reduce(
+      (sum, counts) => sum + statuses.reduce((statusSum, s) => statusSum + (counts[s] ?? 0), 0),
+      0,
+    );
+    const totalPages = Math.ceil(total / pageSize);
 
-    await Promise.all(
-      queuesToQuery.map(async (queue) => {
-        const jobs: Job[] = await queue.getJobs(statuses, 0, 199);
-        for (const job of jobs) {
-          if (!job.id) continue;
-          const state = await job.getState();
-          if (status && state !== status) continue;
-          const serialized = serializeJob(job, queue.name);
-          allJobs.push({ ...serialized, status: state });
-        }
-      }),
+    const plan = planJobWindow(page, pageSize, queuesToQuery.length * statuses.length);
+    const boardCounts = countsByQueue.flatMap((counts) => statuses.map((s) => counts[s] ?? 0));
+    // A board with more matching jobs than the window fetches holds jobs the
+    // browser can never reach, whatever page is requested.
+    const truncated = isWindowTruncated(boardCounts, plan.perBoardLimit);
+
+    // Pages past the window are answerable from the counters alone; fetching
+    // anything first would be pure cost.
+    if (isPageBeyondWindow(plan)) {
+      return c.json({ jobs: [], total, page, pageSize, totalPages, truncated });
+    }
+
+    // Materialize each board in its native order up to the window depth. A
+    // board's jobs are authoritative for its own status, so no per-job
+    // `getState()` round trip (and no state race dropping a fetched job).
+    const allJobs = await collectBoardJobs(
+      queuesToQuery,
+      statuses,
+      plan.depth,
+      (job, queueName, boardStatus) => ({ ...serializeJob(job, queueName), status: boardStatus }),
     );
 
-    // Sort by timestamp descending (most recent first)
-    allJobs.sort((a, b) => b.timestamp - a.timestamp);
+    const windowJobs = sortJobWindow(allJobs).slice(0, plan.depth);
+    const paginatedJobs = windowJobs.slice(plan.start, plan.start + pageSize);
 
-    // Paginate
-    const total = allJobs.length;
-    const totalPages = Math.ceil(total / pageSize);
-    const start = (page - 1) * pageSize;
-    const paginatedJobs = allJobs.slice(start, start + pageSize);
-
-    return c.json({ jobs: paginatedJobs, total, page, pageSize, totalPages });
+    return c.json({
+      jobs: paginatedJobs,
+      total,
+      page,
+      pageSize,
+      totalPages,
+      truncated,
+    });
   })
   .openapi(detailRoute, async (c) => {
     const { id } = c.req.valid("param");
@@ -564,6 +610,8 @@ export const jobsRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
     if (!queue) {
       throw new HTTPException(404, { message: `Queue "${name}" not found` });
     }
-    await queue.drain();
+    // `true` includes delayed jobs: the endpoint's description promises they
+    // are removed, but BullMQ's default leaves them scheduled.
+    await queue.drain(true);
     return c.json({ success: true, queue: name });
   });

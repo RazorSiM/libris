@@ -724,4 +724,65 @@ test.describe("Review Page", { tag: "@smoke" }, () => {
       expect(res.status).toBe(404);
     });
   });
+
+  // ── Route reuse between inbox details ───────────────────────────
+  //
+  // `/inbox/A` → `/inbox/B` reuses the page component (same route record), so
+  // an id captured at setup time would send rescan/approve/delete to A while B
+  // is on screen. This is the browser-level regression for that.
+
+  test.describe("client-side navigation between books", () => {
+    test.beforeEach(async () => {
+      await deleteAllBooks();
+    });
+
+    test.afterAll(async () => {
+      await waitForAllQueuesIdle();
+    });
+
+    test("rescan and delete target the book currently on screen", async ({ authedPage: page }) => {
+      const bookB = await seedReviewBook({ title: "Target Book B" });
+      await seedBookFile(bookB);
+      await seedCandidate(bookB, "file", 0.5, { title: "Target Book B" });
+
+      const bookA = await seedReviewBook({ title: "Source Book A" });
+      await seedBookFile(bookA);
+      await seedCandidate(bookA, "file", 0.5, { title: "Source Book A" });
+
+      const sql = getSql();
+      try {
+        await sql`UPDATE books SET possible_duplicate_of = ${bookB} WHERE id = ${bookA}`;
+      } finally {
+        await sql.end();
+      }
+
+      await goPath(page, `/inbox/${bookA}`);
+      await expect(page.getByText("Source Book A").first()).toBeVisible({ timeout: 10_000 });
+
+      // Follow the duplicate link: a client-side route change to the same
+      // record, which is what reuses the component instance.
+      await page.getByRole("link", { name: "Target Book B" }).click();
+      await page.waitForURL(`**/inbox/${bookB}`, { timeout: 10_000 });
+      await expect(page.getByRole("heading", { name: "Target Book B" })).toBeVisible({
+        timeout: 10_000,
+      });
+
+      const rescanPromise = page.waitForRequest(
+        (req) => req.method() === "PATCH" && req.url().includes("/rescan"),
+      );
+      await page.getByTestId("rescan-btn").click();
+      const rescanRequest = await rescanPromise;
+      expect(new URL(rescanRequest.url()).pathname).toBe(`/api/inbox/${bookB}/rescan`);
+
+      const deletePromise = page.waitForRequest(
+        (req) => req.method() === "DELETE" && req.url().includes("/api/books/"),
+      );
+      await page.getByTestId("delete-btn").click();
+      const confirmDialog = page.getByRole("dialog");
+      await expect(confirmDialog.getByText("Delete Book")).toBeVisible({ timeout: 5_000 });
+      await confirmDialog.getByRole("button", { name: "Delete" }).click();
+      const deleteRequest = await deletePromise;
+      expect(new URL(deleteRequest.url()).pathname).toBe(`/api/books/${bookB}`);
+    });
+  });
 });

@@ -11,6 +11,7 @@
   "devDependencies": {
     "@changesets/cli": "catalog:",
     "lefthook": "catalog:",
+    "vite": "catalog:",
     "vite-plus": "catalog:",
     "wrangler": "catalog:"
   },

@@ -48,6 +48,7 @@ import type { Env } from "../src/env.js";
 import { createAuth } from "../src/lib/auth.js";
 import { createMemorySecondaryStorage } from "../src/services/auth-secondary-storage.js";
 import { createMemoryKVStore } from "../src/services/kv-store.js";
+import { roleHasAdminSql } from "../src/shared/auth.js";
 import { betterAuthClientIpHeader } from "../src/shared/request-ip.js";
 import {
   announceSkip,
@@ -100,6 +101,10 @@ const TEST_ENV: Env = {
   LIBRIS_RATELIMIT_AUTH_WINDOW_SECONDS: 60,
   LIBRIS_RATELIMIT_KEY_CREATION_LIMIT: 600,
   LIBRIS_RATELIMIT_KEY_CREATION_WINDOW_SECONDS: 3600,
+  LIBRIS_MAX_UPLOAD_BYTES: 1024 * 1024 * 1024,
+  LIBRIS_MAX_UPLOAD_FILES: 20,
+  LIBRIS_MAX_EMBED_OPF_BYTES: 1024 * 1024,
+  LIBRIS_EMBED_TIMEOUT_MS: 30_000,
   LIBRIS_HTTP_HEADERS_TIMEOUT_MS: 10_000,
   LIBRIS_HTTP_REQUEST_TIMEOUT_MS: 30_000,
   LIBRIS_HTTP_IDLE_TIMEOUT_MS: 30_000,
@@ -251,7 +256,7 @@ describe.skipIf(!reachable)("the admin subtree over HTTP, against real PostgreSQ
     postAdmin(app, cookie, "update-user", { userId, data });
 
   async function activeAdminIds(): Promise<string[]> {
-    const rows = await db.select().from(schema.users).where(eq(schema.users.role, "admin"));
+    const rows = await db.select().from(schema.users).where(roleHasAdminSql(schema.users.role));
     return rows.map(({ id }) => id);
   }
 
@@ -265,6 +270,70 @@ describe.skipIf(!reachable)("the admin subtree over HTTP, against real PostgreSQ
       expect(response.status).toBe(409);
       const [stored] = await db.select().from(schema.users).where(eq(schema.users.id, admin.id));
       expect(stored?.role).toBe("admin");
+    });
+
+    it("counts a sole admin,user account as admin through the two-step demotion", async () => {
+      const { app, auth } = createTestApp();
+      const email = "multi-role-sole-admin@example.com";
+      const admin = await createUser(auth, email);
+
+      // Step one of R07: move the sole admin to a multi-role value. This must
+      // not make them disappear from the invariant's accounting.
+      const setMulti = await postAdmin(app, admin.cookie, "set-role", {
+        userId: admin.id,
+        role: ["admin", "user"],
+      });
+      expect(setMulti.status).toBe(200);
+      const [stored] = await db.select().from(schema.users).where(eq(schema.users.id, admin.id));
+      expect(stored?.role).toBe("admin,user");
+
+      // A fresh sign-in, so the session role is not a pre-change snapshot.
+      const { headers } = await auth.api.signInEmail({
+        body: { email, password: PASSWORD },
+        returnHeaders: true,
+      });
+      const freshCookie = headers
+        .getSetCookie()
+        .map((value) => value.split(";")[0])
+        .join("; ");
+
+      // isAdmin() must still grant the multi-role session admin routes.
+      const jobs = await app.request("/api/jobs/status", {
+        headers: { cookie: freshCookie, host: "localhost", origin: "http://localhost" },
+      });
+      expect(jobs.status).toBe(200);
+
+      // Step two: the demotion must now be refused, because they are the only
+      // active admin no matter the comma-joined spelling of the role.
+      const demote = await setRole(app, freshCookie, admin.id, "user");
+      expect(demote.status).toBe(409);
+      const [after] = await db.select().from(schema.users).where(eq(schema.users.id, admin.id));
+      expect(after?.role).toBe("admin,user");
+      expect(await activeAdminIds()).toEqual([admin.id]);
+    });
+
+    it("counts a user,admin target as an active admin when the acting admin is demoted", async () => {
+      const { app, auth } = createTestApp();
+      const acting = await createUser(auth, "acting-multi@example.com");
+      const target = await createUser(auth, "target-multi@example.com");
+
+      const setTarget = await postAdmin(app, acting.cookie, "set-role", {
+        userId: target.id,
+        role: "user,admin",
+      });
+      expect(setTarget.status).toBe(200);
+
+      // The target still carries admin, so demoting the acting admin must be
+      // allowed; an exact-equality count would see zero remaining admins.
+      const response = await setRole(app, acting.cookie, acting.id, "user");
+
+      expect(response.status).toBe(200);
+      const [storedActing] = await db
+        .select()
+        .from(schema.users)
+        .where(eq(schema.users.id, acting.id));
+      expect(storedActing?.role).toBe("user");
+      expect(await activeAdminIds()).toEqual([target.id]);
     });
 
     it("still allows demotion while another admin remains", async () => {

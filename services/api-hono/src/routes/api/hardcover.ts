@@ -9,10 +9,14 @@ import { searchHardcover } from "../../lib/metadata/clients/hardcover.js";
 import { isHardcoverMetadataEnabled } from "../../services/settings.js";
 import { unsealToken, getUserId } from "../../shared/auth.js";
 import { HardcoverSearchResponseSchema } from "../../shared/schemas.js";
-import { getQueues } from "../../services/queue.js";
-import { parseRedisUrl } from "../../env.js";
+import { getAllQueues } from "../../services/queue.js";
 import { QUEUE_HARDCOVER_SYNC } from "../../lib/queue/constants.js";
-import { Queue } from "bullmq";
+import { enqueueHardcoverSync } from "../../shared/enqueue-hardcover-sync.js";
+import {
+  HARDCOVER_STATUS_CACHE_TTL_SECONDS,
+  hardcoverStatusCacheKey,
+} from "../../shared/hardcover-status.js";
+import type { KVStore } from "../../services/kv-store.js";
 
 // ── GET /status ──────────────────────────────────────────────────
 
@@ -22,7 +26,7 @@ const statusRoute = createRoute({
   tags: ["hardcover"],
   summary: "Get Hardcover connection status",
   description:
-    "Check whether a Hardcover credential is configured, verify the token with the Hardcover API, and return the connected username and last sync timestamp.",
+    "Check whether a Hardcover credential is configured, verify the token with the Hardcover API, and return the connected username and last sync timestamp. The live token check is cached per user for 30 seconds.",
   responses: {
     200: {
       description: "Connection status",
@@ -48,7 +52,7 @@ const syncRoute = createRoute({
   tags: ["hardcover"],
   summary: "Trigger Hardcover sync",
   description:
-    "Enqueue a user-scoped job to synchronize reading progress and ratings with the Hardcover service. Global metadata maintenance runs only on scheduled jobs. Requires a configured Hardcover credential.",
+    "Enqueue a user-scoped job to synchronize reading progress and ratings with the Hardcover service. Global metadata maintenance runs only on scheduled jobs. Requires a configured Hardcover credential. Idempotent while a sync for the user is already queued or running.",
   responses: {
     200: {
       description: "Sync job enqueued",
@@ -61,6 +65,7 @@ const syncRoute = createRoute({
       },
     },
     400: { description: "Hardcover credential not configured" },
+    503: { description: "Hardcover sync queue is not running" },
   },
 });
 
@@ -139,13 +144,45 @@ const searchRoute = createRoute({
 
 // ── Router ───────────────────────────────────────────────────────
 
+interface HardcoverStatus {
+  connected: boolean;
+  username?: string;
+  lastSyncAt?: string | null;
+  error?: string;
+}
+
+/** Cache a status response before returning it — best effort, never fatal. */
+async function cacheHardcoverStatus(
+  storage: KVStore,
+  key: string,
+  status: HardcoverStatus,
+): Promise<HardcoverStatus> {
+  try {
+    await storage.setItem(key, status, { ttl: HARDCOVER_STATUS_CACHE_TTL_SECONDS });
+  } catch {
+    // A cache write failure must not fail the status check.
+  }
+  return status;
+}
+
 export const hardcoverRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
   .openapi(statusRoute, async (c) => {
     const db = c.get("db");
     const env = c.get("env");
     const userId = getUserId(c);
 
-    // Check if credential exists
+    // Verify the token with Hardcover at most once per cache window: this
+    // endpoint makes a live outbound call on the user's token, and without the
+    // cache every page view (or a loop) multiplies that call.
+    const cacheStorage = c.get("cacheStorage");
+    const cacheKey = hardcoverStatusCacheKey(userId);
+    try {
+      const cached = (await cacheStorage.getItem(cacheKey)) as HardcoverStatus | null;
+      if (cached) return c.json(cached);
+    } catch {
+      // Cache unavailable — fall through to the live check.
+    }
+
     const [cred] = await db
       .select({ passwordHash: serviceCredentials.passwordHash })
       .from(serviceCredentials)
@@ -155,22 +192,29 @@ export const hardcoverRoutes = createOpenApiRouter<{ Variables: AppVariables }>(
       .limit(1);
 
     if (!cred) {
-      return c.json({ connected: false });
+      return c.json(await cacheHardcoverStatus(cacheStorage, cacheKey, { connected: false }));
     }
 
     // Decrypt the stored token (Hardcover uses reversible encryption, not bcrypt)
     const token = await unsealToken(cred.passwordHash, env.API_SECRET_KEY);
     if (!token) {
-      return c.json({ connected: false, error: "Failed to decrypt stored token" });
+      return c.json(
+        await cacheHardcoverStatus(cacheStorage, cacheKey, {
+          connected: false,
+          error: "Failed to decrypt stored token",
+        }),
+      );
     }
 
     const verify = await verifyToken(token);
 
     if (!verify.ok) {
-      return c.json({
-        connected: false,
-        error: `Token invalid: ${verify.error.type}`,
-      });
+      return c.json(
+        await cacheHardcoverStatus(cacheStorage, cacheKey, {
+          connected: false,
+          error: `Token invalid: ${verify.error.type}`,
+        }),
+      );
     }
 
     // Get last sync timestamp for this user
@@ -181,15 +225,16 @@ export const hardcoverRoutes = createOpenApiRouter<{ Variables: AppVariables }>(
       .orderBy(desc(hardcoverSyncLog.lastSyncedAt))
       .limit(1);
 
-    return c.json({
-      connected: true,
-      username: verify.data.username,
-      lastSyncAt: lastSync?.lastSyncedAt?.toISOString() ?? null,
-    });
+    return c.json(
+      await cacheHardcoverStatus(cacheStorage, cacheKey, {
+        connected: true,
+        username: verify.data.username,
+        lastSyncAt: lastSync?.lastSyncedAt?.toISOString() ?? null,
+      }),
+    );
   })
   .openapi(syncRoute, async (c) => {
     const db = c.get("db");
-    const env = c.get("env");
     const userId = getUserId(c);
 
     const [cred] = await db
@@ -204,24 +249,15 @@ export const hardcoverRoutes = createOpenApiRouter<{ Variables: AppVariables }>(
       throw new HTTPException(400, { message: "Hardcover credential not configured" });
     }
 
-    const { close: _, ...queues } = getQueues();
-    const syncQueue = Object.values(queues).find(
-      (q): q is Queue => q instanceof Queue && q.name === QUEUE_HARDCOVER_SYNC,
-    );
-
-    const jobPayload = { manual: true, userId };
-
+    // The scheduler queue is registered by bootstrap and runs in this process,
+    // so there is no per-request queue connection to open (and close) here.
+    const syncQueue = getAllQueues().get(QUEUE_HARDCOVER_SYNC);
     if (!syncQueue) {
-      // Fallback: create a one-off queue connection
-      const connection = parseRedisUrl(env.REDIS_URL);
-      const q = new Queue(QUEUE_HARDCOVER_SYNC, { connection });
-      await q.add("manual-sync", jobPayload);
-      await q.close();
-    } else {
-      await syncQueue.add("manual-sync", jobPayload);
+      throw new HTTPException(503, { message: "Hardcover sync queue is not running" });
     }
 
-    return c.json({ message: "Sync job enqueued" });
+    const enqueued = await enqueueHardcoverSync(syncQueue, userId);
+    return c.json({ message: enqueued ? "Sync job enqueued" : "Sync already queued" });
   })
   .openapi(syncLogRoute, async (c) => {
     const { limit } = c.req.valid("query");

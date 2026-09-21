@@ -16,7 +16,7 @@ import {
   updateUserBookRead,
   getEditionPages,
 } from "../lib/hardcover/client";
-import { unsealToken } from "../shared/auth.js";
+import { roleHasAdmin, unsealToken } from "../shared/auth.js";
 import { getDb } from "../services/db.js";
 import { getEnv } from "../env.js";
 import { isHardcoverMetadataEnabled, isHardcoverSyncEnabled } from "../services/settings.js";
@@ -63,7 +63,7 @@ export function selectGlobalMetadataUser<
   T extends { userId: string; role: string | null; accountCreatedAt: Date },
 >(candidates: readonly T[]): T | null {
   // Matches shared/auth.ts isAdmin() and the admin plugin's adminRoles config.
-  const admins = candidates.filter((candidate) => candidate.role === "admin");
+  const admins = candidates.filter((candidate) => roleHasAdmin(candidate.role));
   if (admins.length === 0) return null;
 
   return admins.reduce((oldest, candidate) => {

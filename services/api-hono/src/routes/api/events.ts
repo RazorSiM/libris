@@ -15,7 +15,7 @@ import {
   EVENT_SOCKET_RESCOPE_CLOSE_CODE,
   EVENT_SOCKET_REVOKED_CLOSE_CODE,
 } from "../../lib/event-socket-registry.js";
-import { getUserId, isAdmin } from "../../shared/auth.js";
+import { getUserId, isAdmin, roleHasAdmin } from "../../shared/auth.js";
 import { isUserBanned } from "../../shared/user-ban.js";
 import { sessionHeaders } from "../../shared/request-ip.js";
 
@@ -281,7 +281,7 @@ export function createEventsRoutes(upgradeWebSocket: UpgradeWebSocket) {
               if (current === null) return closeRevoked("session revoked");
               if (isUserBanned(current.user)) return closeRevoked("account banned");
               if (current.user.id !== userId) return closeForRescope("identity changed");
-              if ((current.user.role === "admin") !== admin) return closeForRescope("role changed");
+              if (roleHasAdmin(current.user.role) !== admin) return closeForRescope("role changed");
             })();
           }, EVENT_SOCKET_REVALIDATE_INTERVAL_MS);
           // Never a reason to keep the process alive.

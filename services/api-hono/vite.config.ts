@@ -6,7 +6,12 @@ const here = fileURLToPath(new URL(".", import.meta.url));
 
 export default defineConfig({
   pack: {
-    entry: ["src/index.ts"],
+    // The worker entry must stay a sibling of dist/index.mjs: embed-metadata.ts
+    // resolves it as `new URL("./embed-worker.mjs", import.meta.url)`.
+    entry: {
+      index: "src/index.ts",
+      "embed-worker": "src/lib/epub/embed-worker.ts",
+    },
     format: "esm",
     // Matches the runtime major in .node-version / engines.node and the
     // node:*-slim base in the Dockerfile — keep the three in step so tsdown
@@ -39,6 +44,11 @@ export default defineConfig({
     hookTimeout: 60_000,
     env: {
       NODE_ENV: "test",
+      // The stats routes bucket progress by calendar day with `DATE()` and
+      // `CURRENT_DATE`, which Postgres evaluates in the session timezone, and
+      // PGlite inherits TZ from this process. Without a pin the suites assert
+      // host-local dates and fail on any machine east of UTC+12.
+      TZ: "UTC",
       DATABASE_URL: "pglite://",
       REDIS_URL: "redis://localhost:6379",
       LIBRIS_INBOX_PATH: "/tmp/libris-test-inbox",
@@ -112,7 +122,7 @@ export default defineConfig({
         // dropped so the cache fingerprint stays deterministic. Without this
         // line the CI job's LIBRIS_TEST_POSTGRES_URL / LIBRIS_TEST_REDIS_URL
         // never reached vitest, tests/backing-services.ts fell back to the
-        // local docker-compose ports (5433/6380), and the six suites that need
+        // local docker-compose ports (5433/6380), and the seven suites that need
         // a real server failed with "unreachable" on a runner where the service
         // containers were healthy the whole time.
         //

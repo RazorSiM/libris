@@ -128,7 +128,7 @@ Values: `unread`, `reading`, `finished`, `paused`
 | `timestamp` | bigint | No | 0 |  |
 | `created_at` | timestamptz | No | now() |  |
 
-**Indexes:** `reading_progress_history_document_created_at_idx`, `reading_progress_history_created_at_idx`, `reading_progress_history_book_id_idx`, `reading_progress_history_user_id_idx`
+**Indexes:** `reading_progress_history_document_created_at_idx`, `reading_progress_history_created_at_idx`, `reading_progress_history_book_id_idx`, `reading_progress_history_user_id_idx`, `reading_progress_history_user_stream_created_at_idx`
 
 ### `reading_aggregate`
 
@@ -217,7 +217,7 @@ Values: `unread`, `reading`, `finished`, `paused`
 
 - `books.language` holds a canonical lowercase ISO 639-1 code (e.g. `en`, `fr`); arbitrary input is normalized by `services/api-hono/src/lib/languages.ts`.
 - `book_files.format`, `book_metadata_candidates.source`, `service_credentials.service`, and `hardcover_sync_log.last_status` are free-text columns (not Postgres enums) even though they hold format/source/status-like values.
-- `books.search_vector` is excluded from all API responses — the API selects the `bookColumns` projection, which omits it.
+- `books.search_vector` and `books.possible_duplicate_of` are internal: the `bookColumns` projection omits both, so no API response carries the FTS column or a raw duplicate FK (the inbox detail exposes only a visibility-checked `possibleDuplicate` object).
 - `reading_progress`, `reading_progress_history`, and `reading_aggregate` use `ON DELETE SET NULL` on `book_id` so reading history survives a book deletion, while their `user_id` cascades (or is set null for history).
 - Better Auth owns `users`, `sessions`, `accounts`, `verifications` and `api_keys` — they are declared in `services/api-hono/src/db/auth-schema.ts` and are not listed above.
 - The trigram indexes (`*_trgm_idx`) require the `pg_trgm` extension; the full-text `*_search_vector_idx` is a GIN index over the generated `tsvector`.

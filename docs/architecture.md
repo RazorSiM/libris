@@ -174,18 +174,24 @@ are a property of the install rather than of a person, it is sent to admins
 only. A non-admin's dashboard derives its `processingCount` from the book ids
 carrying in-flight jobs, intersected with the ones they own.
 
-| Method | Path                             | Purpose                                              |
-| ------ | -------------------------------- | ---------------------------------------------------- |
-| GET    | `/api/jobs`                      | List jobs across all queues (paginated, filterable)  |
-| GET    | `/api/jobs/status`               | Job counts per queue (waiting/active/completed/etc.) |
-| GET    | `/api/jobs/failed`               | List failed jobs across all queues                   |
-| GET    | `/api/jobs/{id}`                 | Full job detail (payload, timestamps, progress)      |
-| GET    | `/api/jobs/{id}/logs`            | Job log lines stored via `job.log()`                 |
-| POST   | `/api/jobs/{id}/retry`           | Retry a failed job                                   |
-| POST   | `/api/jobs/queues/{name}/pause`  | Pause a queue                                        |
-| POST   | `/api/jobs/queues/{name}/resume` | Resume a paused queue                                |
-| POST   | `/api/jobs/queues/{name}/clean`  | Remove all failed jobs from a queue                  |
-| POST   | `/api/jobs/queues/{name}/drain`  | Remove all waiting/delayed jobs from a queue         |
+The jobs browser is bounded: `GET /api/jobs` reads each selected queue/status
+board in BullMQ's native order up to its share of a 10,000-job window (fewer
+selected boards means a deeper per-board window), merges the fetched window by
+creation time, and reports `truncated: true` when any board holds more matching
+jobs than the window reaches. `total` and `totalPages` stay exact.
+
+| Method | Path                             | Purpose                                                                         |
+| ------ | -------------------------------- | ------------------------------------------------------------------------------- |
+| GET    | `/api/jobs`                      | List jobs across all queues (paginated, filterable)                             |
+| GET    | `/api/jobs/status`               | Job counts per queue (waiting/active/completed/etc.)                            |
+| GET    | `/api/jobs/failed`               | List failed jobs across all queues                                              |
+| GET    | `/api/jobs/{id}`                 | Full job detail (payload, timestamps, progress)                                 |
+| GET    | `/api/jobs/{id}/logs`            | Job log lines stored via `job.log()`                                            |
+| POST   | `/api/jobs/{id}/retry`           | Retry a failed job                                                              |
+| POST   | `/api/jobs/queues/{name}/pause`  | Pause a queue                                                                   |
+| POST   | `/api/jobs/queues/{name}/resume` | Resume a paused queue                                                           |
+| POST   | `/api/jobs/queues/{name}/clean`  | Remove all failed jobs from a queue                                             |
+| POST   | `/api/jobs/queues/{name}/drain`  | Remove waiting/prioritized/delayed jobs (scheduler-owned delayed jobs are kept) |
 
 ### Reading Status
 
@@ -291,18 +297,18 @@ Self-registration is disabled outright (`emailAndPassword.disableSignUp`). Accou
 
 Route-level policies are declared in `shared/route-policy.ts` — first match wins, and anything that matches nothing (SPA static files, favicon) is `skip`:
 
-| Order | Pattern            | Match  | Policy     | Behaviour                                                                                                                                  |
-| ----- | ------------------ | ------ | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| 1     | `/api/auth/`       | prefix | `skip`     | Better Auth authenticates its own endpoints. A prefix, so nested plugin routes stay covered.                                               |
-| 2     | `/api/setup`       | exact  | `public`   | No authentication. Self-guarding: 409s once any credential exists.                                                                         |
-| 3     | `/api/health/live` | exact  | `public`   | Liveness probe. `public`, not `optional`: resolving a session would put I/O back on an endpoint whose whole contract is that it does none. |
-| 4     | `/api/health`      | exact  | `optional` | Session resolved if one is presented; the response is enriched when it is.                                                                 |
-| 5     | `/kosync/`         | prefix | `kosync`   | `x-auth-user` / `x-auth-key` against `kosync_credentials`. `users/auth` and `users/create` self-handle.                                    |
-| 6     | `/opds`            | prefix | `opds`     | Same session lookup as `api-key`; a 401 also carries `WWW-Authenticate: Basic realm="Libris OPDS"`.                                        |
-| 7     | `/__test/`         | prefix | `test`     | Constant-time compare of `x-test-token` against `TEST_ROUTE_TOKEN` (32+ chars). Never anonymous.                                           |
-| 8     | `/_`               | prefix | `skip`     | Scalar UI and the OpenAPI JSON.                                                                                                            |
-| 9     | `/api/jobs`        | prefix | `admin`    | Requires a session whose user has role `admin`. App passwords refused.                                                                     |
-| 10    | `/api/`            | prefix | `api-key`  | Default for the API: requires a session, from either credential.                                                                           |
+| Order | Pattern            | Match  | Policy     | Behaviour                                                                                                                                                              |
+| ----- | ------------------ | ------ | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1     | `/api/auth/`       | prefix | `skip`     | Better Auth authenticates its own endpoints. A prefix, so nested plugin routes stay covered.                                                                           |
+| 2     | `/api/setup`       | exact  | `public`   | No authentication. Self-guarding: 409s once any credential exists.                                                                                                     |
+| 3     | `/api/health/live` | exact  | `public`   | Liveness probe. `public`, not `optional`: resolving a session would put I/O back on an endpoint whose whole contract is that it does none.                             |
+| 4     | `/api/health`      | exact  | `optional` | Session resolved if one is presented; the response is enriched when it is.                                                                                             |
+| 5     | `/kosync/`         | prefix | `kosync`   | `x-auth-user` / `x-auth-key` against `kosync_credentials`. `users/auth` and `users/create` self-handle.                                                                |
+| 6     | `/opds`            | prefix | `opds`     | Same session lookup as `api-key`; a 401 also carries `WWW-Authenticate: Basic realm="Libris OPDS"`.                                                                    |
+| 7     | `/__test/`         | prefix | `test`     | Constant-time compare of `x-test-token` against `TEST_ROUTE_TOKEN` (32+ chars). Never anonymous.                                                                       |
+| 8     | `/_`               | prefix | `skip`     | Scalar UI and the OpenAPI JSON.                                                                                                                                        |
+| 9     | `/api/jobs`        | prefix | `admin`    | Requires a session whose user carries the `admin` role — a comma-joined multi-role value such as `admin,user` counts, parsed by `roleHasAdmin`. App passwords refused. |
+| 10    | `/api/`            | prefix | `api-key`  | Default for the API: requires a session, from either credential.                                                                                                       |
 
 The policy name `api-key` is historical; it means "authenticated", not "app password only".
 
@@ -344,9 +350,11 @@ The split exists because a subscription's user id and admin flag are baked in at
 
 Closing tears the event-bus subscription down before the transport, so "closed" means "receives nothing" rather than "will stop receiving shortly" — `ws.close()` is a handshake, and the socket stays writable until the peer answers. The connection slot is returned to the per-principal cap at the same time, for both codes: a re-scoped client must be able to dial straight back in.
 
+**Inbound frames are capped at 64 KiB.** The only client message the server acts on is the literal text `"ping"`; everything else is discarded unread. `ws`'s default cap is 100 MiB, which — across the five sockets one principal may hold — would let an authenticated client make the process buffer hundreds of MiB for nothing. The cap is assigned on the shared `WebSocketServer` in `app.ts` before any upgrade (the library reads it per handshake), and a larger frame closes the connection with the standard `1009` "message too big" code.
+
 #### CSRF
 
-Unsafe methods (`POST`/`PUT`/`PATCH`/`DELETE`) that carry a cookie are rejected with 403 when `Sec-Fetch-Site: cross-site` is present, or when an `Origin` header names a host other than the server's own (plus `localhost:3100`/`:3000` outside production). Headerless clients — an app password or OPDS request, which sends no cookie and no browser `Origin` — fall through untouched.
+Unsafe methods (`POST`/`PUT`/`PATCH`/`DELETE`) that carry a cookie are rejected with 403 when `Sec-Fetch-Site: cross-site` is present, or when an `Origin` header's canonical scheme, host, and port do not match the server's own (`localhost:3100`/`:3000` are also allowed outside production). The scheme is read from `x-forwarded-proto` only when `TRUST_PROXY_HEADERS=1`, so a TLS-terminating proxy must forward it and a same-host different-port origin is rejected. Headerless clients — an app password or OPDS request, which sends no cookie and no browser `Origin` — fall through untouched.
 
 ### Book Ownership
 
@@ -395,7 +403,7 @@ Reading and revoking your own credentials sits in `general`: those probe nothing
 
 If exposing Libris publicly, lower the defaults via env vars (e.g. `LIBRIS_RATELIMIT_GENERAL_LIMIT=100`, `LIBRIS_RATELIMIT_AUTH_LIMIT=10`).
 
-Each app-owned window starts on that client's first request, avoiding the double burst possible at global wall-clock boundaries. IP extraction reads the direct connection address by default. Forwarded headers are honored only when enabled and the immediate peer belongs to `LIBRIS_TRUSTED_PROXIES`; the chain is walked right-to-left past trusted hops. IPv6 addresses share a `/64` bucket. Credential checks also receive a hashed per-credential budget alongside their address budget, preventing source-address rotation from resetting guesses against one account. Deriving that budget means reading the username or email out of the JSON body, so the limiter caps what it will parse at 8 KB — and a credential body over that cap (`POST /api/auth/sign-in/email`, `POST /kosync/users/auth`) is answered with 413 rather than let through unbucketed. Padding the body would otherwise be a way out of the per-credential budget, and on the sign-in path there is no app-owned per-IP tier behind it to catch the overflow. No legitimate sign-in or KOReader login body comes anywhere near 8 KB. The same resolved address is injected into Better Auth and access logs, so authentication, limiting, and incident records cannot disagree. Rate limiting stays enabled in development through the in-memory store; only the explicit E2E switch disables it.
+Each app-owned window starts on that client's first request, avoiding the double burst possible at global wall-clock boundaries. IP extraction reads the direct connection address by default. Forwarded headers are honored only when enabled and the immediate peer belongs to `LIBRIS_TRUSTED_PROXIES`; the chain is walked right-to-left past trusted hops. IPv6 addresses share a `/64` bucket. Credential checks also receive a hashed per-credential budget alongside their address budget, preventing source-address rotation from resetting guesses against one account. The identity is always what the handler verifies: `POST /kosync/users/auth` buckets by the username in its JSON body and ignores `x-auth-user`, so a header that disagrees with the body cannot buy a fresh budget. On the high-frequency progress routes the per-credential budget counts only failed checks — a locked-out identity is refused before verification, while a working device that keeps syncing never spends the budget — and a success clears recorded failures. Deriving a budget means reading the username or email out of the JSON body, so the limiter caps what it will parse at 8 KB — and a credential body over that cap (`POST /api/auth/sign-in/email`, `POST /kosync/users/auth`) is answered with 413 rather than let through unbucketed. Padding the body would otherwise be a way out of the per-credential budget, and on the sign-in path there is no app-owned per-IP tier behind it to catch the overflow. No legitimate sign-in or KOReader login body comes anywhere near 8 KB. The same resolved address is injected into Better Auth and access logs, so authentication, limiting, and incident records cannot disagree. Rate limiting stays enabled in development through the in-memory store; only the explicit E2E switch disables it.
 
 ## Book Ingestion Pipeline
 
@@ -408,16 +416,16 @@ flowchart TD
     C --> |"Extract metadata from EPUB/PDF\n(Dublin Core, XMP, PDF Info)"| D["BOOK_FETCH_METADATA"]
     D --> |"Query Hardcover\nInsert candidates, detect duplicates\nSet status → review"| E["👤 User reviews candidates"]
     E --> |"Pick fields from sources, approve"| F["BOOK_ORGANIZE"]
-    F --> |"Move to /library/Author/Title/\nDownload cover, embed metadata in EPUB\nCompute MD5, set status → organized"| G["✅ Organized"]
+    F --> |"Move to /library/Author/Title (book id)/ with no-clobber naming\nDownload cover, embed metadata in EPUB\nCompute MD5, set status → organized"| G["✅ Organized"]
     G -.-> |"Refetch metadata\n(POST /api/library/id/refetch)"| D
     G -.-> |"Re-organize\n(POST /api/library/id/reorganize)"| F
 ```
 
 `BOOK_FETCH_METADATA` queries Hardcover, the sole external metadata source. A Hardcover miss is not fatal: the book is still promoted to review using the file-derived candidate. The chain ends at `status = 'review'` — `BOOK_ORGANIZE` is a manual gate and is never auto-enqueued. It runs only when a user approves the book (the approve endpoint enqueues it). EPUB is the only ingested format; other formats are silently ignored.
 
-Queue payloads are treated as untrusted input. The detect and parse workers require absolute, existing file paths whose canonical targets remain inside `LIBRIS_INBOX_PATH`; invalid paths fail without retrying or writing database rows. Organization sanitizes metadata-derived author and title components, including dot segments and reserved filesystem names, and validates the complete destination inside `LIBRIS_LIBRARY_PATH` before creating directories. File-serving routes apply the same canonical boundary check, returning 404 for a missing file and 403 for an attempted escape.
+Queue payloads are treated as untrusted input. The detect and parse workers require absolute, existing file paths whose canonical targets remain inside `LIBRIS_INBOX_PATH`; invalid paths fail without retrying or writing database rows. Organization sanitizes metadata-derived author and title components, including dot segments and reserved filesystem names, validates the complete destination inside `LIBRIS_LIBRARY_PATH` before creating directories, and places each book in its own id-suffixed directory under that author/title. Files move with a no-clobber operation, so an existing file is never silently replaced; a retry after a crash between the move and the database update adopts the destination only when its checksum matches the recorded one. File-serving routes apply the same canonical boundary check, returning 404 for a missing file and 403 for an attempted escape.
 
-Uploads are rejected before writing unless the content is a structurally valid EPUB ZIP whose first entry is the uncompressed `mimetype` file containing `application/epub+zip`. EPUB ZIP processing then enforces a 16 MiB uncompressed limit per entry and a 64 MiB total archive budget. DEFLATE runs asynchronously with an output ceiling, so a lying central directory cannot bypass the declared-size check or synchronously block the HTTP process. OPF documents have a tighter 2 MiB input limit and bounded, linear metadata element scanning. When approved metadata is embedded, the rebuilt EPUB preserves the original compression method for existing entries; the required first `mimetype` entry remains uncompressed.
+Uploads are rejected before writing unless the content is a structurally valid EPUB ZIP whose first entry is the uncompressed `mimetype` file containing `application/epub+zip`. The multipart request is bounded before any of that: an aggregate configurable byte cap is enforced as the body streams (chunked bodies included, so nothing is buffered to measure it) and a file-count cap refuses oversized batches. EPUB ZIP processing then enforces a 16 MiB uncompressed limit per entry and a 64 MiB total archive budget. DEFLATE runs asynchronously with an output ceiling, so a lying central directory cannot bypass the declared-size check or synchronously block the HTTP process. OPF documents are capped at 256 KiB for metadata extraction, with bounded, linear element scanning. When approved metadata is embedded, the rebuilt EPUB preserves the original compression method for existing entries; the required first `mimetype` entry remains uncompressed. The rewrite itself runs in a `node:worker_threads` worker with a hard timeout (`LIBRIS_EMBED_TIMEOUT_MS`), so synchronous DEFLATE recompression and OPF scanning cannot stall the HTTP event loop; a worker crash, timeout, or an OPF over `LIBRIS_MAX_EMBED_OPF_BYTES` (default 1 MiB) simply leaves that book un-embedded, and the organize worker logs and continues.
 
 Every organize enqueue uses a deterministic per-book job ID, collapsing concurrent duplicate requests while a job is waiting or active. User-triggered reorganization is limited to ten in-flight jobs per user. XML-invalid metadata controls are removed during ingestion and again at OPDS serialization, ensuring a dirty database row cannot make an entire Atom feed malformed. Persisted external cover values are limited to credential-free HTTP(S) URLs; DNS and address validation remains the fetcher's responsibility.
 

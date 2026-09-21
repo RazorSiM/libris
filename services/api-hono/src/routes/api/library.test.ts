@@ -1,7 +1,13 @@
 import { afterAll, beforeAll, describe, expect, it } from "vite-plus/test";
 import type { PGlite } from "@electric-sql/pglite";
 import { createApp } from "../../app.js";
-import { createTestAuth, createTestDb, seedAppPassword, type TestDb } from "../../db/test-utils.js";
+import {
+  createFakeJobQueue,
+  createTestAuth,
+  createTestDb,
+  seedAppPassword,
+  type TestDb,
+} from "../../db/test-utils.js";
 import * as schema from "../../db/schema.js";
 import type { Env } from "../../env.js";
 import { createMemoryKVStore } from "../../services/kv-store.js";
@@ -32,6 +38,10 @@ const TEST_ENV: Env = {
   LIBRIS_RATELIMIT_AUTH_WINDOW_SECONDS: 60,
   LIBRIS_RATELIMIT_KEY_CREATION_LIMIT: 30,
   LIBRIS_RATELIMIT_KEY_CREATION_WINDOW_SECONDS: 3600,
+  LIBRIS_MAX_UPLOAD_BYTES: 1024 * 1024 * 1024,
+  LIBRIS_MAX_UPLOAD_FILES: 20,
+  LIBRIS_MAX_EMBED_OPF_BYTES: 1024 * 1024,
+  LIBRIS_EMBED_TIMEOUT_MS: 30_000,
   LIBRIS_HTTP_HEADERS_TIMEOUT_MS: 10_000,
   LIBRIS_HTTP_REQUEST_TIMEOUT_MS: 30_000,
   LIBRIS_HTTP_IDLE_TIMEOUT_MS: 30_000,
@@ -101,6 +111,30 @@ function createOrganizeRecordingApp() {
     env: TEST_ENV,
   });
   return { app, organizeJobs };
+}
+
+/** Build an app whose metadata queue records the refetch jobs it receives. */
+function createRefetchRecordingApp() {
+  const queue = createFakeJobQueue();
+  const { app } = createApp({
+    services: {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      db: db as any,
+      queues: {
+        bookDetected: { add: async () => ({}) },
+        bookParseFile: { add: async () => ({}) },
+        bookFetchMetadata: queue as never,
+        bookOrganize: { add: async () => ({}) },
+        close: async () => {},
+      },
+      redisStorage: createMemoryKVStore(),
+      cacheStorage: createMemoryKVStore(),
+      auth: createTestAuth(db, TEST_ENV),
+      shutdown: async () => {},
+    },
+    env: TEST_ENV,
+  });
+  return { app, queue };
 }
 
 beforeAll(async () => {
@@ -362,6 +396,27 @@ describe("GET /api/library", () => {
     // Pre-fix this returned exactly A's books, which is the enumeration step.
     expect(body.data).toHaveLength(0);
     expect(body.pagination.total).toBe(0);
+  });
+
+  it("answers punctuation-only searches instead of a tsquery syntax error", async () => {
+    const { userId, rawKey } = await seedApiKey("Punctuation Search Key");
+    await db
+      .insert(schema.books)
+      .values({ status: "organized", title: "Punctuation Volume", createdBy: userId });
+
+    const { app } = createTestApp();
+    for (const q of ["'", "''", '"', "\\", "foo&'", "bar'"]) {
+      const response = await app.request(`/api/library?q=${encodeURIComponent(q)}`, {
+        headers: { Authorization: `Bearer ${rawKey}` },
+      });
+      expect(response.status, JSON.stringify(q)).toBe(200);
+    }
+
+    const found = await app.request("/api/library?q=Punctuation", {
+      headers: { Authorization: `Bearer ${rawKey}` },
+    });
+    const foundBody = await found.json();
+    expect(foundBody.data).toHaveLength(1);
   });
 });
 
@@ -715,6 +770,65 @@ describe("Manual reading status override", () => {
     expect(body.pausedAt).toBeNull();
     // The user actively chose "unread" — that's still a manual override.
     expect(body.manuallySet).toBe(true);
+  });
+});
+
+describe("POST /api/library/:id/refetch", () => {
+  async function refetch(
+    app: ReturnType<typeof createRefetchRecordingApp>["app"],
+    rawKey: string,
+    id: string,
+  ) {
+    return app.request(`/api/library/${id}/refetch`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${rawKey}` },
+    });
+  }
+
+  async function seedOrganizedBook(userId: string, title: string) {
+    const [book] = await db
+      .insert(schema.books)
+      .values({ status: "organized", title, author: "Author", createdBy: userId })
+      .returning({ id: schema.books.id });
+    return book.id;
+  }
+
+  it("collapses repeated refetches of the same book into one job", async () => {
+    const { userId, rawKey } = await seedApiKey("Refetch Dedup");
+    const bookId = await seedOrganizedBook(userId, "Refetch Dedup Book");
+    const { app, queue } = createRefetchRecordingApp();
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const response = await refetch(app, rawKey, bookId);
+      expect(response.status).toBe(200);
+    }
+
+    expect(queue.adds).toHaveLength(1);
+  });
+
+  it("caps a user's in-flight refetches but not another user's", async () => {
+    const alice = await seedApiKey("Refetch Cap Alice");
+    const bob = await seedApiKey("Refetch Cap Bob");
+    const { app, queue } = createRefetchRecordingApp();
+
+    // Alice fills the budget (10) with ten distinct books.
+    for (let i = 0; i < 10; i += 1) {
+      const bookId = await seedOrganizedBook(alice.userId, `Cap Book ${i}`);
+      expect((await refetch(app, alice.rawKey, bookId)).status).toBe(200);
+    }
+    expect(queue.adds).toHaveLength(10);
+
+    // Her eleventh is refused rather than queued.
+    const eleventh = await seedOrganizedBook(alice.userId, "Cap Book 10");
+    const capped = await refetch(app, alice.rawKey, eleventh);
+    expect(capped.status).toBe(429);
+    expect((await capped.json()).error).toMatch(/too many/i);
+    expect(queue.adds).toHaveLength(10);
+
+    // The cap is per user: Bob can still refetch his own book.
+    const bobBook = await seedOrganizedBook(bob.userId, "Bob Book");
+    expect((await refetch(app, bob.rawKey, bobBook)).status).toBe(200);
+    expect(queue.adds).toHaveLength(11);
   });
 });
 

@@ -1,0 +1,487 @@
+/**
+ * Regression coverage for the organize worker's file handling.
+ *
+ * The pre-fix worker built the destination from author/title/basename alone and
+ * moved with `rename`, which silently replaces an existing path. Two books with
+ * the same metadata and filename therefore shared one file, and a retry after
+ * "moved but the database update failed" could not recover. These run the real
+ * worker against a real database and filesystem.
+ */
+import { mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, relative } from "node:path";
+import type { PGlite } from "@electric-sql/pglite";
+import { eq } from "drizzle-orm";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vite-plus/test";
+import { createTestDb, seedUser, type TestDb } from "../db/test-utils.js";
+import * as schema from "../db/schema.js";
+import { __setTestEnv, type Env } from "../env.js";
+import { computeChecksumFromBuffer } from "../shared/checksum.js";
+import { computePartialMd5 } from "../lib/content-hash.js";
+import { __setTestDb } from "../services/db.js";
+import { bookDirectorySuffix, processBookOrganize, sanitizeName } from "./book-organize.js";
+
+const { embedEpubMetadata, fetchExternalImage } = vi.hoisted(() => ({
+  embedEpubMetadata: vi.fn(async (_filePath: string) => {}),
+  fetchExternalImage: vi.fn(),
+}));
+
+vi.mock("../lib/epub/embed-metadata.js", () => ({ embedEpubMetadata }));
+vi.mock("../shared/secure-image-fetch.js", () => ({ fetchExternalImage }));
+
+let pglite: PGlite;
+let db: TestDb;
+let ownerId: string;
+let libraryPath: string;
+let inboxRoot: string;
+
+function testEnv(): Env {
+  return {
+    NODE_ENV: "test",
+    PORT: 3000,
+    DATABASE_URL: "pglite://",
+    REDIS_URL: "redis://localhost:6379",
+    LIBRIS_INBOX_PATH: inboxRoot,
+    LIBRIS_LIBRARY_PATH: libraryPath,
+    LIBRIS_COVER_FETCH_ALLOWLIST: [],
+    API_SECRET_KEY: "test-secret-key-at-least-32-characters-long!!",
+    BETTER_AUTH_SECRET: "test-better-auth-secret-at-least-32-chars!!",
+    BETTER_AUTH_URL: "",
+    LIBRIS_COOKIE_SECURE: "0",
+    MIGRATIONS_PATH: "./migrations",
+    TRUST_PROXY_HEADERS: "0",
+    LIBRIS_TRUSTED_PROXIES: [],
+    E2E_TEST: "",
+    LOG_LEVEL: "info",
+    LIBRIS_RATELIMIT_GENERAL_LIMIT: 600,
+    LIBRIS_RATELIMIT_GENERAL_WINDOW_SECONDS: 60,
+    LIBRIS_RATELIMIT_AUTH_LIMIT: 30,
+    LIBRIS_RATELIMIT_AUTH_WINDOW_SECONDS: 60,
+    LIBRIS_RATELIMIT_KEY_CREATION_LIMIT: 30,
+    LIBRIS_RATELIMIT_KEY_CREATION_WINDOW_SECONDS: 3600,
+    LIBRIS_HTTP_HEADERS_TIMEOUT_MS: 10_000,
+    LIBRIS_HTTP_REQUEST_TIMEOUT_MS: 30_000,
+    LIBRIS_HTTP_IDLE_TIMEOUT_MS: 30_000,
+    LIBRIS_MAX_UPLOAD_BYTES: 1024 * 1024 * 1024,
+    LIBRIS_MAX_UPLOAD_FILES: 20,
+    LIBRIS_MAX_EMBED_OPF_BYTES: 1024 * 1024,
+    LIBRIS_EMBED_TIMEOUT_MS: 30_000,
+  };
+}
+
+beforeAll(async () => {
+  inboxRoot = await mkdtemp(join(tmpdir(), "libris-organize-inbox-"));
+  libraryPath = await mkdtemp(join(tmpdir(), "libris-organize-library-"));
+  __setTestEnv(testEnv());
+
+  const testDb = await createTestDb();
+  pglite = testDb.pglite;
+  db = testDb.db;
+  ownerId = await seedUser(db);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  __setTestDb(db as any);
+});
+
+afterEach(async () => {
+  embedEpubMetadata.mockClear();
+  fetchExternalImage.mockReset();
+  await db.delete(schema.bookFiles);
+  await db.delete(schema.books);
+});
+
+afterAll(async () => {
+  await pglite.close();
+  await Promise.all([
+    rm(inboxRoot, { recursive: true, force: true }),
+    rm(libraryPath, { recursive: true, force: true }),
+  ]);
+});
+
+function job(data: Record<string, unknown>) {
+  return { data, log: vi.fn().mockResolvedValue(undefined) } as never;
+}
+
+let seedSeq = 0;
+
+async function seedBook(options: {
+  title?: string;
+  author?: string;
+  status?: "inbox" | "review" | "organized";
+  coverUrl?: string | null;
+}) {
+  seedSeq += 1;
+  const [book] = await db
+    .insert(schema.books)
+    .values({
+      status: options.status ?? "review",
+      title: options.title ?? "Collision",
+      author: options.author ?? "Same Author",
+      coverUrl: options.coverUrl ?? null,
+      createdBy: ownerId,
+    })
+    .returning({ id: schema.books.id });
+  return book.id;
+}
+
+async function seedInboxFile(bookId: string, fileName: string, content: string) {
+  const dir = await mkdtemp(join(inboxRoot, `upload-${seedSeq}-`));
+  const path = join(dir, fileName);
+  await writeFile(path, content);
+  const checksum = computeChecksumFromBuffer(Buffer.from(content));
+  const [row] = await db
+    .insert(schema.bookFiles)
+    .values({
+      bookId,
+      format: "epub",
+      originalName: fileName,
+      inboxPath: path,
+      fileSize: Buffer.byteLength(content),
+      checksum,
+    })
+    .returning({ id: schema.bookFiles.id });
+  return { id: row.id, path, checksum };
+}
+
+async function storagePathFor(bookId: string): Promise<string | null> {
+  const [row] = await db
+    .select({ storagePath: schema.bookFiles.storagePath })
+    .from(schema.bookFiles)
+    .where(eq(schema.bookFiles.bookId, bookId));
+  return row?.storagePath ?? null;
+}
+
+describe("processBookOrganize destination isolation", () => {
+  it("keeps both files when two books share metadata and filename", async () => {
+    const bookA = await seedBook({ title: "Collision", author: "Same Author" });
+    const bookB = await seedBook({ title: "Collision", author: "Same Author" });
+    await seedInboxFile(bookA, "book.epub", "BOOK-A");
+    await seedInboxFile(bookB, "book.epub", "BOOK-B");
+
+    await processBookOrganize(job({ bookId: bookA }));
+    await processBookOrganize(job({ bookId: bookB }));
+
+    const pathA = await storagePathFor(bookA);
+    const pathB = await storagePathFor(bookB);
+    expect(pathA).toBeTruthy();
+    expect(pathB).toBeTruthy();
+    expect(pathA).not.toBe(pathB);
+    expect(await readFile(join(libraryPath, pathA!), "utf8")).toBe("BOOK-A");
+    expect(await readFile(join(libraryPath, pathB!), "utf8")).toBe("BOOK-B");
+  });
+
+  it("keeps both files when the two organizes run concurrently", async () => {
+    const bookA = await seedBook({ title: "Concurrent", author: "Same Author" });
+    const bookB = await seedBook({ title: "Concurrent", author: "Same Author" });
+    await seedInboxFile(bookA, "book.epub", "CONCURRENT-A");
+    await seedInboxFile(bookB, "book.epub", "CONCURRENT-B");
+
+    await Promise.all([
+      processBookOrganize(job({ bookId: bookA })),
+      processBookOrganize(job({ bookId: bookB })),
+    ]);
+
+    const pathA = await storagePathFor(bookA);
+    const pathB = await storagePathFor(bookB);
+    expect(pathA).not.toBe(pathB);
+    expect(await readFile(join(libraryPath, pathA!), "utf8")).toBe("CONCURRENT-A");
+    expect(await readFile(join(libraryPath, pathB!), "utf8")).toBe("CONCURRENT-B");
+  });
+
+  it("puts each book in an id-suffixed directory under the same author/title", async () => {
+    const bookId = await seedBook({ title: "Suffixed", author: "Same Author" });
+    await seedInboxFile(bookId, "book.epub", "SUFFIXED");
+
+    await processBookOrganize(job({ bookId }));
+
+    const storagePath = await storagePathFor(bookId);
+    expect(storagePath).toBe(
+      join(
+        sanitizeName("Same Author"),
+        `${sanitizeName("Suffixed")} (${bookDirectorySuffix(bookId)})`,
+        "book.epub",
+      ),
+    );
+  });
+});
+
+describe("processBookOrganize retry recovery", () => {
+  it("adopts a verified destination when the database update never landed", async () => {
+    const bookId = await seedBook({ title: "Recovered", author: "Same Author" });
+    const seeded = await seedInboxFile(bookId, "book.epub", "RECOVER-ME");
+
+    const first = await processBookOrganize(job({ bookId }));
+    expect(first).toBeUndefined();
+
+    // Simulate the crash window: the move happened, the database update did not.
+    await db
+      .update(schema.bookFiles)
+      .set({ inboxPath: seeded.path, storagePath: null, contentHash: null })
+      .where(eq(schema.bookFiles.id, seeded.id));
+
+    await expect(processBookOrganize(job({ bookId }))).resolves.toBeUndefined();
+
+    const [row] = await db
+      .select({
+        storagePath: schema.bookFiles.storagePath,
+        inboxPath: schema.bookFiles.inboxPath,
+      })
+      .from(schema.bookFiles)
+      .where(eq(schema.bookFiles.id, seeded.id));
+    expect(row.storagePath).toBeTruthy();
+    expect(row.inboxPath).toBeNull();
+    expect(await readFile(join(libraryPath, row.storagePath!), "utf8")).toBe("RECOVER-ME");
+  });
+
+  it("refuses to adopt a destination whose content does not match", async () => {
+    const bookId = await seedBook({ title: "Mismatch", author: "Same Author" });
+    const destDir = join(
+      libraryPath,
+      sanitizeName("Same Author"),
+      `${sanitizeName("Mismatch")} (${bookDirectorySuffix(bookId)})`,
+    );
+    await mkdir(destDir, { recursive: true });
+    await writeFile(join(destDir, "book.epub"), "SOMEBODY-ELSE");
+
+    await db.insert(schema.bookFiles).values({
+      bookId,
+      format: "epub",
+      originalName: "book.epub",
+      inboxPath: join(inboxRoot, "never-existed", "book.epub"),
+      fileSize: 6,
+      checksum: computeChecksumFromBuffer(Buffer.from("THE-REAL-BYTES")),
+    });
+
+    await expect(processBookOrganize(job({ bookId }))).rejects.toThrow(/Source file not found/);
+    expect(await storagePathFor(bookId)).toBeNull();
+    expect(await readFile(join(destDir, "book.epub"), "utf8")).toBe("SOMEBODY-ELSE");
+  });
+
+  it("recovers a re-organize when embedding rewrote the file past the upload checksum", async () => {
+    const bookId = await seedBook({
+      title: "Renamed",
+      author: "Same Author",
+      status: "organized",
+    });
+    const legacyDir = join(libraryPath, sanitizeName("Same Author"), sanitizeName("Old Name"));
+    await mkdir(legacyDir, { recursive: true });
+    const legacyPath = join(legacyDir, "book.epub");
+    await writeFile(legacyPath, "POST-EMBED-BYTES");
+
+    // The row left behind by a crash between the move and the database update:
+    // `checksum` is the upload's SHA-256 and was never rewritten, while the
+    // on-disk bytes are the embedded file the previous organize wrote.
+    await db.insert(schema.bookFiles).values({
+      bookId,
+      format: "epub",
+      originalName: "book.epub",
+      storagePath: relative(libraryPath, legacyPath),
+      fileSize: Buffer.byteLength("POST-EMBED-BYTES"),
+      checksum: computeChecksumFromBuffer(Buffer.from("ORIGINAL-UPLOAD-BYTES")),
+      contentHash: await computePartialMd5(legacyPath),
+      originalContentHash: "0".repeat(32),
+    });
+
+    // Simulate the move the crashed attempt completed.
+    const destDir = join(
+      libraryPath,
+      sanitizeName("Same Author"),
+      `${sanitizeName("Renamed")} (${bookDirectorySuffix(bookId)})`,
+    );
+    await mkdir(destDir, { recursive: true });
+    await rename(legacyPath, join(destDir, "book.epub"));
+
+    await expect(processBookOrganize(job({ bookId }))).resolves.toBeUndefined();
+
+    const storagePath = await storagePathFor(bookId);
+    expect(storagePath).toBe(relative(libraryPath, join(destDir, "book.epub")));
+    expect(await readFile(join(libraryPath, storagePath!), "utf8")).toBe("POST-EMBED-BYTES");
+  });
+
+  it("removes a leftover .tmp file when the embed worker fails", async () => {
+    const bookId = await seedBook({ title: "TmpLeftover", author: "Same Author" });
+    await seedInboxFile(bookId, "book.epub", "TMP-CONTENT");
+
+    embedEpubMetadata.mockImplementationOnce(async (filePath: string) => {
+      await writeFile(`${filePath}.tmp`, "half-written");
+      throw new Error("worker died");
+    });
+
+    await expect(processBookOrganize(job({ bookId }))).resolves.toBeUndefined();
+
+    const storagePath = await storagePathFor(bookId);
+    expect(storagePath).toBeTruthy();
+    const finalPath = join(libraryPath, storagePath!);
+    expect(await readFile(finalPath, "utf8")).toBe("TMP-CONTENT");
+    await expect(stat(`${finalPath}.tmp`)).rejects.toThrow();
+  });
+});
+
+describe("processBookOrganize legacy directory cleanup", () => {
+  async function seedLegacyBook(options: { title: string; fileName: string; coverUrl?: string }) {
+    const bookId = await seedBook({
+      title: options.title,
+      author: "Same Author",
+      status: "organized",
+      coverUrl: options.coverUrl ?? null,
+    });
+    const legacyDir = join(libraryPath, sanitizeName("Same Author"), sanitizeName(options.title));
+    await mkdir(legacyDir, { recursive: true });
+    const filePath = join(legacyDir, options.fileName);
+    const content = `LEGACY-${options.fileName}`;
+    await writeFile(filePath, content);
+    await db.insert(schema.bookFiles).values({
+      bookId,
+      format: "epub",
+      originalName: options.fileName,
+      storagePath: relative(libraryPath, filePath),
+      fileSize: Buffer.byteLength(content),
+      contentHash: await computePartialMd5(filePath),
+    });
+    return { bookId, legacyDir };
+  }
+
+  it("keeps a shared legacy cover while another book still references it", async () => {
+    const bookA = await seedLegacyBook({
+      title: "Shared",
+      fileName: "a.epub",
+      coverUrl: "https://example.com/a.jpg",
+    });
+    const bookB = await seedLegacyBook({ title: "Shared", fileName: "b.epub" });
+    const sharedCover = join(bookA.legacyDir, "cover.jpg");
+    await writeFile(sharedCover, "SHARED-COVER");
+    const sharedCoverStoragePath = relative(libraryPath, sharedCover);
+    for (const id of [bookA.bookId, bookB.bookId]) {
+      await db
+        .update(schema.books)
+        .set({ coverPath: sharedCoverStoragePath })
+        .where(eq(schema.books.id, id));
+    }
+
+    fetchExternalImage.mockResolvedValue({
+      data: Buffer.from("NEW-COVER"),
+      contentType: "image/jpeg",
+    });
+    await processBookOrganize(job({ bookId: bookA.bookId }));
+
+    expect(await readFile(sharedCover, "utf8")).toBe("SHARED-COVER");
+    expect(await readFile(join(bookA.legacyDir, "b.epub"), "utf8")).toBe("LEGACY-b.epub");
+  });
+
+  it("removes an unreferenced legacy cover and its directory", async () => {
+    const book = await seedLegacyBook({
+      title: "Alone",
+      fileName: "book.epub",
+      coverUrl: "https://example.com/a.jpg",
+    });
+    const legacyCover = join(book.legacyDir, "cover.jpg");
+    await writeFile(legacyCover, "OLD-COVER");
+    await db
+      .update(schema.books)
+      .set({ coverPath: relative(libraryPath, legacyCover) })
+      .where(eq(schema.books.id, book.bookId));
+
+    fetchExternalImage.mockResolvedValue({
+      data: Buffer.from("NEW-COVER"),
+      contentType: "image/jpeg",
+    });
+    await processBookOrganize(job({ bookId: book.bookId }));
+
+    await expect(stat(book.legacyDir)).rejects.toThrow();
+    const [row] = await db
+      .select({ coverPath: schema.books.coverPath })
+      .from(schema.books)
+      .where(eq(schema.books.id, book.bookId));
+    expect(row.coverPath).toContain("Alone (");
+  });
+});
+
+describe("processBookOrganize cover replacement", () => {
+  it("keeps the existing cover when a forced re-download fails", async () => {
+    const bookId = await seedBook({
+      title: "Covered",
+      author: "Same Author",
+      status: "organized",
+      coverUrl: "https://example.com/cover.jpg",
+    });
+    const destDir = join(
+      libraryPath,
+      sanitizeName("Same Author"),
+      `${sanitizeName("Covered")} (${bookDirectorySuffix(bookId)})`,
+    );
+    await mkdir(destDir, { recursive: true });
+    await writeFile(join(destDir, "book.epub"), "BOOK-BYTES");
+    await writeFile(join(destDir, "cover.jpg"), "OLD-COVER");
+
+    await db.insert(schema.bookFiles).values({
+      bookId,
+      format: "epub",
+      originalName: "book.epub",
+      storagePath: relative(libraryPath, join(destDir, "book.epub")),
+      fileSize: 10,
+      checksum: computeChecksumFromBuffer(Buffer.from("BOOK-BYTES")),
+    });
+    const coverStoragePath = relative(libraryPath, join(destDir, "cover.jpg"));
+    await db
+      .update(schema.books)
+      .set({ coverPath: coverStoragePath })
+      .where(eq(schema.books.id, bookId));
+
+    fetchExternalImage.mockRejectedValue(new Error("network down"));
+
+    await processBookOrganize(job({ bookId, forceRedownloadCover: true }));
+
+    expect(await readFile(join(destDir, "cover.jpg"), "utf8")).toBe("OLD-COVER");
+    const [book] = await db
+      .select({ coverPath: schema.books.coverPath })
+      .from(schema.books)
+      .where(eq(schema.books.id, bookId));
+    expect(book.coverPath).toBe(coverStoragePath);
+  });
+
+  it("replaces the existing cover when a forced re-download succeeds", async () => {
+    const bookId = await seedBook({
+      title: "Recovered",
+      author: "Same Author",
+      status: "organized",
+      coverUrl: "https://example.com/new-cover.jpg",
+    });
+    const destDir = join(
+      libraryPath,
+      sanitizeName("Same Author"),
+      `${sanitizeName("Recovered")} (${bookDirectorySuffix(bookId)})`,
+    );
+    await mkdir(destDir, { recursive: true });
+    await writeFile(join(destDir, "book.epub"), "BOOK-BYTES");
+    await writeFile(join(destDir, "cover.jpg"), "OLD-COVER");
+
+    await db.insert(schema.bookFiles).values({
+      bookId,
+      format: "epub",
+      originalName: "book.epub",
+      storagePath: relative(libraryPath, join(destDir, "book.epub")),
+      fileSize: 10,
+      checksum: computeChecksumFromBuffer(Buffer.from("BOOK-BYTES")),
+    });
+    const coverStoragePath = relative(libraryPath, join(destDir, "cover.jpg"));
+    await db
+      .update(schema.books)
+      .set({ coverPath: coverStoragePath })
+      .where(eq(schema.books.id, bookId));
+
+    fetchExternalImage.mockResolvedValue({
+      data: Buffer.from("NEW-COVER"),
+      contentType: "image/jpeg",
+    });
+
+    await processBookOrganize(job({ bookId, forceRedownloadCover: true }));
+
+    expect(await readFile(join(destDir, "cover.jpg"), "utf8")).toBe("NEW-COVER");
+    // The temp file is moved over the destination, never left behind.
+    await expect(stat(join(destDir, "cover.jpg.tmp"))).rejects.toThrow();
+    const [book] = await db
+      .select({ coverPath: schema.books.coverPath })
+      .from(schema.books)
+      .where(eq(schema.books.id, bookId));
+    expect(book.coverPath).toBe(coverStoragePath);
+  });
+});

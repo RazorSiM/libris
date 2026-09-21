@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 import { parseEnv, parseRedisUrl } from "./env";
+import { resolveRedisUrl } from "./lib/resolve-redis-url";
 
 /**
  * BETTER_AUTH_SECRET is a *required* variable — a deliberate breaking change for
@@ -272,6 +273,59 @@ describe("parseRedisUrl", () => {
       port: 6379,
       password: "token",
       tls: {},
+    });
+  });
+
+  it("parses an ACL username and decodes a reserved-character password", () => {
+    const result = parseRedisUrl("redis://app:example%3Ap%40ss@myhost:6379");
+    expect(result).toEqual({
+      host: "myhost",
+      port: 6379,
+      username: "app",
+      password: "example:p@ss",
+    });
+  });
+
+  it("decodes reserved characters in the username", () => {
+    const result = parseRedisUrl("redis://app%40tenant:p%2Fw%2Ford@myhost:6379");
+    expect(result.username).toBe("app@tenant");
+    expect(result.password).toBe("p/w/ord");
+  });
+
+  it("keeps an explicit empty password when a username is present", () => {
+    const result = parseRedisUrl("redis://app:@myhost:6379");
+    expect(result.username).toBe("app");
+    expect(result.password).toBe("");
+  });
+
+  it("parses username, password, and tls for rediss:// with ACL auth", () => {
+    const result = parseRedisUrl("rediss://app:p%40ss@prod-host:6380");
+    expect(result).toEqual({
+      host: "prod-host",
+      port: 6380,
+      username: "app",
+      password: "p@ss",
+      tls: {},
+    });
+  });
+
+  it("throws a descriptive error on malformed percent-encoding", () => {
+    expect(() => parseRedisUrl("redis://app:%ZZ@myhost:6379")).toThrow(/REDIS_URL/);
+    expect(() => parseRedisUrl("redis://ap%ZZ:secret@myhost:6379")).toThrow(/REDIS_URL/);
+  });
+
+  it("round-trips credentials built by resolveRedisUrl", () => {
+    const url = resolveRedisUrl({
+      REDIS_HOST: "myhost",
+      REDIS_USER: "app",
+      REDIS_PASSWORD: "example:p@ss",
+    });
+    expect(url).toBe("redis://app:example%3Ap%40ss@myhost:6379");
+    expect(parseRedisUrl(url!)).toEqual({
+      host: "myhost",
+      port: 6379,
+      username: "app",
+      password: "example:p@ss",
     });
   });
 });

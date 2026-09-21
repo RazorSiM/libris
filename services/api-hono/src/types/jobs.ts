@@ -18,6 +18,8 @@ export const BookFetchMetadataPayloadSchema = z.object({
   bookId: z.string(),
   searchQuery: z.string(),
   skipStatusChange: z.boolean().optional(),
+  /** Who asked for a manual refetch/rescan; drives the per-user in-flight cap. */
+  requestedBy: z.string().optional(),
 });
 
 export const BookOrganizePayloadSchema = z.object({

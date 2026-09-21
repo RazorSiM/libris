@@ -23,6 +23,13 @@ export interface CreateAppOptions {
   env: Env;
 }
 
+/**
+ * Frame cap for the event WebSocket. The only client message the server acts
+ * on is the literal text "ping"; 64 KiB leaves ample room for any future
+ * control message while keeping `ws`'s 100 MiB default out of reach.
+ */
+export const MAX_WS_PAYLOAD_BYTES = 64 * 1024;
+
 export function createApp({ services, env }: CreateAppOptions) {
   const includeTestRoutes = env.NODE_ENV === "test" || env.E2E_TEST === "1";
   // The hook this installs only ever reaches routes defined directly on this
@@ -30,7 +37,14 @@ export function createApp({ services, env }: CreateAppOptions) {
   const app = createOpenApiRouter<{ Variables: AppVariables }>({ strict: false });
 
   // eslint-disable-next-line @typescript-eslint/unbound-method
-  const { injectWebSocket, upgradeWebSocket } = createNodeWebSocket({ app });
+  const { injectWebSocket, upgradeWebSocket, wss } = createNodeWebSocket({ app });
+
+  // The event socket only ever accepts the literal text "ping" from clients;
+  // anything bigger is discarded unread. `ws` defaults to a 100 MiB frame cap,
+  // so an authenticated client could make the server buffer hundreds of MiB
+  // across its allowed sockets. `ws` reads `maxPayload` per upgrade, so setting
+  // it here — before any handshake — applies to every connection.
+  wss.options.maxPayload = MAX_WS_PAYLOAD_BYTES;
 
   // Inject services into every request context
   app.use("*", async (c, next) => {

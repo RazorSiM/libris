@@ -64,6 +64,10 @@ const TEST_ENV: Env = {
   LIBRIS_RATELIMIT_AUTH_WINDOW_SECONDS: 60,
   LIBRIS_RATELIMIT_KEY_CREATION_LIMIT: 30,
   LIBRIS_RATELIMIT_KEY_CREATION_WINDOW_SECONDS: 3600,
+  LIBRIS_MAX_UPLOAD_BYTES: 1024 * 1024 * 1024,
+  LIBRIS_MAX_UPLOAD_FILES: 20,
+  LIBRIS_MAX_EMBED_OPF_BYTES: 1024 * 1024,
+  LIBRIS_EMBED_TIMEOUT_MS: 30_000,
   LIBRIS_HTTP_HEADERS_TIMEOUT_MS: 10_000,
   LIBRIS_HTTP_REQUEST_TIMEOUT_MS: 30_000,
   LIBRIS_HTTP_IDLE_TIMEOUT_MS: 30_000,
@@ -90,6 +94,10 @@ function createFlakyKVStore(): KVStore & { down: boolean } {
     async increment(key: string, ttl: number) {
       if (store.down) throw new Error("ECONNREFUSED");
       return inner.increment(key, ttl);
+    },
+    async peek(key: string) {
+      if (store.down) throw new Error("ECONNREFUSED");
+      return inner.peek(key);
     },
     async getKeys(base?: string) {
       if (store.down) throw new Error("ECONNREFUSED");

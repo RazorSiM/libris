@@ -1,7 +1,7 @@
 import { createRoute, z } from "@hono/zod-openapi";
 import { createOpenApiRouter } from "../../shared/openapi.js";
 import { HTTPException } from "hono/http-exception";
-import { and, count, eq, inArray, ne, sql } from "drizzle-orm";
+import { and, count, eq, inArray, ne, or, sql } from "drizzle-orm";
 import { access } from "node:fs/promises";
 import { writeFile } from "node:fs/promises";
 import { basename, join, extname, resolve } from "node:path";
@@ -9,11 +9,14 @@ import { users, books, bookColumns, bookFiles, bookMetadataCandidates, uploadReg
 import type { AppVariables } from "../../context.js";
 import { getUserId, isAdmin, requireBookOwnership } from "../../shared/auth.js";
 import { uploaderRef } from "../../shared/uploader-ref.js";
+import { buildPrefixTsquery } from "../../shared/tsquery.js";
+import { enqueueUserMetadataFetch } from "../../shared/enqueue-metadata-fetch.js";
 import { extractEpubCoverImage } from "../../lib/metadata/index.js";
 import { fetchExternalImage } from "../../shared/secure-image-fetch.js";
 import { validateEpubUpload } from "../../shared/epub-validation.js";
 
 import { getLogger } from "../../lib/logger.js";
+import { DEFAULT_MAX_UPLOAD_FILES } from "../../env.js";
 
 const coverLogger = getLogger("inbox:cover");
 
@@ -182,7 +185,8 @@ const rescanRoute = createRoute({
   path: "/{id}/rescan",
   tags: ["inbox"],
   summary: "Rescan inbox book metadata",
-  description: "Delete existing metadata candidates and re-fetch from external sources",
+  description:
+    "Delete existing metadata candidates and re-fetch from external sources. Idempotent while a rescan for the book is in flight, and capped at 10 in-flight metadata jobs per user.",
   request: {
     params: IdParamSchema,
   },
@@ -196,6 +200,7 @@ const rescanRoute = createRoute({
     403: { description: "Not authorized to modify this book" },
     404: { description: "Book not found" },
     422: { description: "Book has no metadata to search with" },
+    429: { description: "Too many metadata jobs already in progress for this user" },
   },
 });
 
@@ -281,13 +286,8 @@ export const inboxRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
     // When searching: tsquery for FTS + pg_trgm fallback for typos/filenames
     let tsquery: string | null = null;
     if (q) {
-      const sanitized = q.replaceAll(/[&|!<>():*\\]/g, " ").trim();
-      if (sanitized) {
-        const words = sanitized.split(/\s+/).filter(Boolean);
-        tsquery = words
-          .map((w: string, i: number) => (i === words.length - 1 ? `${w}:*` : w))
-          .join(" & ");
-
+      tsquery = buildPrefixTsquery(q);
+      if (tsquery) {
         conditions.push(
           sql`(
             "search_vector" @@ to_tsquery('english', ${tsquery})
@@ -437,6 +437,9 @@ export const inboxRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
     const [book] = await db
       .select({
         ...bookColumns,
+        // Needed for the visibility-scoped lookup below, but stripped from the
+        // response: the raw id can point at another user's private upload.
+        possibleDuplicateOf: books.possibleDuplicateOf,
         uploaderId: users.id,
         uploaderLabel: users.name,
       })
@@ -463,17 +466,35 @@ export const inboxRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
       status: string;
     } | null = null;
     if (book.possibleDuplicateOf) {
+      // The worker writes this id without an owner predicate, so it can point
+      // at another user's private upload. Resolve it under the same visibility
+      // rule the inbox and library use — own books plus the shared organized
+      // library; admins see everything — or a non-admin could read the title,
+      // author and status of a book they cannot open.
+      const visibility = isAdmin(c)
+        ? eq(books.id, book.possibleDuplicateOf)
+        : and(
+            eq(books.id, book.possibleDuplicateOf),
+            or(eq(books.status, "organized"), eq(books.createdBy, getUserId(c))),
+          );
       const [dup] = await db
         .select({ id: books.id, title: books.title, author: books.author, status: books.status })
         .from(books)
-        .where(eq(books.id, book.possibleDuplicateOf));
+        .where(visibility);
       if (dup) {
         possibleDuplicate = dup;
       }
     }
 
+    const {
+      uploaderId: _uploaderId,
+      uploaderLabel: _uploaderLabel,
+      possibleDuplicateOf: _possibleDuplicateOf,
+      ...bookRest
+    } = book;
+
     return c.json({
-      ...(({ uploaderId: _uploaderId, uploaderLabel: _uploaderLabel, ...rest }) => rest)(book),
+      ...bookRest,
       uploader: formatUploader(book, secret),
       possibleDuplicate,
       files: files.map((f) => ({
@@ -541,7 +562,11 @@ export const inboxRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
     });
 
     // Enqueue metadata fetch job AFTER the transaction commits successfully
-    await queues.bookFetchMetadata.add("fetch-metadata", { bookId: id, searchQuery });
+    await enqueueUserMetadataFetch(
+      queues.bookFetchMetadata,
+      { bookId: id, searchQuery },
+      getUserId(c),
+    );
 
     // No invalidation: a rescan moves the book between "review" and "inbox",
     // and neither status appears in the OPDS catalogue (organized only) or in
@@ -650,6 +675,15 @@ export const inboxRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
 
     if (fileEntries.length === 0) {
       throw new HTTPException(400, { message: "No files provided" });
+    }
+
+    // The stream cap bounds total bytes; this bounds the number of parts, each
+    // of which costs a buffer and a File object before any file-level check.
+    const maxFiles = env.LIBRIS_MAX_UPLOAD_FILES || DEFAULT_MAX_UPLOAD_FILES;
+    if (fileEntries.length > maxFiles) {
+      throw new HTTPException(413, {
+        message: `Too many files in one upload (max ${maxFiles})`,
+      });
     }
 
     const inboxPath = env.LIBRIS_INBOX_PATH;

@@ -7,6 +7,7 @@ import type { BookDetectedPayload, BookFormat } from "../types/index.js";
 import { UnrecoverableError, type Job, type Queue } from "bullmq";
 import { getDb } from "../services/db.js";
 import { computeChecksumFromFile } from "../shared/checksum.js";
+import { roleHasAdminSql } from "../shared/auth.js";
 import { getLogger } from "../lib/logger.js";
 import { getEnv } from "../env.js";
 import {
@@ -38,7 +39,7 @@ async function oldestAdminId(db: ReturnType<typeof getDb>): Promise<string> {
   const [admin] = await db
     .select({ id: users.id })
     .from(users)
-    .where(eq(users.role, "admin"))
+    .where(roleHasAdminSql(users.role))
     .orderBy(asc(users.createdAt))
     .limit(1);
   if (!admin) {

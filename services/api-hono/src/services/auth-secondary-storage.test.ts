@@ -11,6 +11,40 @@ import {
   resetSecondaryStorageFallback,
 } from "./auth-secondary-storage.js";
 
+/**
+ * The logger double records every warn line and its metadata, for the guard
+ * that no key material reaches a log. Everything else in this file's module
+ * graph (createAuth, db, workers) gets a chainable no-op so the mock is
+ * transparent to them.
+ */
+const { logEntries } = vi.hoisted(() => ({
+  logEntries: [] as { message: string; metadata: Record<string, unknown> }[],
+}));
+
+vi.mock("../lib/logger.js", () => {
+  let metadata: Record<string, unknown> = {};
+  const logger = {
+    withMetadata(next: Record<string, unknown>) {
+      metadata = next;
+      return logger;
+    },
+    withContext: () => logger,
+    withError: () => logger,
+    withPrefix: () => logger,
+    child: () => logger,
+    info: () => {},
+    warn: (message: string) => {
+      logEntries.push({ message, metadata });
+    },
+    error: () => {},
+    debug: () => {},
+    verbose: () => {},
+    trace: () => {},
+    fatal: () => {},
+  };
+  return { getLogger: () => logger, root: logger };
+});
+
 describe("createMemorySecondaryStorage", () => {
   it("round-trips a value as the raw string Better Auth stored", async () => {
     const storage = createMemorySecondaryStorage();
@@ -368,6 +402,41 @@ describe("createRedisSecondaryStorage", () => {
 
       expect(second).toBe(2);
     });
+
+    it("never logs the key itself, only a category and a correlation id", async () => {
+      logEntries.length = 0;
+      const storage = createRedisSecondaryStorage(rejectingRedis());
+
+      // A session token is a live credential: anyone who can read the log
+      // could authenticate with it. The same goes for a verification token,
+      // and the rate-limit key carries the client's address.
+      await storage.get("session-token-abc123secret");
+
+      expect(logEntries).toHaveLength(1);
+      const line = JSON.stringify(logEntries[0]);
+      expect(line).not.toContain("abc123secret");
+      expect(line).not.toContain("session-token-abc123secret");
+      expect(logEntries[0]?.metadata.keyCategory).toBe("credential");
+      expect(logEntries[0]?.metadata.keyId).toMatch(/^[0-9a-f]{12}$/);
+      // The id still correlates lines: same key, same id; different key, not.
+      await storage.get("session-token-abc123secret");
+      await storage.get("session-token-other");
+      expect(logEntries[1]?.metadata.keyId).toBe(logEntries[0]?.metadata.keyId);
+      expect(logEntries[2]?.metadata.keyId).not.toBe(logEntries[0]?.metadata.keyId);
+    });
+
+    it("categorises rate-limit and active-session keys without leaking them", async () => {
+      logEntries.length = 0;
+      const storage = createRedisSecondaryStorage(rejectingRedis());
+
+      await storage.get("203.0.113.9|/sign-in/email");
+      await storage.increment?.("active-sessions-user-1", 60);
+
+      expect(logEntries[0]?.metadata.keyCategory).toBe("rate-limit");
+      expect(JSON.stringify(logEntries[0])).not.toContain("203.0.113.9");
+      expect(logEntries[1]?.metadata.keyCategory).toBe("active-sessions");
+      expect(JSON.stringify(logEntries[1])).not.toContain("user-1");
+    });
   });
 });
 
@@ -408,6 +477,10 @@ describe("a Redis outage against a durable session", () => {
     LIBRIS_HTTP_HEADERS_TIMEOUT_MS: 10_000,
     LIBRIS_HTTP_REQUEST_TIMEOUT_MS: 30_000,
     LIBRIS_HTTP_IDLE_TIMEOUT_MS: 30_000,
+    LIBRIS_MAX_UPLOAD_BYTES: 1024 * 1024 * 1024,
+    LIBRIS_MAX_UPLOAD_FILES: 20,
+    LIBRIS_MAX_EMBED_OPF_BYTES: 1024 * 1024,
+    LIBRIS_EMBED_TIMEOUT_MS: 30_000,
   } satisfies Env;
 
   const PASSWORD = "correct-horse-battery-staple";

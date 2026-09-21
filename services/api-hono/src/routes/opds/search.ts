@@ -11,6 +11,7 @@ import {
   escapeXml,
 } from "../../shared/opds-xml.js";
 import { getBaseUrl, OPDS_PER_PAGE, bookToEntry } from "../../shared/opds-helpers.js";
+import { buildPrefixTsquery } from "../../shared/tsquery.js";
 
 // ── Route definitions ───────────────────────────────────────────────
 
@@ -84,14 +85,7 @@ export const opdsSearchRoutes = createOpenApiRouter<{ Variables: AppVariables }>
     const offset = (page - 1) * perPage;
 
     // Build tsquery for FTS (no pg_trgm fallback -- e-reader keyboards are less typo-prone)
-    let tsquery: string | null = null;
-    const sanitized = q.replaceAll(/[&|!<>():*\\]/g, " ").trim();
-    if (sanitized) {
-      const words = sanitized.split(/\s+/).filter(Boolean);
-      tsquery = words
-        .map((w: string, i: number) => (i === words.length - 1 ? `${w}:*` : w))
-        .join(" & ");
-    }
+    const tsquery = buildPrefixTsquery(q);
 
     const conditions = [eq(books.status, "organized")];
     if (tsquery) {

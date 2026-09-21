@@ -56,6 +56,10 @@ const TEST_ENV: Env = {
   LIBRIS_RATELIMIT_AUTH_WINDOW_SECONDS: 60,
   LIBRIS_RATELIMIT_KEY_CREATION_LIMIT: 30,
   LIBRIS_RATELIMIT_KEY_CREATION_WINDOW_SECONDS: 3600,
+  LIBRIS_MAX_UPLOAD_BYTES: 1024 * 1024 * 1024,
+  LIBRIS_MAX_UPLOAD_FILES: 20,
+  LIBRIS_MAX_EMBED_OPF_BYTES: 1024 * 1024,
+  LIBRIS_EMBED_TIMEOUT_MS: 30_000,
   LIBRIS_HTTP_HEADERS_TIMEOUT_MS: 10_000,
   LIBRIS_HTTP_REQUEST_TIMEOUT_MS: 30_000,
   LIBRIS_HTTP_IDLE_TIMEOUT_MS: 30_000,
@@ -226,6 +230,27 @@ describe("PUT /api/credentials/hardcover", () => {
     });
     expect(bobStatus.status).toBe(200);
     expect(await bobStatus.json()).toMatchObject({ connected: true, username: "hc-bob" });
+  });
+
+  it("invalidates the cached status so a fresh connection shows immediately", async () => {
+    const { app, auth } = createTestApp();
+    const alice = await createSignedInUser(auth, "cache-invalidate@example.test");
+
+    // First read caches "not connected" for the user.
+    const before = await app.request("/api/hardcover/status", {
+      headers: { cookie: alice.cookie },
+    });
+    expect(await before.json()).toMatchObject({ connected: false });
+
+    verifyTokenMock.mockResolvedValue({ ok: true, data: { username: "hc-alice" } });
+    expect((await connectHardcover(app, alice.cookie, "alice-hardcover-token")).status).toBe(200);
+
+    // The write clears the cache; without it this served the stale false for
+    // up to 30 seconds after the user connected.
+    const after = await app.request("/api/hardcover/status", {
+      headers: { cookie: alice.cookie },
+    });
+    expect(await after.json()).toMatchObject({ connected: true, username: "hc-alice" });
   });
 
   it("returns 409, not 500, when a unique constraint rejects the write", async () => {

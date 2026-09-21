@@ -17,6 +17,31 @@ import * as schema from "../db/schema.js";
 import { __setTestDb } from "../services/db.js";
 import { createCleanupOrphanedFilesProcessor } from "./cleanup-orphaned-files.js";
 
+/**
+ * `lstat` is stubbed only so a test can force the errno the filesystem would
+ * otherwise have to produce. Running as root (CI containers) makes a chmod-based
+ * EACCES useless, and EIO cannot be produced portably at all; the production
+ * decision this suite pins is "which errno codes delete a row", not "does the
+ * kernel return EACCES".
+ */
+const { lstatMock } = vi.hoisted(() => ({ lstatMock: vi.fn() }));
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    lstat: (...args: Parameters<typeof actual.lstat>) => lstatMock(...args),
+  };
+});
+
+let actualLstat: typeof import("node:fs/promises").lstat;
+
+function errnoError(code: string, message: string): NodeJS.ErrnoException {
+  const err = new Error(message) as NodeJS.ErrnoException;
+  err.code = code;
+  return err;
+}
+
 let pglite: PGlite;
 let db: TestDb;
 // books.created_by is NOT NULL since the cutover, so every seeded book needs an
@@ -31,6 +56,9 @@ beforeAll(async () => {
   ownerId = await seedUser(db);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   __setTestDb(db as any);
+  const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+  actualLstat = actual.lstat;
+  lstatMock.mockImplementation(actualLstat);
 });
 
 beforeEach(async () => {
@@ -38,6 +66,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  lstatMock.mockImplementation(actualLstat);
   await db.delete(schema.bookFiles);
   await db.delete(schema.books);
   await rm(libraryRoot, { recursive: true, force: true });
@@ -151,5 +180,83 @@ describe("createCleanupOrphanedFilesProcessor", () => {
     const processor = createCleanupOrphanedFilesProcessor(libraryRoot);
     const out = await processor(createMockJob());
     expect(out.result).toBe("Checked 0 files, removed 0 orphaned");
+  });
+
+  it("keeps the row when lstat fails for a reason other than absence (EACCES)", async () => {
+    const bookId = await seedBook();
+    const keptId = await seedBookFile(bookId, "Author/Title/denied.epub");
+    lstatMock.mockImplementation(async (path, ...rest) => {
+      if (String(path).endsWith("denied.epub")) {
+        throw errnoError("EACCES", "permission denied");
+      }
+      return actualLstat(path, ...rest);
+    });
+
+    const processor = createCleanupOrphanedFilesProcessor(libraryRoot);
+    const out = await processor(createMockJob());
+
+    const remaining = await db.select({ id: schema.bookFiles.id }).from(schema.bookFiles);
+    expect(remaining.map((r) => r.id)).toEqual([keptId]);
+    expect(out.result).toBe("Checked 1 files, removed 0 orphaned, kept 1 unreadable");
+  });
+
+  it("keeps the row when lstat fails with EIO", async () => {
+    const bookId = await seedBook();
+    const keptId = await seedBookFile(bookId, "Author/Title/broken-mount.epub");
+    lstatMock.mockImplementation(async (path, ...rest) => {
+      if (String(path).endsWith("broken-mount.epub")) {
+        throw errnoError("EIO", "input/output error");
+      }
+      return actualLstat(path, ...rest);
+    });
+
+    const processor = createCleanupOrphanedFilesProcessor(libraryRoot);
+    const out = await processor(createMockJob());
+
+    const remaining = await db.select({ id: schema.bookFiles.id }).from(schema.bookFiles);
+    expect(remaining.map((r) => r.id)).toEqual([keptId]);
+    expect(out.result).toBe("Checked 1 files, removed 0 orphaned, kept 1 unreadable");
+  });
+
+  it("deletes the row on a confirmed ENOENT and keeps unreadable siblings", async () => {
+    const bookId = await seedBook();
+    const orphanId = await seedBookFile(bookId, "Author/Title/gone.epub");
+    const keptId = await seedBookFile(bookId, "Author/Title/denied.epub");
+    lstatMock.mockImplementation(async (path, ...rest) => {
+      const target = String(path);
+      if (target.endsWith("gone.epub")) {
+        throw errnoError("ENOENT", "no such file or directory");
+      }
+      if (target.endsWith("denied.epub")) {
+        throw errnoError("EACCES", "permission denied");
+      }
+      return actualLstat(path, ...rest);
+    });
+
+    const processor = createCleanupOrphanedFilesProcessor(libraryRoot);
+    const out = await processor(createMockJob());
+
+    const remaining = await db.select({ id: schema.bookFiles.id }).from(schema.bookFiles);
+    expect(remaining.map((r) => r.id)).toEqual([keptId]);
+    expect(remaining.map((r) => r.id)).not.toContain(orphanId);
+    expect(out.result).toBe("Checked 2 files, removed 1 orphaned, kept 1 unreadable");
+  });
+
+  it("deletes the row on ENOTDIR (a path component is not a directory)", async () => {
+    const bookId = await seedBook();
+    const orphanId = await seedBookFile(bookId, "Author/Title/file.epub");
+    lstatMock.mockImplementation(async (path, ...rest) => {
+      if (String(path).endsWith("file.epub")) {
+        throw errnoError("ENOTDIR", "not a directory");
+      }
+      return actualLstat(path, ...rest);
+    });
+
+    const processor = createCleanupOrphanedFilesProcessor(libraryRoot);
+    const out = await processor(createMockJob());
+
+    const remaining = await db.select({ id: schema.bookFiles.id }).from(schema.bookFiles);
+    expect(remaining.map((r) => r.id)).not.toContain(orphanId);
+    expect(out.result).toBe("Checked 1 files, removed 1 orphaned");
   });
 });

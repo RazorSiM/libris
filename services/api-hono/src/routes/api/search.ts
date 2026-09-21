@@ -4,6 +4,7 @@ import { and, sql } from "drizzle-orm";
 import { books } from "#db";
 import type { AppVariables } from "../../context.js";
 import { getUserId, isAdmin } from "../../shared/auth.js";
+import { buildPrefixTsquery } from "../../shared/tsquery.js";
 
 // ── GET /suggest ─────────────────────────────────────────────────
 
@@ -55,17 +56,11 @@ export const searchRoutes = createOpenApiRouter<{ Variables: AppVariables }>().o
     const db = c.get("db");
     const userId = getUserId(c);
 
-    // Sanitize input for tsquery: remove special tsquery characters
-    const sanitized = q.replaceAll(/[&|!<>():*\\]/g, " ").trim();
-    if (!sanitized) {
+    // Build a tsquery Postgres will accept, or return nothing searchable.
+    const tsquery = buildPrefixTsquery(q);
+    if (!tsquery) {
       return c.json({ data: [] });
     }
-
-    // Build prefix tsquery: split words, append :* to last word for prefix matching
-    const words = sanitized.split(/\s+/).filter(Boolean);
-    const tsquery = words
-      .map((w: string, i: number) => (i === words.length - 1 ? `${w}:*` : w))
-      .join(" & ");
 
     // Organized books are the shared library and match for everyone. Review
     // books are pre-approval uploads: /api/inbox refuses to list, show or serve

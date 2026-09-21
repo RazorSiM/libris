@@ -212,6 +212,15 @@ function refreshJobs() {
           />
         </div>
       </div>
+
+      <p
+        v-if="jobsData.truncated"
+        class="text-xs text-muted pt-2"
+        data-testid="jobs-truncated-notice"
+      >
+        Some matching jobs are outside the browsable window. Narrow the queue or status filters to
+        bring them into view.
+      </p>
     </div>
 
     <!-- Job Detail Slideover -->

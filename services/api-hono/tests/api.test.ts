@@ -1,5 +1,8 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import { eq } from "drizzle-orm";
+import { serve } from "@hono/node-server";
+import { WebSocket } from "ws";
+import type { AddressInfo } from "node:net";
+import { eq, like } from "drizzle-orm";
 import { bootstrapAdmin, createTestApp, createFetchHelper, TEST_PASSWORD } from "./setup.js";
 import type { Db } from "../src/db/client.js";
 import type { AppServices } from "../src/bootstrap.js";
@@ -9,12 +12,14 @@ import {
   readingProgress,
   readingProgressHistory,
 } from "../src/db/schema.js";
+import { registerQueue } from "../src/services/queue.js";
 
 // ── App-level state ────────────────────────────────────────────────
 
 let $fetchRaw: ReturnType<typeof createFetchHelper>;
 let testDb: Db;
 let services: AppServices;
+let testApp: Awaited<ReturnType<typeof createTestApp>>;
 
 // ── Per-test state ───────────────────────────────────────────────
 
@@ -38,7 +43,7 @@ function session() {
 // ── App lifecycle: create once ─────────────────────────────────────
 
 beforeAll(async () => {
-  const testApp = await createTestApp();
+  testApp = await createTestApp();
   $fetchRaw = createFetchHelper(testApp.app);
   testDb = testApp.db;
   services = testApp.services;
@@ -381,6 +386,199 @@ describe("POST /api/jobs/:id/retry (queueName disambiguation)", () => {
       headers: session(),
     });
     expect(status).toBe(404);
+  });
+});
+
+describe("POST /api/jobs/queues/:name/drain", () => {
+  it("drains delayed jobs along with waiting ones", async () => {
+    const drainArgs: (boolean | undefined)[] = [];
+    registerQueue({
+      name: "drain-behavior",
+      getJobCounts: async () => ({}),
+      getJobs: async () => [],
+      drain: async (delayed?: boolean) => {
+        drainArgs.push(delayed);
+      },
+    } as never);
+
+    const { status, data } = await $fetchRaw("/api/jobs/queues/drain-behavior/drain", {
+      method: "POST",
+      headers: session(),
+    });
+    expect(status).toBe(200);
+    expect(data).toEqual({ success: true, queue: "drain-behavior" });
+    expect(drainArgs).toEqual([true]);
+  });
+});
+
+describe("GET /api/jobs (pagination contract)", () => {
+  function fakeJob(id: string, timestamp: number) {
+    return {
+      id,
+      name: "test-job",
+      data: {},
+      progress: 0,
+      returnvalue: undefined,
+      failedReason: undefined,
+      stacktrace: [],
+      attemptsMade: 0,
+      opts: { attempts: 1 },
+      timestamp,
+      processedOn: null,
+      finishedOn: null,
+    };
+  }
+
+  interface Board {
+    count: number;
+    timestampAt: (index: number) => number;
+  }
+
+  /** A fake queue whose `getJobs` models one board per status, like BullMQ's. */
+  function registerBoardQueue(name: string, boards: Record<string, Board>) {
+    registerQueue({
+      name,
+      getJobCounts: async (...statuses: string[]) =>
+        Object.fromEntries(statuses.map((s) => [s, boards[s]?.count ?? 0])),
+      getJobs: async (statuses: string[], start: number, end: number) => {
+        const status = statuses[0]!;
+        const board = boards[status];
+        if (!board) return [];
+        const last = Math.min(end, board.count - 1);
+        return Array.from({ length: Math.max(0, last - start + 1) }, (_, k) =>
+          fakeJob(`${name}-${status}-${start + k}`, board.timestampAt(start + k)),
+        );
+      },
+    } as never);
+  }
+
+  it("reports the exact total and serves pages past the old 200-job window", async () => {
+    registerBoardQueue("paginate-a", {
+      completed: { count: 201, timestampAt: (i) => 1_000_000 - i },
+    });
+
+    const page11 = await $fetchRaw(
+      "/api/jobs?queue=paginate-a&status=completed&page=11&pageSize=20",
+      { headers: session() },
+    );
+    expect(page11.status).toBe(200);
+    expect(page11.data).toMatchObject({
+      total: 201,
+      page: 11,
+      pageSize: 20,
+      totalPages: 11,
+      truncated: false,
+    });
+    expect(page11.data.jobs.map((job: { id: string }) => job.id)).toEqual([
+      "paginate-a-completed-200",
+    ]);
+
+    const page1 = await $fetchRaw(
+      "/api/jobs?queue=paginate-a&status=completed&page=1&pageSize=20",
+      { headers: session() },
+    );
+    expect(page1.data.jobs).toHaveLength(20);
+    expect(page1.data.jobs[0].id).toBe("paginate-a-completed-0");
+  });
+
+  it("merge-sorts queues by timestamp and flags totals beyond the window", async () => {
+    registerBoardQueue("paginate-b", {
+      completed: { count: 2, timestampAt: (i) => 2_000_000 - i },
+    });
+
+    const merged = await $fetchRaw("/api/jobs?status=completed&page=1&pageSize=20", {
+      headers: session(),
+    });
+    expect(merged.status).toBe(200);
+    expect(merged.data.total).toBe(203);
+    expect(merged.data.jobs.slice(0, 3).map((job: { id: string }) => job.id)).toEqual([
+      "paginate-b-completed-0",
+      "paginate-b-completed-1",
+      "paginate-a-completed-0",
+    ]);
+
+    // 10,005 matching jobs: `total` stays exact, but the browsable window ends
+    // at 10,000, so the 501st page has no jobs and the response says so.
+    registerBoardQueue("paginate-c", {
+      completed: { count: 10_005, timestampAt: (i) => 3_000_000 - i },
+    });
+    const beyondWindow = await $fetchRaw(
+      "/api/jobs?queue=paginate-c&status=completed&page=501&pageSize=20",
+      { headers: session() },
+    );
+    expect(beyondWindow.status).toBe(200);
+    expect(beyondWindow.data).toMatchObject({
+      total: 10_005,
+      totalPages: 501,
+      truncated: true,
+    });
+    expect(beyondWindow.data.jobs).toEqual([]);
+  });
+
+  it("does not fetch jobs at all for a page beyond the window", async () => {
+    // The counters answer this page; touching every board first was the old
+    // request-amplification bug.
+    const getJobs = vi.fn(async () => {
+      throw new Error("getJobs must not be called for a page beyond the window");
+    });
+    registerQueue({
+      name: "paginate-d",
+      getJobCounts: async () => ({ completed: 20_000 }),
+      getJobs,
+    } as never);
+
+    const beyond = await $fetchRaw(
+      "/api/jobs?queue=paginate-d&status=completed&page=1001&pageSize=20",
+      { headers: session() },
+    );
+    expect(beyond.status).toBe(200);
+    expect(beyond.data).toMatchObject({ total: 20_000, totalPages: 1_000, truncated: true });
+    expect(beyond.data.jobs).toEqual([]);
+    expect(getJobs).not.toHaveBeenCalled();
+  });
+
+  it("reads every selected status board without duplicating jobs", async () => {
+    const perStatus: Record<string, number> = { completed: 2, waiting: 1 };
+    registerQueue({
+      name: "paginate-e",
+      getJobCounts: async () => perStatus,
+      getJobs: async (statuses: string[]) => {
+        const count = perStatus[statuses[0]!] ?? 0;
+        return Array.from({ length: count }, (_, i) =>
+          fakeJob(`${statuses[0]}-${i}`, 4_000_000 - i),
+        );
+      },
+    } as never);
+
+    const merged = await $fetchRaw("/api/jobs?queue=paginate-e&page=1&pageSize=20", {
+      headers: session(),
+    });
+    expect(merged.status).toBe(200);
+    expect(merged.data.total).toBe(3);
+    const ids = merged.data.jobs.map((job: { id: string }) => job.id);
+    expect(ids).toHaveLength(3);
+    expect(new Set(ids).size).toBe(3);
+    expect(ids).toContain("waiting-0");
+    expect(ids).toContain("completed-0");
+    expect(ids).toContain("completed-1");
+  });
+
+  it("flags a board beyond its share even when the global total is small", async () => {
+    // Selecting all five statuses on one queue splits the window five ways
+    // (2,000 jobs per board), so 2,001 completed jobs are unreachable even
+    // though the total is well under the global 10,000.
+    registerQueue({
+      name: "paginate-f",
+      getJobCounts: async () => ({ completed: 2_001 }),
+      getJobs: async () => [],
+    } as never);
+
+    const response = await $fetchRaw("/api/jobs?queue=paginate-f", {
+      headers: session(),
+    });
+    expect(response.status).toBe(200);
+    expect(response.data.total).toBe(2_001);
+    expect(response.data.truncated).toBe(true);
   });
 });
 
@@ -1428,5 +1626,368 @@ describe("GET /api/stats", () => {
     // Genre distribution still includes it.
     const sciFi = data.genreDistribution.find((g: { genre: string }) => g.genre === "Sci-Fi");
     expect(sciFi?.count).toBe(1);
+  });
+
+  it("genreDistribution ranks counts numerically and drops the least popular genre", async () => {
+    // Counts 2-9 and 10-13: text ordering ("13" < "9") used to choose the
+    // top-ten cutoff, so a genre with 2 books survived while ones with 10 and
+    // 11 were cut off.
+    const counts = [9, 8, 7, 6, 5, 4, 3, 2, 13, 12, 11, 10];
+    const seed = counts.flatMap((count, genreIndex) =>
+      Array.from({ length: count }, (_, bookIndex) => ({
+        title: `GD-${genreIndex}-${bookIndex}`,
+        author: "Genre Author",
+        genres: [`Genre ${String(genreIndex + 1).padStart(2, "0")}`],
+        status: "organized",
+      })),
+    );
+    await $fetchRaw("/__test/seed-books", {
+      method: "POST",
+      headers: auth(),
+      body: { books: seed },
+    });
+
+    const seeded = await testDb
+      .select({ id: books.id })
+      .from(books)
+      .where(like(books.title, "GD-%"));
+    expect(seeded).toHaveLength(90);
+    const now = new Date();
+    await testDb.insert(readingAggregate).values(
+      seeded.map((row) => ({
+        userId,
+        bookId: row.id,
+        manualStatus: "finished" as const,
+        manualStartedAt: now,
+        manualFinishedAt: now,
+        manualSetAt: now,
+      })),
+    );
+
+    const { data, status } = await $fetchRaw("/api/stats", { headers: auth() });
+    expect(status).toBe(200);
+    const ranked = data.genreDistribution.map(
+      (entry: { genre: string; count: string }) => `${entry.genre}:${entry.count}`,
+    );
+    expect(ranked).toEqual([
+      "Genre 09:13",
+      "Genre 10:12",
+      "Genre 11:11",
+      "Genre 12:10",
+      "Genre 01:9",
+      "Genre 02:8",
+      "Genre 03:7",
+      "Genre 04:6",
+      "Genre 05:5",
+      "Genre 06:4",
+    ]);
+  });
+
+  it("heatmap uses the last pre-year sample as the first delta baseline", async () => {
+    // 100-page book: 50% on Dec 31, 51% on Jan 1. The Jan 1 delta is 1 page,
+    // not 51 — the baseline has to come from the previous year's last sample.
+    await $fetchRaw("/__test/seed-books", {
+      method: "POST",
+      headers: auth(),
+      body: {
+        books: [{ title: "Year Boundary", author: "Boundary Author", status: "organized" }],
+      },
+    });
+    const [book] = await testDb
+      .select({ id: books.id })
+      .from(books)
+      .where(eq(books.title, "Year Boundary"));
+    expect(book).toBeDefined();
+    await testDb.update(books).set({ pageCount: 100 }).where(eq(books.id, book!.id));
+
+    const atNoon = (day: string) => new Date(`${day}T12:00:00.000Z`);
+    await testDb.insert(readingProgressHistory).values([
+      {
+        userId,
+        bookId: book!.id,
+        document: "year-boundary.epub",
+        device: "kobo",
+        progress: "/body/p[50]",
+        percentage: "0.50",
+        timestamp: 0n,
+        createdAt: atNoon("2024-12-31"),
+      },
+      {
+        userId,
+        bookId: book!.id,
+        document: "year-boundary.epub",
+        device: "kobo",
+        progress: "/body/p[51]",
+        percentage: "0.51",
+        timestamp: 0n,
+        createdAt: atNoon("2025-01-01"),
+      },
+      {
+        userId,
+        bookId: book!.id,
+        document: "year-boundary.epub",
+        device: "kobo",
+        progress: "/body/p[55]",
+        percentage: "0.55",
+        timestamp: 0n,
+        createdAt: atNoon("2025-01-05"),
+      },
+    ]);
+
+    const { data, status } = await $fetchRaw("/api/stats?year=2025", { headers: auth() });
+    expect(status).toBe(200);
+    expect(data.pagesHeatmap.days).toEqual([
+      { day: "2025-01-01", pages: 1 },
+      { day: "2025-01-05", pages: 4 },
+    ]);
+  });
+
+  it("velocity uses the pre-window sample as the first delta baseline", async () => {
+    await $fetchRaw("/__test/seed-books", {
+      method: "POST",
+      headers: auth(),
+      body: {
+        books: [{ title: "Velocity Baseline", author: "Boundary Author", status: "organized" }],
+      },
+    });
+    const [book] = await testDb
+      .select({ id: books.id })
+      .from(books)
+      .where(eq(books.title, "Velocity Baseline"));
+    expect(book).toBeDefined();
+    await testDb.update(books).set({ pageCount: 100 }).where(eq(books.id, book!.id));
+
+    const dayString = (daysAgo: number) =>
+      new Date(Date.now() - daysAgo * 86_400_000).toISOString().slice(0, 10);
+    const inWindowDay = dayString(80);
+    await testDb.insert(readingProgressHistory).values([
+      {
+        userId,
+        bookId: book!.id,
+        document: "velocity-baseline.epub",
+        device: "kobo",
+        progress: "/body/p[10]",
+        percentage: "0.10",
+        timestamp: 0n,
+        createdAt: new Date(`${dayString(100)}T12:00:00.000Z`),
+      },
+      {
+        userId,
+        bookId: book!.id,
+        document: "velocity-baseline.epub",
+        device: "kobo",
+        progress: "/body/p[20]",
+        percentage: "0.20",
+        timestamp: 0n,
+        createdAt: new Date(`${inWindowDay}T12:00:00.000Z`),
+      },
+    ]);
+
+    const { data, status } = await $fetchRaw("/api/stats", { headers: auth() });
+    expect(status).toBe(200);
+    const entry = data.readingVelocity.find((row: { day: string }) => row.day === inWindowDay);
+    // 10 pages of delta spread over the 7-day calendar window: 1.4. Without the
+    // baseline the delta is 20 pages, i.e. 2.9.
+    expect(entry?.avgPages).toBe(1.4);
+  });
+
+  it("velocity averages over calendar days, including idle ones", async () => {
+    await $fetchRaw("/__test/seed-books", {
+      method: "POST",
+      headers: auth(),
+      body: {
+        books: [{ title: "Velocity Calendar", author: "Boundary Author", status: "organized" }],
+      },
+    });
+    const [book] = await testDb
+      .select({ id: books.id })
+      .from(books)
+      .where(eq(books.title, "Velocity Calendar"));
+    expect(book).toBeDefined();
+    await testDb.update(books).set({ pageCount: 100 }).where(eq(books.id, book!.id));
+
+    const dayString = (daysAgo: number) =>
+      new Date(Date.now() - daysAgo * 86_400_000).toISOString().slice(0, 10);
+    const firstDay = dayString(16);
+    const readDay = dayString(9);
+    await testDb.insert(readingProgressHistory).values([
+      {
+        userId,
+        bookId: book!.id,
+        document: "velocity-calendar.epub",
+        device: "kobo",
+        progress: "/body/p[1]",
+        percentage: "0.00",
+        timestamp: 0n,
+        createdAt: new Date(`${dayString(20)}T12:00:00.000Z`),
+      },
+      {
+        userId,
+        bookId: book!.id,
+        document: "velocity-calendar.epub",
+        device: "kobo",
+        progress: "/body/p[10]",
+        percentage: "0.10",
+        timestamp: 0n,
+        createdAt: new Date(`${firstDay}T12:00:00.000Z`),
+      },
+      {
+        userId,
+        bookId: book!.id,
+        document: "velocity-calendar.epub",
+        device: "kobo",
+        progress: "/body/p[80]",
+        percentage: "0.80",
+        timestamp: 0n,
+        createdAt: new Date(`${readDay}T12:00:00.000Z`),
+      },
+    ]);
+
+    const { data, status } = await $fetchRaw("/api/stats", { headers: auth() });
+    expect(status).toBe(200);
+    const at = (daysAgo: number) =>
+      data.readingVelocity.find((row: { day: string }) => row.day === dayString(daysAgo));
+
+    // 70 pages on the read day spread over the 7-day window: 10/day. Summing
+    // only the two days with data would report 40.
+    expect(at(9)?.avgPages).toBe(10);
+    // An idle day is still a row, averaging the 10 pages six calendar days back.
+    expect(at(10)?.avgPages).toBe(1.4);
+  });
+
+  it("keeps the baseline when the pre-year sample's book was deleted", async () => {
+    // Deleting a book sets its history rows' book_id to NULL. That row is
+    // still the only baseline for the (document, device) stream, so the join
+    // onto books must not drop it: an INNER JOIN counted the first in-year
+    // sample from zero (51 pages instead of 1).
+    await $fetchRaw("/__test/seed-books", {
+      method: "POST",
+      headers: auth(),
+      body: {
+        books: [
+          { title: "Deleted Baseline", author: "Boundary Author", status: "organized" },
+          { title: "Reimported", author: "Boundary Author", status: "organized" },
+        ],
+      },
+    });
+    const [deleted] = await testDb
+      .select({ id: books.id })
+      .from(books)
+      .where(eq(books.title, "Deleted Baseline"));
+    const [reimported] = await testDb
+      .select({ id: books.id })
+      .from(books)
+      .where(eq(books.title, "Reimported"));
+    expect(deleted).toBeDefined();
+    expect(reimported).toBeDefined();
+    await testDb.update(books).set({ pageCount: 100 }).where(eq(books.id, reimported!.id));
+
+    const atNoon = (day: string) => new Date(`${day}T12:00:00.000Z`);
+    await testDb.insert(readingProgressHistory).values({
+      userId,
+      bookId: deleted!.id,
+      document: "deleted-baseline.epub",
+      device: "kobo",
+      progress: "/body/p[50]",
+      percentage: "0.50",
+      timestamp: 0n,
+      createdAt: atNoon("2024-12-31"),
+    });
+    await testDb.delete(books).where(eq(books.id, deleted!.id));
+    await testDb.insert(readingProgressHistory).values({
+      userId,
+      bookId: reimported!.id,
+      document: "deleted-baseline.epub",
+      device: "kobo",
+      progress: "/body/p[51]",
+      percentage: "0.51",
+      timestamp: 0n,
+      createdAt: atNoon("2025-01-01"),
+    });
+
+    const { data, status } = await $fetchRaw("/api/stats?year=2025", { headers: auth() });
+    expect(status).toBe(200);
+    expect(data.pagesHeatmap.days).toEqual([{ day: "2025-01-01", pages: 1 }]);
+  });
+
+  it("reports an empty velocity series when every carried delta is zero", async () => {
+    // Two samples at the same percentage: the in-window row contributes a
+    // zero-page day. That must not seed a 90-row all-zero series.
+    await $fetchRaw("/__test/seed-books", {
+      method: "POST",
+      headers: auth(),
+      body: {
+        books: [{ title: "Zero Delta", author: "Boundary Author", status: "organized" }],
+      },
+    });
+    const [book] = await testDb
+      .select({ id: books.id })
+      .from(books)
+      .where(eq(books.title, "Zero Delta"));
+    expect(book).toBeDefined();
+    await testDb.update(books).set({ pageCount: 100 }).where(eq(books.id, book!.id));
+
+    const dayString = (daysAgo: number) =>
+      new Date(Date.now() - daysAgo * 86_400_000).toISOString().slice(0, 10);
+    await testDb.insert(readingProgressHistory).values([
+      {
+        userId,
+        bookId: book!.id,
+        document: "zero-delta.epub",
+        device: "kobo",
+        progress: "/body/p[50]",
+        percentage: "0.50",
+        timestamp: 0n,
+        createdAt: new Date(`${dayString(100)}T12:00:00.000Z`),
+      },
+      {
+        userId,
+        bookId: book!.id,
+        document: "zero-delta.epub",
+        device: "kobo",
+        progress: "/body/p[50]",
+        percentage: "0.50",
+        timestamp: 0n,
+        createdAt: new Date(`${dayString(10)}T12:00:00.000Z`),
+      },
+    ]);
+
+    const { data, status } = await $fetchRaw("/api/stats", { headers: auth() });
+    expect(status).toBe(200);
+    expect(data.readingVelocity).toEqual([]);
+  });
+});
+
+// ── Event WebSocket frame cap ──────────────────────────────────────
+
+describe("GET /api/events (WebSocket)", () => {
+  it("closes the socket when a client sends a frame over the payload cap", async () => {
+    const server = serve({ fetch: testApp.app.fetch, port: 0 });
+    testApp.injectWebSocket(server);
+    try {
+      const address = server.address() as AddressInfo;
+      const ws = new WebSocket(`ws://127.0.0.1:${address.port}/api/events`, {
+        headers: { cookie },
+      });
+      await new Promise<void>((resolve, reject) => {
+        ws.once("open", resolve);
+        ws.once("error", reject);
+      });
+
+      const closed = new Promise<number>((resolve) => {
+        ws.once("close", (code) => resolve(code));
+      });
+      ws.send("x".repeat(70_000));
+      const code = await Promise.race([
+        closed,
+        new Promise<number>((_, reject) => {
+          setTimeout(() => reject(new Error("socket stayed open after an oversized frame")), 2_000);
+        }),
+      ]);
+      expect(code).toBe(1009); // "message too big"
+      ws.terminate();
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
   });
 });

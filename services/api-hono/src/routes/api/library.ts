@@ -6,6 +6,8 @@ import { createReadStream, existsSync, realpathSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import { basename, extname, join, resolve } from "node:path";
 import { assertPathWithinRoot } from "../../lib/assert-path-within-root.js";
+import { buildPrefixTsquery } from "../../shared/tsquery.js";
+import { enqueueUserMetadataFetch } from "../../shared/enqueue-metadata-fetch.js";
 import { normalizeLanguage } from "../../lib/languages.js";
 import { Readable } from "node:stream";
 import {
@@ -220,7 +222,7 @@ const refetchRoute = createRoute({
   tags: ["library"],
   summary: "Refetch metadata from external sources",
   description:
-    "Delete existing non-file metadata candidates and re-fetch from Hardcover for an organized book. The book stays organized throughout.",
+    "Delete existing non-file metadata candidates and re-fetch from Hardcover for an organized book. The book stays organized throughout. Idempotent while a refetch for the book is in flight (the repeat is accepted but not enqueued again), and capped at 10 in-flight refetches per user.",
   request: {
     params: IdParamSchema,
   },
@@ -234,6 +236,7 @@ const refetchRoute = createRoute({
     403: { description: "Not authorized to modify this book" },
     404: { description: "Book not found or not organized" },
     422: { description: "Book has no metadata to search with" },
+    429: { description: "Too many metadata jobs already in progress for this user" },
   },
 });
 
@@ -468,13 +471,8 @@ export const libraryRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
     // When searching: tsquery for FTS + pg_trgm fallback for typos
     let tsquery: string | null = null;
     if (q) {
-      const sanitized = q.replaceAll(/[&|!<>():*\\]/g, " ").trim();
-      if (sanitized) {
-        const words = sanitized.split(/\s+/).filter(Boolean);
-        tsquery = words
-          .map((w: string, i: number) => (i === words.length - 1 ? `${w}:*` : w))
-          .join(" & ");
-
+      tsquery = buildPrefixTsquery(q);
+      if (tsquery) {
         conditions.push(
           sql`(
             "search_vector" @@ to_tsquery('english', ${tsquery})
@@ -956,11 +954,11 @@ export const libraryRoutes = createOpenApiRouter<{ Variables: AppVariables }>()
       .where(and(eq(bookMetadataCandidates.bookId, id), ne(bookMetadataCandidates.source, "file")));
 
     // Enqueue metadata fetch job with skipStatusChange to keep the book organized
-    await queues.bookFetchMetadata.add("fetch-metadata", {
-      bookId: id,
-      searchQuery,
-      skipStatusChange: true,
-    });
+    await enqueueUserMetadataFetch(
+      queues.bookFetchMetadata,
+      { bookId: id, searchQuery, skipStatusChange: true },
+      getUserId(c),
+    );
 
     // No invalidation: this deletes candidates and enqueues a refetch, and the
     // candidates endpoint is not cached. The book row itself is untouched, so

@@ -61,6 +61,7 @@ const getAuthRoute = createRoute({
       },
     },
     401: { description: "Missing or invalid credentials" },
+    429: { description: "Too many credential attempts" },
   },
 });
 
@@ -72,7 +73,7 @@ const postAuthRoute = createRoute({
   tags: ["kosync"],
   summary: "Authenticate via JSON body",
   description:
-    "Validate KoSync credentials provided as a JSON body. Returns the md5-hashed password as the userkey for subsequent sync requests. The rate limiter buckets attempts by the username in this body, so a body over 8 KB — which no KOReader login sends — is refused with 413 rather than let through unbucketed.",
+    "Validate KoSync credentials provided as a JSON body. Returns the md5-hashed password as the userkey for subsequent sync requests. The rate limiter buckets POST attempts by the username in this body — never by `x-auth-user` — so a body over 8 KB, which no KOReader login sends, is refused with 413 rather than let through unbucketed.",
   request: {
     body: {
       required: true,
@@ -95,6 +96,7 @@ const postAuthRoute = createRoute({
     400: { description: "Invalid request body" },
     401: { description: "Invalid credentials" },
     413: { description: "Request body too large to bucket a brute-force budget against" },
+    429: { description: "Too many credential attempts" },
   },
 });
 
@@ -149,6 +151,8 @@ const getProgressRoute = createRoute({
       },
     },
     404: { description: "No progress found for this document" },
+    401: { description: "Missing or invalid credentials" },
+    429: { description: "Too many failed credential checks for this user" },
   },
 });
 
@@ -160,7 +164,7 @@ const putProgressRoute = createRoute({
   tags: ["kosync"],
   summary: "Upsert reading progress",
   description:
-    "Create or update reading progress for a document/device pair. Also appends to the progress history table (fire-and-forget). Returns the persisted progress entry.",
+    "Create or update reading progress for a document/device pair. Also appends to the progress history table (fire-and-forget). Returns the persisted progress entry. Credentials are verified on every request, but only failed checks count against the per-user brute-force budget, so a device that keeps syncing never throttles itself.",
   request: {
     body: {
       required: true,
@@ -181,6 +185,8 @@ const putProgressRoute = createRoute({
       },
     },
     400: { description: "Invalid request body" },
+    401: { description: "Missing or invalid credentials" },
+    429: { description: "Too many failed credential checks for this user" },
   },
 });
 

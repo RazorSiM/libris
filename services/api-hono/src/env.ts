@@ -1,6 +1,12 @@
 import { z } from "zod";
 import { resolveDatabaseUrl } from "./lib/resolve-database-url";
 import { resolveRedisUrl } from "./lib/resolve-redis-url";
+import { DEFAULT_EMBED_TIMEOUT_MS, DEFAULT_MAX_EMBED_OPF_BYTES } from "./lib/epub/embed-core";
+
+/** Aggregate upload ceiling: ten files at the route's 100 MiB per-file limit. */
+export const DEFAULT_MAX_UPLOAD_BYTES = 1024 * 1024 * 1024;
+/** More multipart file parts than any real batch; each one costs memory. */
+export const DEFAULT_MAX_UPLOAD_FILES = 20;
 import { isValidProxyCidr } from "./shared/request-ip.js";
 
 const CoverFetchAllowlistSchema = z
@@ -178,6 +184,20 @@ const RawEnvSchema = z.object({
   LIBRIS_HTTP_HEADERS_TIMEOUT_MS: z.coerce.number().int().positive().default(10_000),
   LIBRIS_HTTP_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
   LIBRIS_HTTP_IDLE_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
+  // Aggregate multipart ceiling for POST /api/inbox/upload, across every file
+  // and field in one request, and how many file parts it may carry. The
+  // per-file check in the route runs after the body is parsed, so it cannot
+  // bound memory on its own; this is the limit the body stream enforces.
+  LIBRIS_MAX_UPLOAD_BYTES: z.coerce.number().int().positive().default(DEFAULT_MAX_UPLOAD_BYTES),
+  LIBRIS_MAX_UPLOAD_FILES: z.coerce.number().int().positive().default(DEFAULT_MAX_UPLOAD_FILES),
+  // OPF rewrite during organize runs in a worker thread; these bound how much
+  // document it will touch and how long the parent waits before killing it.
+  LIBRIS_MAX_EMBED_OPF_BYTES: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(DEFAULT_MAX_EMBED_OPF_BYTES),
+  LIBRIS_EMBED_TIMEOUT_MS: z.coerce.number().int().positive().default(DEFAULT_EMBED_TIMEOUT_MS),
 });
 
 const EnvSchema = RawEnvSchema.transform((raw, ctx) => {
@@ -250,12 +270,28 @@ export function __setTestEnv(env: Env): void {
   _env = env;
 }
 
+function decodeRedisCredential(value: string, part: "username" | "password"): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    throw new Error(`REDIS_URL has an invalid percent-encoded ${part}`);
+  }
+}
+
 export function parseRedisUrl(url: string) {
   const parsed = new URL(url);
+  const hasUsername = parsed.username !== "";
+  const hasPassword = parsed.password !== "";
   return {
     host: parsed.hostname,
     port: Number(parsed.port) || 6379,
-    password: parsed.password || undefined,
+    ...(hasUsername && { username: decodeRedisCredential(parsed.username, "username") }),
+    // Keep an explicit empty password when a username is present: ioredis
+    // sends `AUTH <user> <password>` for ACL users, and omitting it would
+    // turn `redis://user:@host` into a legacy single-argument AUTH.
+    ...((hasUsername || hasPassword) && {
+      password: hasPassword ? decodeRedisCredential(parsed.password, "password") : "",
+    }),
     ...(parsed.protocol === "rediss:" && { tls: {} }),
   };
 }

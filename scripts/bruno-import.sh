@@ -9,7 +9,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-API_URL="${API_URL:-http://localhost:3000}"
+API_URL="${API_URL:-http://127.0.0.1:3000}"
 BRUNO_DIR="$ROOT_DIR/bruno"
 COLLECTION_NAME="Libris API"
 
@@ -116,7 +116,7 @@ if [ ! -f "$BRUNO_DIR/environments/Local.yml" ]; then
 name: Local
 variables:
   - name: baseUrl
-    value: http://localhost:3000
+    value: http://127.0.0.1:3000
   - name: apiKey
     value: ""
 ENVEOF

@@ -29,6 +29,10 @@ const testEnv: Env = {
   LIBRIS_RATELIMIT_AUTH_WINDOW_SECONDS: 60,
   LIBRIS_RATELIMIT_KEY_CREATION_LIMIT: 30,
   LIBRIS_RATELIMIT_KEY_CREATION_WINDOW_SECONDS: 3600,
+  LIBRIS_MAX_UPLOAD_BYTES: 1024 * 1024 * 1024,
+  LIBRIS_MAX_UPLOAD_FILES: 20,
+  LIBRIS_MAX_EMBED_OPF_BYTES: 1024 * 1024,
+  LIBRIS_EMBED_TIMEOUT_MS: 30_000,
   LIBRIS_HTTP_HEADERS_TIMEOUT_MS: 10_000,
   LIBRIS_HTTP_REQUEST_TIMEOUT_MS: 30_000,
   LIBRIS_HTTP_IDLE_TIMEOUT_MS: 30_000,
@@ -71,12 +75,12 @@ export async function createTestApp() {
   __setTestDb(db);
   __setTestQueues(mockQueues as never);
 
-  const { app } = createApp({ services, env: testEnv });
+  const { app, injectWebSocket } = createApp({ services, env: testEnv });
   // `db` is the cast the app wants; `testDb.db` is the real Drizzle/PGlite
   // handle, which is what the seedUser/seedAppPassword fixtures are typed
   // against. Both are the same object — returning each under its own type
   // saves every caller a cast.
-  return { app, db, testDb: testDb.db, services, env: testEnv };
+  return { app, db, testDb: testDb.db, services, env: testEnv, injectWebSocket };
 }
 
 /**
