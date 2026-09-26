@@ -3,7 +3,7 @@ import { z } from "zod";
 import { useUpdateProfile } from "~/composables/mutations/useAccountMutations";
 
 const toast = useToast();
-const { userName, userEmail } = useAuth();
+const { userName, userEmail, isAdmin } = useAuth();
 const { mutateAsync: updateProfile, isLoading: saving } = useUpdateProfile();
 
 const schema = z.object({
@@ -45,10 +45,27 @@ async function handleSubmit() {
         <UInput v-model="form.name" class="w-full" data-testid="profile-name-input" />
       </UFormField>
 
-      <UFormField
-        label="Email"
-        help="Your email is also your sign-in name, and it cannot be changed here. Ask an admin to create a new account if you need a different address."
-      >
+      <!-- Read-only here because Better Auth's self-service update refuses an
+           email. The admin plugin's update does not, which is what the Users
+           tab uses — so an admin changes it there, own row included, and
+           everyone else asks an admin. Never "make a new account": that strands
+           your books, reading history and devices on the old one. -->
+      <UFormField label="Email">
+        <template #help>
+          <span v-if="isAdmin" data-testid="profile-email-help">
+            Your email is also your sign-in name. Change it with
+            <strong>Edit</strong> on your row in the
+            <ULink
+              to="/settings?tab=users"
+              class="text-primary"
+              data-testid="profile-email-users-link"
+              >Users tab</ULink
+            >.
+          </span>
+          <span v-else data-testid="profile-email-help">
+            Your email is also your sign-in name. Ask an admin to change it for you.
+          </span>
+        </template>
         <!-- readonly, not disabled: a disabled input cannot be focused or its
              text selected, and copying your own address is the main thing
              anyone does with this field. -->

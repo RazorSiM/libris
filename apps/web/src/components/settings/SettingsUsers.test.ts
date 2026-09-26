@@ -13,12 +13,17 @@
  */
 import { describe, expect, it, vi } from "vite-plus/test";
 import { computed, reactive, ref } from "vue";
-import { mount } from "@vue/test-utils";
+import { flushPromises, mount } from "@vue/test-utils";
 import type { ManagedUser } from "~/composables/mutations/useUserMutations";
 
 const users = ref<ManagedUser[]>([]);
+const { updateUser, refreshSession } = vi.hoisted(() => ({
+  updateUser: vi.fn(),
+  refreshSession: vi.fn(),
+}));
 
 vi.mock("~/composables/mutations/useUserMutations", () => ({
+  useUpdateUser: () => ({ mutateAsync: updateUser, isLoading: ref(false) }),
   useUsersQuery: () => ({ data: users, status: ref("success") }),
   useCreateUser: () => ({ mutateAsync: vi.fn(), isLoading: ref(false) }),
   useSetUserRole: () => ({ mutateAsync: vi.fn() }),
@@ -32,7 +37,7 @@ Object.assign(globalThis, {
   ref,
   computed,
   reactive,
-  useAuth: () => ({ userId: ref("current-user"), refresh: vi.fn() }),
+  useAuth: () => ({ userId: ref("current-user"), refresh: refreshSession }),
   useToast: () => ({ add: vi.fn() }),
 });
 
@@ -46,11 +51,24 @@ const stubs = {
   },
   UBadge: { template: `<span class="u-badge" v-bind="$attrs"><slot /></span>` },
   UCard: { template: `<div><slot /></div>` },
-  UForm: { template: `<form><slot /></form>` },
+  // Emits submit on a native submit, skipping schema validation: what is under
+  // test is what the component sends, not @nuxt/ui's validator.
+  UForm: {
+    emits: ["submit"],
+    template: `<form v-bind="$attrs" @submit.prevent="$emit('submit')"><slot /></form>`,
+  },
   UFormField: { template: `<div><slot /></div>` },
   UIcon: { template: `<span />` },
-  UInput: { template: `<input />` },
-  UModal: { template: `<div><slot name="body" /><slot name="footer" /></div>` },
+  UInput: {
+    props: ["modelValue"],
+    emits: ["update:modelValue"],
+    inheritAttrs: false,
+    template: `<input v-bind="$attrs" :value="modelValue" @input="$emit('update:modelValue', $event.target.value)" />`,
+  },
+  UModal: {
+    props: ["open"],
+    template: `<div v-if="open"><slot name="body" /><slot name="footer" /></div>`,
+  },
   USelect: { template: `<select />` },
   USkeleton: { template: `<div />` },
 };
@@ -89,5 +107,98 @@ describe("SettingsUsers role display", () => {
 
     expect(wrapper.find('[data-testid="role-badge-admin"]').exists()).toBe(false);
     expect(wrapper.get('[data-testid="toggle-role-btn-plain"]').text()).toBe("Make admin");
+  });
+});
+
+describe("SettingsUsers editing a user", () => {
+  const migrated: ManagedUser = {
+    id: "migrated",
+    email: "bdb17663-5f13-4f8f-8b1d-880b9e9c4eaa@migrated.invalid",
+    name: "Alb",
+    role: "user",
+    createdAt: new Date(),
+  };
+  const self: ManagedUser = {
+    id: "current-user",
+    email: "me@example.test",
+    name: "Me",
+    role: "admin",
+    createdAt: new Date(),
+  };
+
+  it("flags a migrated placeholder address, and only that", () => {
+    const wrapper = render([migrated, self]);
+
+    expect(wrapper.find('[data-testid="placeholder-email-badge-migrated"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="placeholder-email-badge-current-user"]').exists()).toBe(
+      false,
+    );
+  });
+
+  it("opens with the name filled in and a placeholder address cleared", async () => {
+    const wrapper = render([migrated]);
+
+    await wrapper.get('[data-testid="edit-user-btn-migrated"]').trigger("click");
+
+    const name = wrapper.get('[data-testid="edit-user-name"]').element as HTMLInputElement;
+    const email = wrapper.get('[data-testid="edit-user-email"]').element as HTMLInputElement;
+    expect(name.value).toBe("Alb");
+    expect(email.value).toBe("");
+  });
+
+  it("sends only name and email, and closes on success", async () => {
+    updateUser.mockReset().mockResolvedValue({});
+    refreshSession.mockReset();
+    const wrapper = render([migrated]);
+
+    await wrapper.get('[data-testid="edit-user-btn-migrated"]').trigger("click");
+    await wrapper.get('[data-testid="edit-user-name"]').setValue("  Alberto  ");
+    await wrapper.get('[data-testid="edit-user-email"]').setValue("alb@example.test");
+    await wrapper.get('[data-testid="edit-user-form"]').trigger("submit");
+    await flushPromises();
+
+    expect(updateUser).toHaveBeenCalledWith({
+      userId: "migrated",
+      name: "Alberto",
+      email: "alb@example.test",
+    });
+    expect(wrapper.find('[data-testid="edit-user-form"]').exists()).toBe(false);
+    // Somebody else's row: your own session did not change.
+    expect(refreshSession).not.toHaveBeenCalled();
+  });
+
+  it("offers Edit on your own row and re-reads your session after saving", async () => {
+    updateUser.mockReset().mockResolvedValue({});
+    refreshSession.mockReset();
+    const wrapper = render([self]);
+
+    const button = wrapper.get('[data-testid="edit-user-btn-current-user"]');
+    expect(button.attributes("disabled")).toBeUndefined();
+    await button.trigger("click");
+    expect((wrapper.get('[data-testid="edit-user-email"]').element as HTMLInputElement).value).toBe(
+      "me@example.test",
+    );
+    await wrapper.get('[data-testid="edit-user-email"]').setValue("new-me@example.test");
+    await wrapper.get('[data-testid="edit-user-form"]').trigger("submit");
+    await flushPromises();
+
+    expect(updateUser).toHaveBeenCalledWith({
+      userId: "current-user",
+      name: "Me",
+      email: "new-me@example.test",
+    });
+    expect(refreshSession).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the dialog open when the server refuses", async () => {
+    updateUser.mockReset().mockRejectedValue(new Error("User already exists. Use another email."));
+    const wrapper = render([migrated]);
+
+    await wrapper.get('[data-testid="edit-user-btn-migrated"]').trigger("click");
+    await wrapper.get('[data-testid="edit-user-email"]').setValue("taken@example.test");
+    await wrapper.get('[data-testid="edit-user-form"]').trigger("submit");
+    await flushPromises();
+
+    expect(wrapper.find('[data-testid="edit-user-form"]').exists()).toBe(true);
   });
 });

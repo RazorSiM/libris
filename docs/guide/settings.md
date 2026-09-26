@@ -97,7 +97,7 @@ Everyone has this tab; nothing on it is an admin concern. It has three sections.
 
 ![Settings - Account tab](./images/settings-account.webp)
 
-**Profile** — edit your display name. Your email address is shown but read-only: the server does not support changing it, and an editable field would be a promise it does not keep.
+**Profile** — edit your display name. Your email address is shown read-only here, because it is also your sign-in name and only an admin can change it: admins do so from **Edit** on their own row in the [Users tab](#users-admin-only), everyone else asks an admin.
 
 **Password** — change your own password. You must enter your current one, and confirm the new one. A checkbox offers **Sign out everywhere else**, which ends every other browser session and re-issues this one a fresh cookie. Your app passwords deliberately survive it — they are separate credentials with their own revoke buttons on the Connections tab, and silently unpairing every e-reader in the house would be a worse surprise.
 
@@ -115,8 +115,9 @@ Accounts are created here and nowhere else — there is no self-registration, an
 
 **Add someone** takes a name, an email, an initial password of at least 8 characters, and a role (User or Admin). Pass the password to them out of band; they can change it themselves from their Account tab.
 
-Each row in the list below shows the person's name, email, an **Admin** badge where it applies, and a **Banned** badge if they are, with three actions:
+Each row in the list below shows the person's name, email, an **Admin** badge where it applies, a **Banned** badge if they are, and a **Needs an email** badge if they still carry the placeholder address an upgrade from an older Libris gave them. Four actions:
 
+- **Edit** — change their name and email. The email is what they sign in with, so tell them the new one; their password, sessions and app passwords are not affected. This works on your own row too, and is how you change your own address.
 - **Make admin / Make user** — flips the role.
 - **Ban / Unban** — ends their sessions and disables their app passwords. Unbanning does not re-enable those app passwords; they mint new ones. See [Getting Started](./getting-started.md#banning).
 - **Set password** — signs out all of their browser sessions and leaves their app passwords active.

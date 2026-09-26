@@ -17,7 +17,10 @@ import { SESSIONS_KEY } from "./useSessionMutations";
  * Hono's RPC type graph and the alternative is an untyped fetch in a component.
  */
 
-/** Rename yourself. Better Auth refuses `email` outright, so it is not offered. */
+/**
+ * Rename yourself. Better Auth refuses `email` outright here, so it is not
+ * offered — an admin changes addresses through useUpdateUser instead.
+ */
 export function useUpdateProfile() {
   const { refresh } = useAuth();
 

@@ -85,6 +85,35 @@ export function useBanUser() {
 }
 
 /**
+ * Change someone's name and email address, your own included.
+ *
+ * The admin plugin's update-user is the only endpoint that takes an email:
+ * Better Auth's self-service update-user refuses one outright. That is also
+ * what fixes the users the auth cutover migrated, who sign in with a
+ * `<uuid>@migrated.invalid` placeholder until an admin gives them a real
+ * address. The password is untouched, and so are sessions: the plugin rewrites
+ * the cached user inside each of the target's live sessions, so nobody is
+ * signed out and their next session read carries the new address.
+ *
+ * Only `name` and `email` are ever sent. The same endpoint also takes `role`
+ * and `banned`, which have their own actions and their own last-admin guard.
+ */
+export function useUpdateUser() {
+  const queryCache = useQueryCache();
+
+  return useMutation({
+    mutation: async (vars: { userId: string; name: string; email: string }) =>
+      unwrap(
+        await authClient.admin.updateUser({
+          userId: vars.userId,
+          data: { name: vars.name, email: vars.email },
+        }),
+      ),
+    onSettled: () => queryCache.invalidateQueries({ key: USERS_KEY }),
+  });
+}
+
+/**
  * Set someone's password for them.
  *
  * This is the whole account-recovery story: there is no mail transport, so a
