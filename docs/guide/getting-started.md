@@ -52,8 +52,9 @@ There is no self-registration. An admin adds people from **Settings → Users �
 
 ![Settings - Users tab](./images/settings-users.webp)
 
-Each row in the user list carries three actions:
+Each row in the user list carries four actions:
 
+- **Edit** — change someone's name or email, your own included. The email is their sign-in name; their password carries over.
 - **Make admin / Make user** — flips the role.
 - **Ban / Unban** — see below.
 - **Set password** — for when someone has forgotten theirs.

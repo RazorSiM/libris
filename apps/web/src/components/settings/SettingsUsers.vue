@@ -5,6 +5,7 @@ import {
   useCreateUser,
   useSetUserPassword,
   useSetUserRole,
+  useUpdateUser,
   useUsersQuery,
   type ManagedUser,
 } from "~/composables/mutations/useUserMutations";
@@ -26,6 +27,7 @@ const { mutateAsync: createUser, isLoading: creating } = useCreateUser();
 const { mutateAsync: setRole } = useSetUserRole();
 const { mutateAsync: setBanned } = useBanUser();
 const { mutateAsync: setPassword, isLoading: settingPassword } = useSetUserPassword();
+const { mutateAsync: updateUser, isLoading: savingEdit } = useUpdateUser();
 
 const createSchema = z.object({
   name: z.string().min(1, "Name is required").max(200),
@@ -41,6 +43,26 @@ const createForm = reactive({
 
 const passwordTarget = ref<ManagedUser | null>(null);
 const newPassword = ref("");
+
+const editSchema = z.object({
+  name: z.string().trim().min(1, "Name is required").max(200),
+  email: z.email("Enter a valid email address"),
+});
+const editTarget = ref<ManagedUser | null>(null);
+const editForm = reactive({ name: "", email: "" });
+
+/**
+ * The address the auth cutover gave every migrated user.
+ *
+ * Nothing in the pre-Better-Auth schema recorded a person, so the migration
+ * wrote `<uuid>@migrated.invalid` and left it for an admin to correct. The
+ * email is the sign-in name, so until it is corrected that person has to type
+ * a uuid to get in — worth flagging on the row rather than leaving an admin to
+ * spot it.
+ */
+function hasPlaceholderEmail(user: ManagedUser): boolean {
+  return user.email.endsWith("@migrated.invalid");
+}
 
 /**
  * The last admin cannot be demoted or banned.
@@ -99,6 +121,30 @@ async function toggleBan(user: ManagedUser) {
     });
   } catch (err) {
     report(err, "Could not change the ban");
+  }
+}
+
+function openEdit(user: ManagedUser) {
+  editForm.name = user.name;
+  // Start a placeholder row empty: the uuid address is not something anyone
+  // wants to edit, only to replace.
+  editForm.email = hasPlaceholderEmail(user) ? "" : user.email;
+  editTarget.value = user;
+}
+
+async function handleEdit() {
+  const user = editTarget.value;
+  if (!user) return;
+  try {
+    await updateUser({ userId: user.id, name: editForm.name.trim(), email: editForm.email });
+    toast.add({ title: `Saved ${editForm.name.trim()}`, color: "success" });
+    editTarget.value = null;
+    // Editing your own row changes the session you are holding. The server
+    // already rewrote it; without re-reading it the sidebar and the Account
+    // tab keep the old name and address until a full page load.
+    if (isSelf(user)) await refreshSession();
+  } catch (err) {
+    report(err, "Could not save the changes");
   }
 }
 
@@ -208,10 +254,27 @@ async function handleSetPassword() {
               Admin
             </UBadge>
             <UBadge v-if="user.banned" variant="subtle" color="error" size="xs">Banned</UBadge>
+            <UBadge
+              v-if="hasPlaceholderEmail(user)"
+              variant="subtle"
+              color="warning"
+              size="xs"
+              title="Migrated from an older Libris with no email on record. Use Edit to give them a real one — it is what they sign in with."
+              :data-testid="`placeholder-email-badge-${user.id}`"
+            >
+              Needs an email
+            </UBadge>
           </div>
           <div class="text-xs text-dimmed mt-0.5">{{ user.email }}</div>
         </div>
 
+        <UButton
+          label="Edit"
+          variant="ghost"
+          size="sm"
+          :data-testid="`edit-user-btn-${user.id}`"
+          @click="openEdit(user)"
+        />
         <UButton
           :label="roleHasAdmin(user.role) ? 'Make user' : 'Make admin'"
           variant="ghost"
@@ -248,6 +311,54 @@ async function handleSetPassword() {
       </div>
     </div>
   </div>
+
+  <UModal
+    :open="!!editTarget"
+    :title="`Edit ${editTarget?.name ?? ''}`"
+    description="The email is what they sign in with, including on e-readers. Their password, sessions and app passwords are not affected."
+    @update:open="
+      (v: boolean) => {
+        if (!v) editTarget = null;
+      }
+    "
+  >
+    <template #body>
+      <UForm
+        :schema="editSchema"
+        :state="editForm"
+        class="space-y-4"
+        data-testid="edit-user-form"
+        @submit="handleEdit"
+      >
+        <UFormField name="name" label="Name">
+          <UInput v-model="editForm.name" class="w-full" data-testid="edit-user-name" />
+        </UFormField>
+        <UFormField name="email" label="Email">
+          <UInput
+            v-model="editForm.email"
+            type="email"
+            class="w-full"
+            data-testid="edit-user-email"
+          />
+        </UFormField>
+        <div class="flex gap-2 justify-end">
+          <UButton
+            label="Cancel"
+            variant="ghost"
+            data-testid="cancel-edit-user-btn"
+            @click="editTarget = null"
+          />
+          <UButton
+            type="submit"
+            label="Save"
+            color="primary"
+            :loading="savingEdit"
+            data-testid="confirm-edit-user-btn"
+          />
+        </div>
+      </UForm>
+    </template>
+  </UModal>
 
   <UModal
     :open="!!passwordTarget"

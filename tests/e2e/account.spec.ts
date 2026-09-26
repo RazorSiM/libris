@@ -108,6 +108,24 @@ test.describe("profile", () => {
     const email = page.getByTestId("profile-email-input");
     await expect(email).toHaveValue(account.email);
     await expect(email).toHaveAttribute("readonly", "");
+    // And points at who can change it, rather than at making a new account —
+    // which would strand this one's books and reading history.
+    await expect(page.getByTestId("profile-email-help")).toContainText("Ask an admin");
+
+    await context.close();
+  });
+
+  test("sends an admin to the Users tab to change their own email", async ({ browser }) => {
+    const admin = await createDisposableAccount("email-help-admin", "admin");
+    const context = await freshContext(browser);
+    const page = await context.newPage();
+    await signInThroughUi(page, admin.email, admin.password);
+    await openAccountTab(page);
+
+    await page.getByTestId("profile-email-users-link").click();
+
+    await expect(page).toHaveURL(/tab=users/);
+    await expect(page.getByTestId(`edit-user-btn-${admin.id}`)).toBeEnabled();
 
     await context.close();
   });
@@ -587,6 +605,90 @@ test.describe("server-side invalidation", () => {
     await expect(own).toBeDisabled();
     // Still on the Users tab with a live session, which is the point.
     await expect(page).toHaveURL(/tab=users/);
+
+    await context.close();
+  });
+});
+
+// ── An admin editing an account ──────────────────────────────────────
+
+test.describe("editing a user", () => {
+  test.slow();
+
+  test("moves someone's sign-in to the new address and keeps their password", async ({
+    browser,
+  }) => {
+    // The case the auth cutover created: a person whose sign-in name is a
+    // placeholder until an admin corrects it. Their password must survive the
+    // change, or "fix the address" becomes "fix the address and re-issue the
+    // password".
+    const admin = await createDisposableAccount("edit-admin", "admin");
+    const target = await createDisposableAccount("edit-target");
+    const renamed = `edited-${Date.now()}@example.test`;
+
+    const context = await freshContext(browser);
+    const page = await context.newPage();
+    await signInThroughUi(page, admin.email, admin.password);
+    await page.goto("/settings?tab=users");
+    await expect(page.getByTestId("users-panel")).toBeVisible();
+
+    await page.getByTestId(`edit-user-btn-${target.id}`).click();
+    await expect(page.getByTestId("edit-user-name")).toHaveValue(target.name);
+    await page.getByTestId("edit-user-name").fill("Edited Person");
+    await page.getByTestId("edit-user-email").fill(renamed);
+    await page.getByTestId("confirm-edit-user-btn").click();
+
+    const row = page.getByTestId(`user-item-${target.id}`);
+    await expect(row).toContainText(renamed);
+    await expect(row).toContainText("Edited Person");
+
+    expect(await canSignIn(renamed, target.password)).toBe(true);
+    expect(await canSignIn(target.email, target.password)).toBe(false);
+
+    await context.close();
+  });
+
+  test("refuses an address somebody else already has", async ({ browser }) => {
+    const admin = await createDisposableAccount("edit-dupe-admin", "admin");
+    const holder = await createDisposableAccount("edit-dupe-holder");
+    const target = await createDisposableAccount("edit-dupe-target");
+
+    const context = await freshContext(browser);
+    const page = await context.newPage();
+    await signInThroughUi(page, admin.email, admin.password);
+    await page.goto("/settings?tab=users");
+
+    await page.getByTestId(`edit-user-btn-${target.id}`).click();
+    await page.getByTestId("edit-user-email").fill(holder.email);
+    await page.getByTestId("confirm-edit-user-btn").click();
+
+    // Still open, so the admin can correct it; nothing changed underneath.
+    await expect(page.getByTestId("edit-user-form")).toBeVisible();
+    expect(await canSignIn(target.email, target.password)).toBe(true);
+
+    await context.close();
+  });
+
+  test("an admin can change their own address and stays signed in", async ({ browser }) => {
+    const admin = await createDisposableAccount("edit-self", "admin");
+    const renamed = `edited-self-${Date.now()}@example.test`;
+
+    const context = await freshContext(browser);
+    const page = await context.newPage();
+    await signInThroughUi(page, admin.email, admin.password);
+    await page.goto("/settings?tab=users");
+
+    await page.getByTestId(`edit-user-btn-${admin.id}`).click();
+    await page.getByTestId("edit-user-email").fill(renamed);
+    await page.getByTestId("confirm-edit-user-btn").click();
+    await expect(page.getByTestId(`user-item-${admin.id}`)).toContainText(renamed);
+
+    // An in-app navigation, not a reload: the session the SPA holds has to
+    // have caught up by itself.
+    await page.getByTestId("sidebar-user-label").click();
+    await expect(page.getByTestId("profile-email-input")).toHaveValue(renamed);
+
+    expect(await canSignIn(renamed, admin.password)).toBe(true);
 
     await context.close();
   });

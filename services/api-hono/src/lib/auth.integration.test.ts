@@ -956,3 +956,123 @@ describe("sign-in", () => {
     expect(cookieFrom(res)).toBeFalsy();
   });
 });
+
+/**
+ * An admin correcting somebody's address, from Settings -> Users.
+ *
+ * The auth cutover left every migrated user on a `<uuid>@migrated.invalid`
+ * placeholder, and the email is the sign-in name, so until it is corrected the
+ * person has to type a uuid to get in. Better Auth's own update-user refuses an
+ * email outright; only the admin plugin's endpoint takes one.
+ */
+describe("changing a user's email", () => {
+  async function signedInAs(email: string, role: "user" | "admin"): Promise<Headers> {
+    await auth.api.createUser({ body: { email, password: PASSWORD, name: role, role } });
+    return new Headers({
+      cookie: cookieFrom(
+        await auth.api.signInEmail({ body: { email, password: PASSWORD }, asResponse: true }),
+      ),
+    });
+  }
+
+  it("moves sign-in to the new address and keeps the password", async () => {
+    const headers = await signedInAs("email-admin@example.com", "admin");
+    const placeholder = "0b7c3a1e-migrated@migrated.invalid";
+    const target = await auth.api.createUser({
+      body: { email: placeholder, password: PASSWORD, name: "Migrated" },
+    });
+
+    await auth.api.adminUpdateUser({
+      body: { userId: target.user.id, data: { email: "Reader@Example.com" } },
+      headers,
+    });
+
+    // Stored lowercased, like every other address, so sign-in is not
+    // case-sensitive about what the admin typed.
+    const [row] = await db.select().from(schema.users).where(eq(schema.users.id, target.user.id));
+    expect(row?.email).toBe("reader@example.com");
+
+    const moved = await auth.api.signInEmail({
+      body: { email: "reader@example.com", password: PASSWORD },
+      asResponse: true,
+    });
+    expect(moved.status).toBe(200);
+
+    const old = await auth.api.signInEmail({
+      body: { email: placeholder, password: PASSWORD },
+      asResponse: true,
+    });
+    expect(old.status).toBe(401);
+  });
+
+  it("updates the target's live session, not just the row", async () => {
+    // Sessions are served from secondary storage with the user object cached
+    // inside. If the change stopped at Postgres, the target's own Account tab
+    // would keep showing the old address until they signed in again.
+    const headers = await signedInAs("email-admin2@example.com", "admin");
+    const targetCookie = cookieFrom(await signUp("before@example.com"));
+    const before = await auth.api.getSession({ headers: new Headers({ cookie: targetCookie }) });
+
+    await auth.api.adminUpdateUser({
+      body: { userId: before!.user.id, data: { email: "after@example.com" } },
+      headers,
+    });
+
+    const after = await auth.api.getSession({ headers: new Headers({ cookie: targetCookie }) });
+    expect(after?.user.email).toBe("after@example.com");
+  });
+
+  it("lets an admin change their own address without signing them out", async () => {
+    const headers = await signedInAs("own-old@example.com", "admin");
+    const session = await auth.api.getSession({ headers });
+
+    await auth.api.adminUpdateUser({
+      body: { userId: session!.user.id, data: { email: "own-new@example.com" } },
+      headers,
+    });
+
+    const after = await auth.api.getSession({ headers });
+    expect(after?.user.email).toBe("own-new@example.com");
+  });
+
+  it("refuses an address another account already holds", async () => {
+    const headers = await signedInAs("email-admin3@example.com", "admin");
+    await auth.api.createUser({
+      body: { email: "taken@example.com", password: PASSWORD, name: "Holder" },
+    });
+    const target = await auth.api.createUser({
+      body: { email: "wants-it@example.com", password: PASSWORD, name: "Wants" },
+    });
+
+    const refused = await auth.api
+      .adminUpdateUser({
+        body: { userId: target.user.id, data: { email: "TAKEN@example.com" } },
+        headers,
+      })
+      .then(() => null)
+      .catch((err: { statusCode?: number }) => err);
+
+    expect(refused).toMatchObject({ statusCode: 400 });
+    const [row] = await db.select().from(schema.users).where(eq(schema.users.id, target.user.id));
+    expect(row?.email).toBe("wants-it@example.com");
+  });
+
+  it("refuses a plain user changing somebody else's address", async () => {
+    const headers = await signedInAs("plain@example.com", "user");
+    const target = await auth.api.createUser({
+      body: { email: "victim@example.com", password: PASSWORD, name: "Victim" },
+    });
+
+    const refused = await auth.api
+      .adminUpdateUser({
+        body: { userId: target.user.id, data: { email: "attacker@example.com" } },
+        headers,
+      })
+      .then(() => null)
+      .catch((err: { statusCode?: number }) => err);
+
+    expect(refused).toMatchObject({ statusCode: 403 });
+    const [row] = await db.select().from(schema.users).where(eq(schema.users.id, target.user.id));
+    expect(row?.email).toBe("victim@example.com");
+  });
+});

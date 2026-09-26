@@ -451,7 +451,7 @@ Some account already has a password. Sign in with it, then use **Settings → Us
 
 ### 7. Give the remaining users real addresses and passwords
 
-Migrated users carry a placeholder `<uuid>@migrated.invalid` email and no password, so they cannot sign in until an admin fixes both from **Settings → Users**. Use **Set password**, and correct the address in the same pass.
+Migrated users carry a placeholder `<uuid>@migrated.invalid` email and no password, so they cannot sign in until an admin fixes both from **Settings → Users**, where those rows are marked **Needs an email**. Use **Edit** to give each one their real address, then **Set password**. Until the address is corrected, the placeholder is what they would have to type to sign in.
 
 ### 8. Reissue every e-reader and OPDS credential
 
