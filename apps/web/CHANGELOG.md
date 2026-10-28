@@ -1,5 +1,42 @@
 # @libris/web
 
+## 2.0.1
+
+### Patch Changes
+
+- 23d2171: Admins can now edit a user's name and email from Settings → Users, their own row included. Users migrated from a pre-Better-Auth install are flagged "Needs an email" until their `@migrated.invalid` placeholder is replaced, and the Account tab no longer tells you to create a new account to change your address.
+- 762d6cf: Dependency and toolchain upgrade pass: Vite+ 0.3.2 (Vite 8.3.0 core, upstream Vitest 4.1.11, Oxlint 1.82, Oxfmt 0.67), Nuxt UI 4.11.1, and pnpm security floors for postcss, nanoid, esbuild and Tiptap. `pnpm audit --prod` is now clean. Each package that declares `vite-plus` also carries a direct `vite` dev dependency so pnpm resolves the Vite+ core alias for plugin peers instead of auto-installing a separate registry Vite.
+- 762d6cf: Make job browser pagination honest and bounded. `GET /api/jobs` derived `total` and `totalPages` from the first 200 jobs per queue, so a queue with more jobs reported a truncated total and deep pages came back empty with no explanation. `total` now comes from BullMQ's counters (exact); each selected queue/status board is read in its native order up to its share of a 10,000-job window, jobs are attributed to the board they came from (no per-job `getState()` round trip), and the merged window is ordered by creation time with a deterministic queue/id tie-break. Pages past the window are answered from the counters without touching Redis, and the response carries a `truncated` flag — surfaced in the settings browser — when any board holds more matching jobs than the window reaches.
+- 762d6cf: Prevent data loss in the book-organize and cleanup workers, and fix inbox navigation after client-side route changes.
+
+  - Organize now gives each book its own id-suffixed library directory and moves files with a no-clobber operation, so two books with the same author/title/filename can no longer overwrite each other; a retry after an interrupted move adopts a destination only when its bytes match a recorded hash — the upload checksum or the embedded content hash — so a re-organize interrupted after metadata embedding also recovers.
+  - Forced cover re-download no longer deletes the existing cover before the replacement has been fetched.
+  - A failed EPUB metadata rewrite removes its `.tmp` leftover, and a re-organize removes the old directory's cover once no other book references it.
+  - Cleanup only deletes a `book_files` row on a confirmed `ENOENT`/`ENOTDIR` and keeps (and reports) records it cannot read.
+  - The inbox detail page derives its book id reactively, resets per-book state on navigation, and filters server events by the book currently on screen, so rescan/approve/delete reach the right book.
+
+- 762d6cf: Treat admin as a membership test rather than an exact role match. Better Auth stores multiple roles as a comma-joined string, so a user with `admin,user` is now counted as an active admin by the last-admin guard (SQL and session checks), granted admin routes, and shown as an admin in the settings user list. Previously the two-step demotion `admin` → `admin,user` → `user` could lock the sole admin out of the install.
+- Updated dependencies [762d6cf]
+- Updated dependencies [762d6cf]
+- Updated dependencies [762d6cf]
+- Updated dependencies [762d6cf]
+- Updated dependencies [762d6cf]
+- Updated dependencies [762d6cf]
+- Updated dependencies [762d6cf]
+- Updated dependencies [762d6cf]
+- Updated dependencies [762d6cf]
+- Updated dependencies [762d6cf]
+- Updated dependencies [762d6cf]
+- Updated dependencies [762d6cf]
+- Updated dependencies [762d6cf]
+- Updated dependencies [762d6cf]
+- Updated dependencies [762d6cf]
+- Updated dependencies [762d6cf]
+- Updated dependencies [762d6cf]
+- Updated dependencies [762d6cf]
+- Updated dependencies [762d6cf]
+  - @libris/api-hono@2.0.1
+
 ## 2.0.0
 
 ### Major Changes
