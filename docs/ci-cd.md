@@ -216,15 +216,21 @@ Releases are driven by [changesets](https://github.com/changesets/changesets). T
 ### How a release happens
 
 1. **You add a changeset** with your PR — `pnpm changeset`, or hand-write `.changeset/<name>.md`. Every code change needs one, or nothing will ever be released.
-2. **Your PR merges to main.** The `version` job runs `changesets/action@v1`, which consumes every `.changeset/*.md`, bumps versions, rewrites the CHANGELOGs, and opens (or updates) a **"chore: version packages"** pull request.
+2. **Your PR merges to main.** The `version` job runs `changesets/action@v2`, which consumes every `.changeset/*.md`, bumps versions, rewrites the CHANGELOGs, and opens (or updates) a **"chore: version packages"** pull request.
 3. **You review and merge that version PR.** This is the actual release gate.
 4. **The merge lands the bumped versions on main**, and the `publish` job builds the image and cuts the releases.
 
 ### version job
 
-Runs on push to main. Uses `changesets/action@v1` **without a `publish` input** — that input drives npm publishing, and nothing here goes to npm (every workspace is private; `.changeset/config.json` sets `access: restricted`). The action is used purely to maintain the version PR.
+Runs on push to main. Uses `changesets/action@v2` **without a `publish-script` input** — that input drives npm publishing, and nothing here goes to npm (every workspace is private; `.changeset/config.json` sets `access: restricted`). The action is used purely to maintain the version PR.
 
 `.changeset/config.json` puts `@libris/web`, `@libris/api-hono`, and `@libris/docs` in a `fixed` group, so they always bump together. `@libris/e2e` is ignored.
+
+Action v2 only works with `@changesets/cli` v3 (v1 of the action pairs with CLI v2), and its inputs are `version-script`, `pr-title` and `commit-message`. Bump the action and the CLI together.
+
+::: warning Private packages need `privatePackages`
+Changesets v3 stopped versioning private packages by default, and every workspace here is private. Without `"privatePackages": { "version": true, "tag": false }` in `.changeset/config.json`, `changeset version` reports success, leaves the changesets in place and bumps nothing, so no version PR ever opens. `tag: false` because the `publish` job creates the tags itself.
+:::
 
 **Permissions:** `contents: write`, `pull-requests: write`.
 
@@ -246,11 +252,15 @@ The image build is unaffected either way: merging produces an ordinary push even
 
 Runs on every push to main, but is a **no-op unless the version actually changed**. It reads the current versions out of `services/api-hono/package.json` and `apps/web/package.json`, derives the composite tag `v<api-version>-web<web-version>`, and runs `docker manifest inspect` against GHCR. If that tag already exists, the job stops there. This is why no commit-message sniffing is needed to detect "the version PR just merged" — a new version simply produces a tag that isn't in the registry yet.
 
-When a build is needed it uses `docker/setup-buildx-action@v3` + `docker/build-push-action@v6` with `cache-from`/`cache-to: type=gha`, pushing both `:<tag>` and `:latest`.
+When a build is needed it uses `docker/setup-buildx-action@v4` + `docker/build-push-action@v7` with `cache-from`/`cache-to: type=gha`, pushing both `:<tag>` and `:latest`.
 
 Only when an image was actually published does it create the git tags (`api-hono/v<version>`, `web/v<version>`) and GitHub Releases via `gh release create`, with each release body extracted from that package's `CHANGELOG.md`. Existing releases are skipped, so re-runs are idempotent.
 
-**Registry auth:** `docker/login-action@v3` against `ghcr.io` using the built-in `GITHUB_TOKEN` with `packages: write`. There is no separate registry token to manage.
+::: warning `HTTP 403: Resource not accessible by integration` on release creation
+`GITHUB_TOKEN` has no `workflows` permission, and GitHub refuses to let it create a tag on a commit whose `.github/workflows/` files differ from the current `main`. That happens when another merge touching workflows (a Dependabot actions bump, say) lands while a publish is still running: the image is pushed, then the tag and release step fails. Re-running the job hits the same wall because it targets the same commit. Create the two releases by hand with your own token instead (`gh release create api-hono/v<version> --target <sha> ...`, same for `web/`), using the CHANGELOG section as the notes.
+:::
+
+**Registry auth:** `docker/login-action@v4` against `ghcr.io` using the built-in `GITHUB_TOKEN` with `packages: write`. There is no separate registry token to manage.
 
 **Image produced:** `ghcr.io/RazorSiM/libris:v<api-version>-web<web-version>` and `:latest`.
 
