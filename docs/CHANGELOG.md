@@ -1,5 +1,12 @@
 # @libris/docs
 
+## 2.0.2
+
+### Patch Changes
+
+- Updated dependencies [4fd31df]
+  - @libris/api-hono@2.0.2
+
 ## 2.0.1
 
 ### Patch Changes
