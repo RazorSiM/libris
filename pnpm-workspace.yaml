@@ -23,7 +23,7 @@ allowBuilds:
   workerd: true
 
 catalog:
-  "@changesets/cli": ^2.31.1
+  "@changesets/cli": ^3.0.3
   "@electric-sql/pglite": ^0.5.4
   "@fontsource-variable/merriweather": ^5.3.0
   "@hono/cli": ^0.1.11
