@@ -27,7 +27,7 @@ docker compose -f "$COMPOSE_FILE" up -d --wait postgres redis
 mkdir -p "$PROJECT_ROOT/tmp/test-inbox" "$PROJECT_ROOT/tmp/test-library"
 
 # --- Run tests inside the playwright container ---
-# Browsers are bundled in mcr.microsoft.com/playwright:v1.59.1-noble, which
+# Browsers are bundled in mcr.microsoft.com/playwright:v1.64.1-noble, which
 # avoids the NixOS dynamic-linker mismatch we'd hit running playwright on the
 # host. Workspaces' node_modules live in named volumes — we install once per
 # lockfile change.

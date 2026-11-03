@@ -48,7 +48,7 @@ services:
   playwright:
     # Keep in step with the catalog's @playwright/test — a mismatched client
     # fails at launch with "Executable doesn't exist at /ms-playwright/...".
-    image: mcr.microsoft.com/playwright:v1.62.1-noble
+    image: mcr.microsoft.com/playwright:v1.64.1-noble
     profiles: ["e2e"]
     working_dir: /repo
     environment:

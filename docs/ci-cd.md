@@ -87,9 +87,11 @@ Retention is 1 day (intermediate build artifact, not a release asset).
 
 Playwright end-to-end tests — runs on both PRs and pushes to main, depends on `build`.
 
-**Container:** `mcr.microsoft.com/playwright:v1.62.1-jammy` — Microsoft's official Playwright image with browsers + system deps pre-installed. The Playwright version is pinned in `pnpm-workspace.yaml` under the catalog (`@playwright/test: 1.62.1`); `tests/e2e/package.json` references it as `catalog:`. When upgrading Playwright, bump the workspace catalog and the `ci.yml` container tag in lockstep. (`docker-compose.test.yml` uses the `-noble` variant, `v1.62.1-noble`, for the local Playwright service.)
+**Container:** `mcr.microsoft.com/playwright:v1.64.1-jammy` — Microsoft's official Playwright image with browsers + system deps pre-installed. The Playwright version is pinned in `pnpm-workspace.yaml` under the catalog (`@playwright/test: 1.64.1`); `tests/e2e/package.json` references it as `catalog:`. When upgrading Playwright, bump the workspace catalog, both `ci.yml` container tags, and the `docker-compose.test.yml` image in lockstep. (`docker-compose.test.yml` uses the `-noble` variant, `v1.64.1-noble`, for the local Playwright service.)
 
 Nothing enforces that lockstep. The image ships only the browser build its own version pins, so a catalog bump on its own leaves every E2E job failing at browser launch with `Executable doesn't exist at /ms-playwright/...` — the tests never start, so the failure looks nothing like a test regression.
+
+There is a third copy of the same number: host runs get their browsers from nixpkgs' `playwright-driver`, via the `PLAYWRIGHT_BROWSERS_PATH` that `devenv.nix` exports. That package version is set by the pinned nixpkgs, so `devenv update` can move it out from under the catalog pin. See [contributing.md § Host browser cache](contributing.md#host-browser-cache) for how the two stay aligned.
 
 **Services:** PostgreSQL 17 + Redis 7 (inline service containers, each with a health check — `pg_isready` / `redis-cli ping` — with a 2s interval).
 

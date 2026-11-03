@@ -138,6 +138,7 @@ Tests seed data via direct PostgreSQL queries (not API calls), using the `postgr
 - Screenshots/videos/traces on failure: `tests/e2e/test-results/`
 - HTML report: `tests/e2e/playwright-report/index.html`
 - Debug mode: `PWDEBUG=1 ./scripts/test-e2e.sh -g "test name"`
+- Ad-hoc browser inspection and screenshots: `agent-browser` (installed by `devenv.nix`, see [contributing.md § Visual QA](contributing.md#visual-qa-with-agent-browser))
 
 ## API Exploration (Bruno)
 
