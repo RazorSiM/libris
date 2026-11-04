@@ -153,7 +153,7 @@ case is a response up to `maxAge` (at most 120 s) stale. Each deferral logs at
 
 ### OpenTelemetry
 
-The `OTEL_*` variables are standard OpenTelemetry SDK environment variables. They are read directly from `process.env` by the OpenTelemetry `NodeSDK` and are **not** part of the Libris-validated env schema. Only `OTEL_EXPORTER_OTLP_ENDPOINT` and `OTEL_SERVICE_NAME` are referenced by `otel.ts`: setting `OTEL_EXPORTER_OTLP_ENDPOINT` is what activates the SDK (and the SDK does not start when `NODE_ENV=test`), and `OTEL_SERVICE_NAME` defaults to `libris` if unset. The remaining names are interpreted by the SDK itself, not by Libris.
+The `OTEL_*` variables are standard OpenTelemetry SDK environment variables. They are read directly from `process.env` by the OpenTelemetry `NodeSDK` and are **not** part of the Libris-validated env schema. Only `OTEL_EXPORTER_OTLP_ENDPOINT` and `OTEL_SERVICE_NAME` are referenced by `otel.ts`: setting `OTEL_EXPORTER_OTLP_ENDPOINT` is what activates the SDK (and the SDK does not start when `NODE_ENV=test`), and `OTEL_SERVICE_NAME` defaults to `libris` if unset. The remaining names are interpreted by the SDK itself, not by Libris. The SDK runs with `@opentelemetry/auto-instrumentations-node` (fs and dns excluded); without an OTLP endpoint it never starts.
 
 | Variable                      | Purpose                                                                                                              |
 | ----------------------------- | -------------------------------------------------------------------------------------------------------------------- |

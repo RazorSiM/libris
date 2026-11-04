@@ -27,6 +27,7 @@
     "@loglayer/transport-pino": "catalog:",
     "@loglayer/transport-pretty-terminal": "catalog:",
     "@opentelemetry/api": "catalog:",
+    "@opentelemetry/auto-instrumentations-node": "catalog:",
     "@opentelemetry/sdk-logs": "catalog:",
     "@opentelemetry/sdk-node": "catalog:",
     "@opentelemetry/sdk-trace-node": "catalog:",
