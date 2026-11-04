@@ -55,6 +55,7 @@ Related tooling used in day-to-day work:
 - **GitHub + the `gh` CLI** — pull requests and issues live on GitHub. Use `gh pr create`, `gh pr checks <id> --watch`, etc.
 - **bd/beads** — local, per-user issue tracker. The `.beads/` directory is git-ignored, so issues are never shared via the repo.
 - **Bruno API collection** — `bruno/` holds an API collection generated from the OpenAPI spec. Regenerate it with `vp run bruno:import`, or run requests with `bru run --env Local bruno/`.
+- **agent-browser** — CDP browser-automation CLI for driving the SPA and taking screenshots. `devenv.nix` installs it and points it at the Playwright Chromium, so no browser download is needed.
 
 ## Development Workflow
 
@@ -147,6 +148,17 @@ vp run test:e2e:docker
 
 E2E tests use Playwright with Chromium. See [testing.md](testing.md) for details.
 
+#### Host browser cache
+
+Playwright looks browsers up by the revision compiled into its own client, so a host run (as opposed to the container run) needs the Chromium build that matches the `@playwright/test` pin. `devenv.nix` exports `PLAYWRIGHT_BROWSERS_PATH` pointing at nixpkgs' `playwright-driver`, which means the catalog pin has to equal the `playwright-driver` version the pinned nixpkgs ships:
+
+```bash
+nix eval --raw "github:NixOS/nixpkgs/$(jq -r '.nodes.nixpkgs.locked.rev' devenv.lock)#playwright-driver.version"
+grep '"@playwright/test"' pnpm-workspace.yaml
+```
+
+Run that after `devenv update`. If the two disagree, bump the catalog pin together with the container tags (`docker-compose.test.yml` and both `ci.yml` jobs) and re-run `vp install`. A mismatch is not subtle in output but is easy to misread — every spec fails at launch with `Executable doesn't exist at .../chromium-<rev>/...`, before any test body runs.
+
 #### Resetting local queue diagnostics
 
 BullMQ history lives in Redis, not PostgreSQL. If you recreate the database or clear the inbox/library paths, the Home and Settings diagnostics can still show old queue completions or failed jobs until the BullMQ keys are cleared too.
@@ -182,6 +194,21 @@ The test suite supports two authenticated sessions: an **admin** and a **regular
 - `reading_progress.user_id` is NOT NULL, and the unique constraint is `(user_id, document, device)`. `ON CONFLICT` clauses must target all three columns.
 
 See `tests/e2e/auth.spec.ts` and `tests/e2e/isolation.spec.ts` for working examples of ownership checks, app-password rotation and revocation, and cross-user 403 assertions.
+
+### Visual QA with agent-browser
+
+`agent-browser` is available in the devenv shell. It drives the same Chromium that the E2E suite uses — `devenv.nix` exports `AGENT_BROWSER_EXECUTABLE_PATH` for it — so there is no `agent-browser install` step, which would download Chrome for Testing and cannot run on NixOS.
+
+```bash
+agent-browser open http://localhost:3100   # start (or reuse) a session
+agent-browser wait 2000                     # let the SPA hydrate on a cold Vite load
+agent-browser snapshot                     # accessibility tree with @eN refs
+agent-browser click @e2                    # interact via a ref from the snapshot
+agent-browser screenshot tmp/shot.png      # relative paths resolve against cwd
+agent-browser close
+```
+
+Write screenshots and other scratch files under `tmp/` (gitignored). Run `agent-browser skills get core` for the full command set, including sessions, console logs, network inspection and video recording.
 
 ## Issue-First Workflow
 

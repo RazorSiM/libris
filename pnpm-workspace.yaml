@@ -44,7 +44,14 @@ catalog:
   "@opentelemetry/sdk-node": ^0.221.0
   "@opentelemetry/sdk-trace-node": ^2.10.0
   "@pinia/colada": ^1.4.2
-  "@playwright/test": 1.62.1
+  # Host runs get their browsers from nixpkgs' `playwright-driver` (devenv
+  # exports PLAYWRIGHT_BROWSERS_PATH), and Playwright looks the browser up by
+  # the revision compiled into its own client. So this pin must equal the
+  # `playwright-driver` version the pinned nixpkgs ships — a host run otherwise
+  # dies with "Executable doesn't exist at .../chromium-<rev>/...". The same
+  # version also has to appear in the two Playwright container images
+  # (docker-compose.test.yml, .github/workflows/ci.yml) and in docs/ci-cd.md.
+  "@playwright/test": 1.64.1
   "@scalar/hono-api-reference": ^0.11.13
   "@types/better-sqlite3": ^9.6.0
   # Track the runtime major (.node-version / engines.node) so the ambient types
