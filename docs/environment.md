@@ -92,6 +92,8 @@ Libris supports exporting logs and traces via [OpenTelemetry](https://openteleme
 
 When `OTEL_EXPORTER_OTLP_ENDPOINT` is not set, the OTel SDK does not initialize and adds zero overhead. Logs still flow to stdout via Pino regardless of OTel configuration.
 
+The SDK starts with `@opentelemetry/auto-instrumentations-node`, so a request produces spans for the HTTP server (Hono runs on `node:http`), Postgres and Redis calls. `@opentelemetry/instrumentation-fs` and `-dns` are disabled: they emit one span per syscall and would bury the request path. While a span is active the logger adds `trace_id` and `span_id` to each record, which is what lets a trace backend link a span to its log lines.
+
 ## Frontend (Vue SPA)
 
 In production, the SPA is served by the Hono backend from the same origin — no frontend-specific configuration is needed. API requests use relative URLs (`/api/*`).
